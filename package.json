@@ -2,9 +2,9 @@
   "name": "@source-repo/msgrpc",
   "version": "1.0.5",
   "description": "TypeScript RPC system",
-  "main": "dist/packages/msgrpc/src/index.js",
+  "main": "dist/src/index.js",
   "type": "module",
-  "browser": "dist/packages/msgrpc/src/index-web.js",
+  "browser": "dist/src/index-web.js",
   "scripts": {
     "build": "tsc --build",
     "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
@@ -16,13 +16,15 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/emellio/project-builder.git"
+    "url": "git+https://github.com/source-repo/msgrpc.git"
   },
-  "author": "emellio",
+  "author": "anderswestberg",
   "license": "MIT",
   "dependencies": {
-    "@msgpack/msgpack": "^3.0.0-beta2",
+    "@msgpack/msgpack": "^3.1.2",
     "events": "^3.3.0",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
     "suppress-experimental-warnings": "^2.0.0",
     "uint8array-extras": "^1.1.0",
     "uuid": "^9.0.1",

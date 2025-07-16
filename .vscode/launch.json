@@ -18,7 +18,7 @@
             "skipFiles": [
                 "<node_internals>/**"
             ],
-            "program": "${workspaceFolder}/dist/backends/packages/msgrpc/examples/nodejs-server/NodeServerTest.js",
+            "program": "${workspaceFolder}/dist/examples/nodejs-server/NodeServerTest.js",
             "preLaunchTask": "tsc: build - tsconfig.json",
             "outFiles": [
                 "${workspaceFolder}/dist/**/*.js"
@@ -30,7 +30,7 @@
         },
         {
             "name": "Test Client",
-            "program": "${workspaceFolder}/dist/backends/packages/msgrpc/examples/nodejs-client/NodeClientTest.js",
+            "program": "${workspaceFolder}/dist/examples/nodejs-client/NodeClientTest.js",
             "request": "launch",
             "skipFiles": [
                 "<node_internals>/**"
