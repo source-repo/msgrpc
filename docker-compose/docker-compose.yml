@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  node-red:
+    image: nodered/node-red
+    ports:
+      - "1880:1880"
+    networks:
+      - my-network
+
+  emqx:
+    image: emqx/emqx
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+      - "8883:8883"
+      - "18083:18083"
+    environment:
+      EMQX_LISTENER__TCP__EXTERNAL: 1883
+      EMQX_LISTENER__WS__EXTERNAL: 8083
+      EMQX_LISTENER__SSL__EXTERNAL: 8883
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    networks:
+      - my-network
+
+  test-server:
+    image: ts-rpc-server
+    ports:
+      - "3000:3000"
+    networks:
+      - my-network
+
+  test-client:
+    image: ts-rpc-client
+    ports:
+      - "3001:3001"
+    networks:
+      - my-network
+
+networks:
+  my-network:
+    driver: bridge
+
