@@ -43,6 +43,10 @@ export interface MessageHeader {
     target: string
     time: number
     seq: number
+    /** Present on signed frames: single-use value that makes a captured frame unreplayable. */
+    nonce?: string
+    /** Present on signed frames: base64 signature over the fields above plus the payload. */
+    sig?: string
 }
 
 export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown> extends EventEmitter implements IGenericModule<I, IP, O, OP> {
@@ -69,9 +73,20 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
     }
     async open() {}
     async close() {}
+    /**
+     * Build the header a frame will carry. Separate from framing so a transport that signs can
+     * see the exact field values before they are serialised, and add its signature to them.
+     */
+    buildHeader(source: string, target: string, extra?: Partial<MessageHeader>): MessageHeader {
+        return { source, target, time: Date.now(), seq: this.seq++, ...extra }
+    }
+
     prependHeader(source: string, target: string, message: string | Uint8Array): string | Uint8Array {
+        return this.frameMessage(this.buildHeader(source, target), message)
+    }
+
+    frameMessage(header: MessageHeader, message: string | Uint8Array): string | Uint8Array {
         let result: string | Uint8Array
-        const header = { source, target, time: Date.now(), seq: this.seq++ }
         if (typeof message === 'string') {
             result = JSON.stringify(header) + HEADER_DELIMITER + message
         } else {

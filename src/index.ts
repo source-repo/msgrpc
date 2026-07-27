@@ -8,6 +8,7 @@ export * from './Transports/MqttTransport.js'
 export * from './RPC/Core.js'
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'
+export * from './RPC/Signing.js'
 export * from './RPC/RpcClientHandler.js'
 export * from './RPC/RpcServerHandler.js'
 

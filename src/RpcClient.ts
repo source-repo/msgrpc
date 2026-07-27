@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events'
 import { GenericModule, TransportEvent } from './RPC/Core.js'
+import { MessageSigner } from './RPC/Auth.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
@@ -27,6 +28,11 @@ export interface RpcClientOptions {
      * drops frames whose source does not match.
      */
     credentials?: unknown
+    /**
+     * Sign outgoing frames. Only meaningful for MQTT, where there is no connection for a server to
+     * authenticate and the source field would otherwise be an unverifiable claim.
+     */
+    sign?: MessageSigner
 }
 
 export interface RpcProxy<T> {
@@ -78,7 +84,7 @@ export class RpcClient extends EventEmitter {
             const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
             const mqttOptions = (this.options.credentials ?? {}) as IClientOptions
             if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.url, undefined, socketOptions)
-            else if (this.url?.startsWith('mqtt')) transport = new MqttTransport(this.options.name, this.url, { mqtt: mqttOptions })
+            else if (this.url?.startsWith('mqtt')) transport = new MqttTransport(this.options.name, this.url, { mqtt: mqttOptions, sign: this.options.sign })
             else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
         }
         this.options.transport = transport

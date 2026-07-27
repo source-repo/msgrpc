@@ -53,3 +53,30 @@ export interface RpcCallContext {
 
 /** Return false to reject a call with a Forbidden error. */
 export type RpcAuthorizer = (context: RpcCallContext) => boolean | Promise<boolean>
+
+/**
+ * The parts of a frame a signature covers. Everything that decides where a message came from,
+ * where it is going and what it says, plus a nonce so a captured frame cannot be replayed.
+ *
+ * Both sides build these bytes the same way from the same fields, so there is no parsing
+ * ambiguity: see canonicalSignedBytes in Signing.ts for the exact encoding.
+ */
+export interface SignedFrame {
+    source: string
+    target: string
+    time: number
+    seq: number
+    nonce: string
+    payload: Uint8Array
+}
+
+/** Produce a signature for a frame, base64 encoded. */
+export type MessageSigner = (frame: SignedFrame) => string | Promise<string>
+
+/**
+ * Check a frame's signature. Return the sender's identity to accept it, undefined to reject.
+ *
+ * The returned identity's `name` must equal the frame's `source`; a transport rejects the frame
+ * otherwise, so a peer holding one key cannot sign messages claiming to come from another.
+ */
+export type MessageVerifier = (frame: SignedFrame, signature: string) => RpcIdentity | undefined | Promise<RpcIdentity | undefined>

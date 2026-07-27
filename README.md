@@ -245,6 +245,64 @@ their own subscription (see below), but anyone holding broker credentials can su
 `<prefix>/rpc/#` directly and read every peer's traffic. Only broker ACLs prevent that. Grant each
 peer publish/subscribe rights to its own topics and nothing else.
 
+Signing, below, closes the other half: it makes a message's origin checkable without trusting the
+broker, and gives MQTT peers a real identity that `authorize` can use.
+
+## Signing MQTT frames
+
+Without a connection to authenticate, `source` is a claim. Signing each frame makes it checkable,
+so a broker operator - or any peer whose ACLs let it publish to another peer's topic - cannot forge
+a message from someone else.
+
+```typescript
+import { createHmacSigner, createHmacVerifier } from '@source-repo/msgrpc'
+
+const secrets: Record<string, string> = { 'hmi-1': '...', plantServer: '...' }
+const verify = createHmacVerifier(
+    (peer) => secrets[peer],
+    (peer) => ({ name: peer, roles: rolesFor(peer) })   // optional: attach roles to the identity
+)
+
+const server = new RpcServer({
+    name: 'plantServer',
+    transports: [{ brokerurl: 'mqtt://broker:1883', sign: createHmacSigner(secrets.plantServer), verify }],
+    requireAuthenticatedPeers: true,
+    authorize: ({ identity, method }) => (method.startsWith('write') ? !!identity?.roles?.includes('engineer') : true)
+})
+
+const client = new RpcClient('mqtt://broker:1883', {
+    name: 'hmi-1',
+    defaultTarget: 'plantServer',
+    sign: createHmacSigner(secrets['hmi-1'])
+})
+```
+
+Once `verify` is set, a frame must be signed, fresh, unreplayed and signed by the key on file for
+the name it claims - otherwise it is dropped before reaching the RPC layer and a `rejected` event
+is emitted with the reason. A verified peer becomes an `RpcIdentity`, so `requireAuthenticatedPeers`
+and `authorize` work over MQTT exactly as they do over WebSocket.
+
+The signature covers source, target, time, seq, nonce and the payload, encoded as a JSON array of
+the header fields followed by the payload bytes. The array fixes field order and escapes the
+values, so no combination of names can be made to look like a different frame.
+
+**Replay protection.** A signature does not stop a captured frame being sent again, which for RPC
+means replaying a command. Each frame carries a nonce, and a receiver rejects frames outside
+`maxClockSkew` (default 60 s) or whose nonce it has already seen. Peers therefore need clocks
+within that window of each other; the window also bounds how many nonces must be remembered.
+
+**HMAC is symmetric.** Whoever can verify a peer's messages can also forge them, so an HMAC secret
+must only be shared with parties allowed to act as that peer. Where a compromised server must not
+be able to impersonate its peers, use `createEd25519Signer` / `createEd25519Verifier`, which take
+WebCrypto keys directly and leave only public keys on the verifying side.
+
+Both are built on WebCrypto, so the same signer works in Node and in the browser. To use an HSM or
+another algorithm, supply your own `MessageSigner` / `MessageVerifier` - the built-ins are only
+conveniences.
+
+**Peer names must be unique.** A peer's MQTT client id is derived from its name, and a broker
+allows one connection per client id, so a second peer using the same name disconnects the first.
+
 ## The management surface
 
 `manageRpc` is **not exposed by default**. Enabling it publishes exactly one method,

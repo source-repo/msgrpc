@@ -1,6 +1,9 @@
 import * as mqtt from 'mqtt'
 
-import { GenericModule, IGenericModule, TransportEvent } from '../RPC/Core.js'
+import { stringToUint8Array } from 'uint8array-extras'
+import { GenericModule, IGenericModule, MessageHeader, TransportEvent } from '../RPC/Core.js'
+import { MessageSigner, MessageVerifier, RpcIdentity, SignedFrame } from '../RPC/Auth.js'
+import { createNonce, ReplayGuard } from '../RPC/Signing.js'
 
 export const defaultTopicPrefix = 'msgrpc/v1'
 
@@ -62,6 +65,18 @@ export interface MqttTransportOptions {
     persistentSession?: boolean
     /** Broker connection options: credentials, TLS client certificates, clientId, keepalive. */
     mqtt?: mqtt.IClientOptions
+    /** Sign every outgoing frame. See RPC/Signing.ts for ready-made HMAC and Ed25519 signers. */
+    sign?: MessageSigner
+    /**
+     * Require and check a signature on every incoming frame. Unsigned, stale, replayed or
+     * badly-signed frames are dropped before they reach the RPC layer, and a verified peer gains
+     * a real identity that authorize() can act on.
+     */
+    verify?: MessageVerifier
+    /** How far an incoming frame's timestamp may differ from local time. Default 60000 ms. */
+    maxClockSkew?: number
+    /** How many recent nonces to remember for replay detection. Default 5000. */
+    maxTrackedNonces?: number
 }
 
 export class MqttTransport extends GenericModule<string | Uint8Array, unknown, string | Uint8Array, unknown> {
@@ -73,6 +88,11 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
     readonly presence: boolean
     readonly persistentSession: boolean
     readonly mqttOptions: mqtt.IClientOptions
+    readonly sign?: MessageSigner
+    readonly verify?: MessageVerifier
+    readonly replayGuard: ReplayGuard
+    /** Peer name -> identity established by verifying that peer's signature. */
+    peerIdentities = new Map<string, RpcIdentity>()
 
     constructor(
         name: string,
@@ -87,6 +107,9 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
         this.presence = options.presence ?? true
         this.persistentSession = options.persistentSession ?? false
         this.mqttOptions = options.mqtt ?? {}
+        this.sign = options.sign
+        this.verify = options.verify
+        this.replayGuard = new ReplayGuard(options.maxClockSkew ?? 60000, options.maxTrackedNonces ?? 5000)
 
         // Rejected at construction rather than at publish time, so a misconfigured peer fails
         // loudly instead of quietly subscribing to more than it should.
@@ -157,7 +180,10 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
         if (this.presence && topic.startsWith(this.presenceRoot)) {
             const peer = topic.slice(this.presenceRoot.length)
             // Retained presence means a late subscriber also learns about peers that already left.
-            if (peer && peer !== this.name && messageBuffer.toString() === PRESENCE_OFFLINE) this.emit(TransportEvent.peerGone, peer)
+            if (peer && peer !== this.name && messageBuffer.toString() === PRESENCE_OFFLINE) {
+                this.peerIdentities.delete(peer)
+                this.emit(TransportEvent.peerGone, peer)
+            }
             return
         }
         const message = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
@@ -168,7 +194,47 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
             this.emit(TransportEvent.rejected, { source: header.source, reason: 'unsafe peer name' })
             return
         }
+        if (this.verify) {
+            const rejection = await this.verifyFrame(header, payload)
+            if (rejection) {
+                this.emit(TransportEvent.rejected, { source: header.source, reason: rejection })
+                return
+            }
+        }
         if (this.targetExists(header.target)) await this.send(payload, header.source, header.target)
+    }
+
+    /**
+     * Returns a reason to reject, or undefined when the frame is authentic. Every check is a
+     * separate failure mode worth naming, because "message dropped" with no reason is the hardest
+     * kind of problem to diagnose on a plant network.
+     */
+    private async verifyFrame(header: MessageHeader, payload: string | Uint8Array): Promise<string | undefined> {
+        // An unsigned frame is not a valid frame once verification is on, or signing would be
+        // trivially bypassed by omitting the signature.
+        if (!header.sig || !header.nonce) return 'unsigned'
+        if (!this.replayGuard.accept(header.nonce, header.time)) return 'stale or replayed'
+        const frame: SignedFrame = {
+            source: header.source,
+            target: header.target,
+            time: header.time,
+            seq: header.seq,
+            nonce: header.nonce,
+            payload: typeof payload === 'string' ? stringToUint8Array(payload) : payload
+        }
+        let identity: RpcIdentity | undefined
+        try {
+            identity = await this.verify!(frame, header.sig)
+        } catch {
+            // A verifier that throws rejects, for the same reason an authorizer that throws denies.
+            return 'verifier error'
+        }
+        if (!identity) return 'bad signature'
+        // The same pinning rule the socket.io transport applies: a key authorises one name, so a
+        // peer cannot sign frames claiming to come from someone else.
+        if (identity.name !== header.source) return 'identity does not match source'
+        this.peerIdentities.set(header.source, identity)
+        return undefined
     }
 
     override async receive(message: string | Uint8Array, source: string, target: string) {
@@ -176,7 +242,18 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
             this.emit(TransportEvent.unroutable, { source, target, reason: 'unsafe peer name' })
             return
         }
-        const framed = this.prependHeader(source, target, message)
+        const header = this.buildHeader(source, target, this.sign ? { nonce: createNonce() } : undefined)
+        if (this.sign) {
+            header.sig = await this.sign({
+                source: header.source,
+                target: header.target,
+                time: header.time,
+                seq: header.seq,
+                nonce: header.nonce!,
+                payload: typeof message === 'string' ? stringToUint8Array(message) : message
+            })
+        }
+        const framed = this.frameMessage(header, message)
         const payload = typeof framed === 'string' ? framed : Buffer.from(framed.buffer, framed.byteOffset, framed.byteLength)
         // Awaited, so at QoS > 0 a publish that never reaches the broker surfaces as a failed call
         // rather than a silent drop followed by a timeout.
@@ -206,6 +283,10 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
             }
         }
         await client.endAsync()
+    }
+
+    override getIdentity(source: string) {
+        return this.peerIdentities.get(source)
     }
 
     override isTransport() {
