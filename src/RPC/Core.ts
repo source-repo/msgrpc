@@ -1,9 +1,27 @@
 import { EventEmitter } from 'events'
 import { stringToUint8Array, uint8ArrayToString } from 'uint8array-extras'
 import { v4 as uuidv4 } from 'uuid'
+import { RpcIdentity } from './Auth.js'
 
 export const MAX_HEADER_LENGTH = 256
 export const HEADER_DELIMITER = '$'
+
+/**
+ * Lifecycle events emitted by transports. Transports are EventEmitters, so anything above them
+ * can react to the link coming and going rather than discovering it via a call timeout.
+ *
+ * connected/disconnected are emitted by client-side transports on every transition, including
+ * reconnects. peerGone is emitted by server-side transports when an identified peer's connection
+ * drops. rejected is emitted when an inbound frame fails an authentication check. unroutable is
+ * emitted when a frame cannot be delivered to its target.
+ */
+export const TransportEvent = {
+    connected: 'connected',
+    disconnected: 'disconnected',
+    peerGone: 'peerGone',
+    rejected: 'rejected',
+    unroutable: 'unroutable'
+} as const
 
 export interface IGenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown> {
     readyFlag: boolean
@@ -105,7 +123,6 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
     targetExists(name: string, level?: number) {
         let result: IGenericModule | undefined
         if (this.name === name) {
-            // eslint-disable-next-line @typescript-eslint/no-this-alias
             result = this as IGenericModule
         }
         if (GenericModule.knownSources[name]) result = GenericModule.knownSources[name]
@@ -144,6 +161,14 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
     setKnownSource(source: string) {
         GenericModule.knownSources[source] = this
     }
+    /**
+     * The authenticated identity bound to a peer name, for transports that authenticate.
+     * Undefined means this transport cannot vouch for the peer, not that the peer is untrusted.
+     */
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    getIdentity(source: string): RpcIdentity | undefined {
+        return undefined
+    }
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     async sendPayload(payload: OP, messageType: MessageType, source: string, target: string) {}
     isTransport() {
@@ -175,7 +200,7 @@ const makeMessage = <M extends Message<MP>, MP extends Payload>(payload: MP, sou
 
 export class MessageModule<I extends Message<IP>, IP extends Payload, O extends Message<OP>, OP extends Payload> extends GenericModule<I, IP, O, OP> {
     constructor(
-        public name: string,
+        public override name: string,
         sources?: IGenericModule<Message, unknown, I, IP>[]
     ) {
         super(name)
@@ -187,7 +212,7 @@ export class MessageModule<I extends Message<IP>, IP extends Payload, O extends 
         }
     }
 
-    pipe(target: IGenericModule<O, OP, Message, unknown>) {
+    override pipe(target: IGenericModule<O, OP, Message, unknown>) {
         const id = uuidv4()
         this.destinations.push({ id, target })
         return () => {
@@ -196,18 +221,18 @@ export class MessageModule<I extends Message<IP>, IP extends Payload, O extends 
     }
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    receive(message: I, source: string, target: string): Promise<void> {
+    override receive(message: I, source: string, target: string): Promise<void> {
         return Promise.resolve()
     }
 
-    async send(message: O, source: string, target?: string) {
+    override async send(message: O, source: string, target?: string) {
         await Promise.all(
             this.destinations.map(async (dest) => {
                 return await dest.target.receive(message, source, target)
             })
         )
     }
-    async sendPayload(payload: OP, messageType: MessageType, source: string, target?: string) {
+    override async sendPayload(payload: OP, messageType: MessageType, source: string, target?: string) {
         const message = makeMessage<O, OP>(payload, this.name, target, messageType)
         await this.send(message, source, target)
     }

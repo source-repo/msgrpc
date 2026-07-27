@@ -91,7 +91,179 @@ export interface MqttServerOptions extends ServerOptions {
 }
 ```
 
-useMsgPack: MsgPack is default, set to `false` for JSON
+useMsgPack: MsgPack is default, set to `false` for JSON. MsgPack encodes `Uint8Array` natively, so
+binary arguments and return values survive a round trip unchanged. JSON does not.
+
+## RPC client options
+
+```typescript
+interface RpcClientOptions {
+    name: string
+    transport?: GenericModule
+    defaultTarget?: string
+    useMsgPack: boolean
+    callTimeout: number
+    readyTimeout: number
+    failCallsOnDisconnect: boolean
+}
+```
+
+name: how this client identifies itself. Responses and events are addressed to it, so it must be
+unique across peers sharing a server. Defaults to a UUID.
+
+transport: supply one to take full control of the link. When omitted, one is built from the url.
+
+callTimeout: how long a call waits for a response before rejecting with an `RpcError` of code
+`Timeout`. Default 10000 ms.
+
+readyTimeout: how long `ready()` waits for the transport to connect before throwing. Default
+30000 ms; `0` waits forever.
+
+failCallsOnDisconnect: reject in-flight calls as soon as the link drops rather than letting each
+wait out its own timeout. Default `true`.
+
+# Errors
+
+A call rejects with an `RpcError` carrying a `code`, the remote `message`, and the remote stack in
+`remoteStack` when the peer sent one.
+
+```typescript
+import { RpcError } from '@source-repo/msgrpc'
+
+try {
+    await proxy.remote.square(3)
+} catch (e) {
+    if (e instanceof RpcError) console.log(e.code, e.message, e.remoteStack)
+}
+```
+
+| code | meaning |
+| --- | --- |
+| `Exception` | the exposed method threw |
+| `MethodNotFound` | the instance exists but the method is not exposed |
+| `ClassNotFound` | nothing is exposed under that name |
+| `Timeout` | no response within `callTimeout` |
+| `TransportError` | the link dropped, or the message could not be encoded or sent |
+| `Unauthorized` | the caller is not authenticated and the server requires it |
+| `Forbidden` | the caller is authenticated but not permitted this call |
+
+# Connection lifecycle
+
+`RpcClient` is an `EventEmitter` that reports the state of its link, so an application can show it
+rather than infer it from failed calls.
+
+```typescript
+import { TransportEvent } from '@source-repo/msgrpc'
+
+rpcClient.on(TransportEvent.disconnected, (reason) => console.log('link lost:', reason))
+rpcClient.on(TransportEvent.connected, ({ restoredSubscriptions }) =>
+    console.log('link back, subscriptions restored:', restoredSubscriptions))
+```
+
+Reconnection is handled for you:
+
+- The underlying transport reconnects on its own (socket.io and mqtt.js both do).
+- On every reconnect the client replays its event subscriptions. This restores server-side state if
+  the server restarted, and re-identifies the client to the server so pushed events reach it again.
+- Replaying is idempotent: the server will not stack a second listener for a subscription it
+  already holds.
+- When a client's connection drops, the server releases the event subscriptions it held for it.
+
+# Authentication and authorization
+
+Both are off by default, so an unconfigured server accepts any peer and allows any exposed call.
+One thing is *not* off by default: the management surface. See below.
+
+## Authenticating peers
+
+`authenticate` receives whatever the client sent as `credentials` and returns an identity to accept
+the peer, or `undefined` to reject it. Rejected peers never reach the RPC layer - the check runs as
+socket.io middleware, before the connection is established at all.
+
+```typescript
+const server = new RpcServer({
+    transports: [{ port: 3000 }],
+    authenticate: async (credentials) => {
+        const token = (credentials as { token?: string }).token
+        const user = await lookUpToken(token)
+        return user && { name: user.id, roles: user.roles }
+    }
+})
+```
+
+```typescript
+const client = new RpcClient('http://localhost:3000', {
+    name: 'operator-17',              // must equal the identity's name, see below
+    credentials: { token: 'a-token' }
+})
+```
+
+**`RpcClientOptions.name` must match `RpcIdentity.name`.** The `source` field of a message is
+written by the sender, so it is a claim, not evidence. An authenticating transport pins each
+connection to the name it authenticated as and drops frames claiming any other source. Without
+that, an authenticated peer could address its calls as another peer and inherit its rights.
+
+## Authorizing calls
+
+`authorize` runs for every call and every event subscription. Return false to reject with a
+`Forbidden` error.
+
+```typescript
+const server = new RpcServer({
+    transports: [{ port: 3000 }],
+    authenticate,
+    authorize: ({ identity, instanceName, method, subscription }) => {
+        if (subscription) return identity?.roles?.includes('observer') ?? false
+        if (instanceName === 'plant' && method.startsWith('write')) return identity?.roles?.includes('engineer') ?? false
+        return true
+    }
+})
+```
+
+An authorizer that throws denies the call. Failing open would turn a bug in the authorizer into an
+access-control bypass.
+
+`requireAuthenticatedPeers` defaults to true when `authenticate` is set, rejecting calls from peers
+no transport can vouch for with an `Unauthorized` error.
+
+## MQTT
+
+MQTT has no server-side handshake to authenticate against - both peers connect to a broker, not to
+each other - so `authenticate` does not apply to MQTT transports and `identity` is undefined for
+MQTT callers. Trust comes from the broker instead:
+
+- Set broker credentials or TLS client certificates through `MqttTransport`'s `mqttOptions`.
+- Restrict which peer may publish or subscribe to which topic with broker ACLs.
+- `authorize` still runs, but its `source` is only as trustworthy as those ACLs make it.
+
+A server that mixes an authenticating socket.io transport with an MQTT transport will reject its
+MQTT peers, because `requireAuthenticatedPeers` turns on with `authenticate`. Set it to `false`
+explicitly to allow both, and rely on the broker for the MQTT half.
+
+## The management surface
+
+`manageRpc` is **not exposed by default**. Enabling it publishes exactly one method,
+`createRpcInstance`, which constructs an instance of a class already passed to `exposeClass()`:
+
+```typescript
+const server = new RpcServer({ transports: [{ port: 3000 }], exposeManagement: true })
+```
+
+It is still subject to `authorize`, so you can restrict who may create instances.
+
+The `expose*` methods are never remotely reachable. Prior versions published all of `ManageRpc`
+under `manageRpc`, with no authentication anywhere, so any peer that could reach the transport
+could:
+
+- call `createRpcInstance` to construct any class passed to `exposeClass()`, with attacker-chosen
+  constructor arguments;
+- call `exposeObject` / `exposeClassInstance` to overwrite an existing exposed name, replacing a
+  live instance with inert data and denying service to every other client;
+- call the logger, which was exposed the same way, to write arbitrary log entries.
+
+A remote caller can only send serialized data, so it could not publish *callable* methods of its
+own choosing. If you are upgrading, treat the first two as reachable by anyone who could open a
+socket or publish to the broker topic.
 
 # Low level interface
 
@@ -173,8 +345,8 @@ There are a few basic utility modules included with msgrpc. These are:
 
 - **Converter** - Takes a function as a parameter. For each received message, the function is called and the return value is sent to each piped module.
 - **Filter** - Takes a function which returns a boolean as a parameter. For each received message, the function is called and if the function returns a true, the message is sent to each piped module. If not, the message is not sent.
-- **Switch**  - Allows messages to be sent to a specific target.
-- **Targeter** - Adds a target to a message (suitable for sending to a switch).
+- **Switch**  - Allows messages to be sent to a specific target. A message whose target cannot be
+  resolved is dropped.
 - **TryCatch** - Catches exceptions (more above).
 
 There are also a few more complex modules included:
@@ -209,19 +381,19 @@ The power of modules is shown when you want to process messages. Here is an exam
 ```typescript
 import { SocketIoClientTransport, Converter, RpcServerHandler, TryCatch } from '@source-repo/msgrpc'
 
-// Create a server which listents on 0.0.0.0:3000
-const server = new SocketIoClientTransport('ws://localhost:3000)
+// Create a server which listens on 0.0.0.0:3000
+const server = new SocketIoServerTransport('server', undefined, 3000)
 
-// Parse each incoming message using
-const parser = new Converter([server], message => {
-    return JSON.parse(message.toString()
+// Parse each incoming message
+const parser = new Converter([server], (message) => {
+    return JSON.parse(message.toString())
 })
 
 // Send each parsed message to an RPC server
 const rpcServerHandler = new RpcServerHandler('server', [parser])
 
 // Serialize each outgoing message using JSON.stringify
-const stringifier = new Converter([rpcServer], message => {
+const stringifier = new Converter([rpcServerHandler], (message) => {
     return JSON.stringify(message)
 })
 
@@ -240,20 +412,20 @@ rpcServerHandler.manageRpc.exposeObject({
 And here is the client:
 
 ```typescript
-import { SocketIoClientTransport, JsonParser, RpcClienthandler, JsonStringifier } from '@source-repo/msgrpc'
+import { SocketIoClientTransport, JsonParser, RpcClientHandler, JsonStringifier } from '@source-repo/msgrpc'
 
-// Create a WebSocket client which connects to the server
-// For use in broser, use BrowserWebSocketTransport instead
-let transport = new SocketIoClientTransport('ws://localhost:3000')
+// Create a WebSocket client which connects to the server.
+// The same transport works in Node.js and in the browser.
+const transport = new SocketIoClientTransport('ws://localhost:3000')
 
 // Parse each incoming message
-let parser = JsonParser([transport])
+const parser = new JsonParser([transport])
 
 // Send each parsed message to a RPC client
-let rpcClientHandler = new RpcClientHandler('client', [parser])
+const rpcClientHandler = new RpcClientHandler('client', [parser])
 
 // Serialize each outgoing message
-let stringifier = JsonStringifier([rpcClient])
+const stringifier = new JsonStringifier([rpcClientHandler])
 stringifier.pipe(transport)
 
 // Create a JavaScript proxy object which allows us to call the RPC functions. The service name should match the exposed object on the server ("MyRpc").
@@ -262,3 +434,21 @@ let proxy = rpcClientHandler.proxy('MyRpc')
 // Should output Hello World!
 console.log('Hello ' + await proxy.remote.hello())
 ```
+# Development
+
+```
+npm install
+npm run build      # tsc -> dist/
+npm test           # builds, then runs ava
+npm run lint
+npm run typecheck  # src and examples, no emit
+```
+
+The MQTT test needs a broker on `localhost:1883`; it skips itself when none is reachable. To run
+it, bring one up first:
+
+```
+docker compose -f docker-compose/docker-compose.yml up -d
+```
+
+Point the tests at a different broker with `MSGRPC_TEST_BROKER=mqtt://host:1883`.

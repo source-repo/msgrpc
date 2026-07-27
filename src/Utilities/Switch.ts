@@ -2,7 +2,7 @@ import { GenericModule, IGenericModule, Message } from '../RPC/Core.js'
 
 /**
  * Sends received messages to the correct target.
- * If a message is sent to a target which doesn't exist, a TargetNotFoundError is thrown.
+ * A message whose target cannot be resolved is dropped.
  */
 export class Switch extends GenericModule {
     targets = new Map<string, IGenericModule>()
@@ -14,7 +14,7 @@ export class Switch extends GenericModule {
         super('', sources)
     }
 
-    async receive(message: Message, source: string, target: string) {
+    override async receive(message: Message, source: string, target: string) {
         let switchTarget: IGenericModule | undefined
         if (this.getTarget) switchTarget = this.getTarget(target)
         if (!switchTarget) switchTarget = this.targetExists(target)
@@ -50,7 +50,7 @@ export class Switch extends GenericModule {
         for (const target of targets) this.setTarget(target)
     }
 
-    targetExists(name: string, level: number = 0) {
+    override targetExists(name: string, level: number = 0) {
         let result: IGenericModule | undefined
         this.targets.forEach((target) => {
             if (!result && !target.isTransport() && target.targetExists(name, level + 1)) result = target

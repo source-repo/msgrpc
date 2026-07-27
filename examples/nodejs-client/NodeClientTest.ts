@@ -1,4 +1,3 @@
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
 import { RpcClient } from '../../src/RpcClient.js'
 //import { MqttTransport } from '../../src/Transports/Mqtt.js'
 import { ITestRpc } from '../nodejs-server/ITestRpc.js'

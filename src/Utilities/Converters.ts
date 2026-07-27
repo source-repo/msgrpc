@@ -9,7 +9,7 @@ export class Converter<I = unknown, O = unknown> extends GenericModule<I, unknow
     ) {
         super('', sources)
     }
-    async receive(message: I, source: string, target: string) {
+    override async receive(message: I, source: string, target: string) {
         if (this.converter) await this.send(this.converter(message), source, target)
     }
 }
@@ -39,7 +39,10 @@ export class JsonParser extends Converter<string, object> {
 
 export class MsgPackEncoder<I extends object> extends Converter<I, Uint8Array> {
     constructor(sources?: GenericModule<unknown, unknown, I, unknown>[]) {
-        super(sources, (msg: I) => msgPackEncode(JSON.parse(JSON.stringify(msg))))
+        // Encode straight from the message. Round-tripping through JSON first would turn every
+        // Uint8Array into a {"0":1,"1":2,...} map and defeat the point of using MsgPack at all.
+        // ignoreUndefined keeps the old JSON behaviour of dropping undefined object properties.
+        super(sources, (msg: I) => msgPackEncode(msg, { ignoreUndefined: true }))
     }
 }
 

@@ -9,7 +9,7 @@ export class Filter<MsgType = unknown> extends GenericModule {
         super(name, sources)
     }
 
-    async receive(message: MsgType, source: string, target: string) {
+    override async receive(message: MsgType, source: string, target: string) {
         if (this.filter(message)) {
             return await this.send(message, source, target)
         }

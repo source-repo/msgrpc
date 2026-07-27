@@ -4,7 +4,6 @@ export interface IManageRpc {
     exposeClassInstance(instance: object, name: string, prototypeSteps?: number): void
     exposeClass<T>(constructor: new (...args: unknown[]) => T, aliasName?: string): void
     exposeObject(obj: object, name: string): void
-    // eslint-disable-next-line @typescript-eslint/ban-types
     expose(methodName: string, method: () => void): void
     createRpcInstance(className: string, instanceName?: string, ...args: unknown[]): Promise<string | undefined>
 }

@@ -1,5 +1,6 @@
 import { Server } from 'http'
-import { GenericModule } from './RPC/Core.js'
+import { GenericModule, TransportEvent } from './RPC/Core.js'
+import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
@@ -30,6 +31,25 @@ export interface RpcServerOptions {
     name: string
     transports: (HttpServerOptions | ExternalServerOptions | MqttServerOptions | GenericModule)[]
     useMsgPack: boolean
+    /**
+     * Verify credentials when a peer connects. Applied to socket.io transports this server builds.
+     * MQTT has no server-side handshake, so MQTT peers are authenticated by the broker instead.
+     */
+    authenticate?: RpcAuthenticator
+    /** Called for every call and every event subscription. Return false to reject it. */
+    authorize?: RpcAuthorizer
+    /**
+     * Reject calls from peers no transport can vouch for. Defaults to true when `authenticate` is
+     * set. Note that MQTT peers can never be vouched for at this layer, so a server that mixes an
+     * authenticating socket.io transport with MQTT will reject its MQTT peers unless this is
+     * explicitly false.
+     */
+    requireAuthenticatedPeers?: boolean
+    /**
+     * Publish manageRpc.createRpcInstance so peers can instantiate exposed classes remotely.
+     * Off by default: it is remote object construction, and it is rarely needed.
+     */
+    exposeManagement?: boolean
 }
 
 export class RpcServer implements IManageRpc {
@@ -52,14 +72,21 @@ export class RpcServer implements IManageRpc {
                     (serveroption as HttpServerOptions).port,
                     (serveroption as HttpServerOptions).https,
                     [],
-                    { path: (serveroption as HttpServerOptions).path }
+                    { path: (serveroption as HttpServerOptions).path },
+                    this.options.authenticate
                 )
             else if ((serveroption as MqttServerOptions).brokerurl)
                 transport = new MqttTransport(this.options.name, (serveroption as MqttServerOptions).brokerurl)
             else if ((serveroption as ExternalServerOptions).server)
-                transport = new SocketIoServerTransport(this.options.name, (serveroption as ExternalServerOptions).server, 0, false, [], {
-                    path: (serveroption as ExternalServerOptions).path
-                })
+                transport = new SocketIoServerTransport(
+                    this.options.name,
+                    (serveroption as ExternalServerOptions).server,
+                    0,
+                    false,
+                    [],
+                    { path: (serveroption as ExternalServerOptions).path },
+                    this.options.authenticate
+                )
             if (!transport) throw new Error('RpcServer: Invalid transport defined')
             return transport
         })
@@ -72,11 +99,29 @@ export class RpcServer implements IManageRpc {
         else this.stringifier = new JsonStringifierToUint8Array([this.rpc])
         this.switch = new Switch([this.stringifier])
         this.switch.setTargets(this.transports)
+        // Drop a peer's event subscriptions as soon as its connection goes away.
+        this.transports.forEach((transport) => transport.on(TransportEvent.peerGone, (peer: string) => this.rpc.removePeer(peer)))
+
+        this.rpc.authorize = this.options.authorize
+        this.rpc.requireIdentity = this.options.requireAuthenticatedPeers ?? !!this.options.authenticate
+        // Identity comes from whichever transport the peer is connected to, never from the message
+        // itself. Authenticating transports pin a peer name to one connection, so this lookup
+        // cannot be spoofed by claiming someone else's source.
+        this.rpc.resolveIdentity = (source) => {
+            for (const transport of this.transports) {
+                const identity = transport.getIdentity(source)
+                if (identity) return identity
+            }
+            return undefined
+        }
+        if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         this.readyFlag = true
         this.init()
     }
     async close() {
-        this.transports.forEach(async (trp) => await trp.close())
+        // forEach with an async callback did not await anything, so close() returned while the
+        // listeners were still open.
+        await Promise.all(this.transports.map((transport) => transport.close()))
         this.transports = []
     }
     exposeClassInstance(instance: object, name: string, prototypeSteps?: number): void {

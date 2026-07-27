@@ -11,7 +11,7 @@ export class TryCatch extends GenericModule implements ITryCatch<unknown> {
         super('', sources)
     }
 
-    async receive(message: unknown, source: string, target: string) {
+    override async receive(message: unknown, source: string, target: string) {
         this.send(message, source, target)
             .then()
             .catch((e) => this.emit('Caught exception', message, e))

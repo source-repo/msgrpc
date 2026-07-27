@@ -1,7 +1,8 @@
 import * as SocketIo from 'socket.io'
 import { createServer as createHttpServer, Server as HttpServer } from 'http'
 import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
-import { GenericModule, IGenericModule } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, TransportEvent } from '../RPC/Core.js'
+import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
 
@@ -9,6 +10,15 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
     closed = false
     io?: SocketIo.Server
     ourServer = false
+    /**
+     * Peer name -> the socket it was last seen on, learned from the source field of inbound frames.
+     * Without it this transport can only broadcast, which puts every reply and every event on every
+     * connected socket. Peer names are expected to be unique; the most recent socket wins, so a
+     * reconnecting peer re-binds to its new socket on its first frame.
+     */
+    peerSockets = new Map<string, SocketIo.Socket>()
+    /** Peer name -> the identity its connection authenticated as. Empty when no authenticator is set. */
+    peerIdentities = new Map<string, RpcIdentity>()
 
     constructor(
         name: string,
@@ -16,7 +26,8 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
         port?: number,
         https?: boolean,
         sources?: IGenericModule[],
-        socketIoOptions: Partial<SocketIo.ServerOptions> = {}
+        socketIoOptions: Partial<SocketIo.ServerOptions> = {},
+        public authenticate?: RpcAuthenticator
     ) {
         super(name, sources)
         this.ourServer = server === undefined
@@ -33,14 +44,50 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
                 ...socketIoOptions
             })
         }
+        // Runs before 'connection', so an unauthenticated peer never reaches the RPC layer.
+        if (this.authenticate) {
+            this.io.use(async (socket, next) => {
+                try {
+                    const identity = await this.authenticate!(socket.handshake.auth, { address: socket.handshake.address })
+                    if (!identity) return next(new Error('unauthorized'))
+                    socket.data.identity = identity
+                    next()
+                } catch {
+                    next(new Error('unauthorized'))
+                }
+            })
+        }
         this.io.on('connection', (socket) => {
             this.emit('connection', socket)
             socket.on('message', async (messageArray) => {
                 const message = new Uint8Array(messageArray)
                 const [header, payload] = this.extractHeader(message)
-                if (header && this.targetExists(header.target)) await this.send(payload, header.source, header.target)
+                if (!header) return
+                const identity = socket.data.identity as RpcIdentity | undefined
+                if (this.authenticate) {
+                    // The source field is written by the sender. Pinning it to the identity this
+                    // connection authenticated as is what stops one peer addressing messages as
+                    // another and inheriting its rights.
+                    if (!identity || header.source !== identity.name) {
+                        this.emit(TransportEvent.rejected, { source: header.source, reason: 'source does not match authenticated identity' })
+                        return
+                    }
+                    this.peerIdentities.set(header.source, identity)
+                }
+                // Learned before the routing check, so a peer stays addressable even when a
+                // particular frame turns out to be undeliverable.
+                this.peerSockets.set(header.source, socket)
+                if (this.targetExists(header.target)) await this.send(payload, header.source, header.target)
             })
             socket.on('disconnect', (reason, details) => {
+                for (const [peer, peerSocket] of this.peerSockets) {
+                    if (peerSocket !== socket) continue
+                    this.peerSockets.delete(peer)
+                    this.peerIdentities.delete(peer)
+                    // Lets the RPC layer drop any event subscriptions held for this peer instead
+                    // of emitting to a socket that is gone.
+                    this.emit(TransportEvent.peerGone, peer)
+                }
                 if (details) {
                     // the low-level reason of the disconnection, for example "xhr post error"
                     console.log(details.message)
@@ -60,25 +107,44 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
         this.readyFlag = true
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    async receive(message: string | Uint8Array, source: string, target: string) {
-        this.io?.emit('message', this.prependHeader(source, target, message))
+    override async receive(message: string | Uint8Array, source: string, target: string) {
+        const socket = target === undefined ? undefined : this.peerSockets.get(target)
+        if (!socket) {
+            // Deliberately no io.emit() fallback: broadcasting would put this peer's reply on
+            // every other client's socket. An unknown target means the peer never identified
+            // itself or has gone away, so the frame is dropped.
+            this.emit(TransportEvent.unroutable, { source, target })
+            return
+        }
+        socket.emit('message', this.prependHeader(source, target, message))
     }
 
-    async close() {
+    override async close() {
         if (this.closed) {
             return
         }
-        this.io?.disconnectSockets()
-        if (this.server && this.ourServer && !(this.server instanceof SocketIo.Server)) this.server.close()
-        this.server = undefined
         this.closed = true
-        this.emit('close')
-        this.io?.close()
+        this.peerSockets.clear()
+        this.peerIdentities.clear()
+        const io = this.io
+        const server = this.server
         this.io = undefined
+        this.server = undefined
+        this.emit('close')
+
+        const ownHttpServer = server && this.ourServer && !(server instanceof SocketIo.Server) ? server : undefined
+        io?.disconnectSockets(true)
+        // Keep-alive connections would otherwise hold the listener open long past close().
+        ownHttpServer?.closeAllConnections()
+        if (io) await new Promise<void>((resolve) => io.close(() => resolve()))
+        if (ownHttpServer?.listening) await new Promise<void>((resolve) => ownHttpServer.close(() => resolve()))
     }
 
-    isTransport() {
+    override getIdentity(source: string) {
+        return this.peerIdentities.get(source)
+    }
+
+    override isTransport() {
         return true
     }
 }
