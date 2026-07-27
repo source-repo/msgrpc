@@ -1,17 +1,17 @@
 import { EventEmitter } from 'events'
-import { GenericModule, PeerRegistry, TransportEvent } from './RPC/Core.js'
+import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { MessageSigner } from './RPC/Auth.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
-import { JsonParser, JsonStringifierToUint8Array, MsgPackDecoder, MsgPackEncoder } from './Utilities/Converters.js'
+import { codecFor } from './RPC/Codec.js'
 import { v4 as uuidv4 } from 'uuid'
 
 export interface RpcClientOptions {
     name: string
     /** Supply one to take full control of the link. When absent init() builds one from the url. */
-    transport?: GenericModule
+    transport?: Transport
     defaultTarget?: string
     useMsgPack: boolean
     /** How long a call waits for a response before rejecting with an RpcError of code 'Timeout'. */
@@ -45,9 +45,7 @@ export interface RpcProxy<T> {
  * application can show link state instead of inferring it from failed calls.
  */
 export class RpcClient extends EventEmitter {
-    parser?: JsonParser
     rpcClient?: RpcClientHandler
-    stringifier?: JsonStringifierToUint8Array<object>
     manageRpc?: IManageRpc
     readyFlag = false
     /** Peer name -> module, shared by this client's modules and nothing outside them. */
@@ -97,13 +95,12 @@ export class RpcClient extends EventEmitter {
             } else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
         }
         this.options.transport = transport
-        if (this.options.useMsgPack) this.parser = new MsgPackDecoder([this.options.transport])
-        else this.parser = new JsonParser([this.options.transport])
-        this.rpcClient = new RpcClientHandler(this.options.name, [this.parser], this.options.callTimeout)
-        if (this.options.useMsgPack) this.stringifier = new MsgPackEncoder([this.rpcClient])
-        else this.stringifier = new JsonStringifierToUint8Array([this.rpcClient])
-        this.stringifier.pipe(this.options.transport)
-        for (const module of [this.options.transport, this.parser, this.rpcClient, this.stringifier]) module.usePeerRegistry(this.peers)
+        // The transport encodes, so there is no converter between it and the handler. A structured
+        // wire format such as MQTT 5 needs to see the message, not bytes a converter already flattened.
+        transport.codec = codecFor(this.options.useMsgPack)
+        this.rpcClient = new RpcClientHandler(this.options.name, [transport], this.options.callTimeout)
+        this.rpcClient.pipe(transport)
+        for (const module of [transport, this.rpcClient]) module.usePeerRegistry(this.peers)
         this.wireTransportLifecycle(transport)
         this.readyFlag = true
         // Built directly instead of via proxy(), which awaits ready(). init() is not awaited by

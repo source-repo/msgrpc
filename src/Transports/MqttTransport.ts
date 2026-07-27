@@ -1,7 +1,8 @@
 import * as mqtt from 'mqtt'
 
 import { stringToUint8Array } from 'uint8array-extras'
-import { GenericModule, IGenericModule, MessageHeader, TransportEvent } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, MessageHeader, TransportEvent } from '../RPC/Core.js'
+import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { MessageSigner, MessageVerifier, RpcIdentity, SignedFrame } from '../RPC/Auth.js'
 import { createNonce, ReplayGuard } from '../RPC/Signing.js'
 
@@ -79,9 +80,11 @@ export interface MqttTransportOptions {
     maxTrackedNonces?: number
 }
 
-export class MqttTransport extends GenericModule<string | Uint8Array, unknown, string | Uint8Array, unknown> {
+export class MqttTransport extends GenericModule<Message, unknown, Message, unknown> {
     client?: mqtt.MqttClient
     connected = false
+    /** Owned here rather than by a converter above, so the transport decides its own wire form. */
+    codec: FrameCodec = msgPackCodec
     readonly prefix: string
     readonly topic: string
     readonly qos: 0 | 1 | 2
@@ -98,7 +101,7 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
         name: string,
         public url: string,
         options: MqttTransportOptions = {},
-        sources?: IGenericModule<unknown, unknown, string, unknown>[]
+        sources?: IGenericModule<unknown, unknown, Message, unknown>[]
     ) {
         super(name, sources)
         this.prefix = options.prefix ?? defaultTopicPrefix
@@ -186,8 +189,8 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
             }
             return
         }
-        const message = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
-        const [header, payload] = this.extractHeader(message)
+        const frame = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
+        const [header, payload] = this.extractHeader(frame)
         if (!header) return
         if (!isSafeTopicSegment(header.source)) {
             // Replies are addressed by source, so an unsafe one cannot be answered anyway.
@@ -201,7 +204,14 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
                 return
             }
         }
-        if (this.targetExists(header.target)) await this.send(payload, header.source, header.target)
+        let message: Message
+        try {
+            message = this.codec.decode(payload as Uint8Array) as Message
+        } catch (e) {
+            this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
+            return
+        }
+        if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
     }
 
     /**
@@ -237,11 +247,12 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
         return undefined
     }
 
-    override async receive(message: string | Uint8Array, source: string, target: string) {
+    override async receive(message: Message, source: string, target: string) {
         if (!isSafeTopicSegment(target)) {
             this.emit(TransportEvent.unroutable, { source, target, reason: 'unsafe peer name' })
             return
         }
+        const body = this.codec.encode(message)
         const header = this.buildHeader(source, target, this.sign ? { nonce: createNonce() } : undefined)
         if (this.sign) {
             header.sig = await this.sign({
@@ -250,10 +261,10 @@ export class MqttTransport extends GenericModule<string | Uint8Array, unknown, s
                 time: header.time,
                 seq: header.seq,
                 nonce: header.nonce!,
-                payload: typeof message === 'string' ? stringToUint8Array(message) : message
+                payload: body
             })
         }
-        const framed = this.frameMessage(header, message)
+        const framed = this.frameMessage(header, body)
         const payload = typeof framed === 'string' ? framed : Buffer.from(framed.buffer, framed.byteOffset, framed.byteLength)
         // Awaited, so at QoS > 0 a publish that never reaches the broker surfaces as a failed call
         // rather than a silent drop followed by a timeout.

@@ -1,9 +1,12 @@
 import { io, ManagerOptions, Socket, SocketOptions } from 'socket.io-client'
-import { GenericModule, IGenericModule, TransportEvent } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
+import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 
-export class SocketIoClientTransport extends GenericModule<string | Uint8Array, unknown, string | Uint8Array, unknown> {
+export class SocketIoClientTransport extends GenericModule<Message, unknown, Message, unknown> {
     socket?: Socket
     connected = false
+    /** Owned here rather than by a converter above, so the transport decides its own wire form. */
+    codec: FrameCodec = msgPackCodec
 
     constructor(
         public url?: string,
@@ -45,11 +48,13 @@ export class SocketIoClientTransport extends GenericModule<string | Uint8Array, 
         this.socket = urlSocketIo ? io(urlSocketIo, this.options) : io(this.options)
         this.socket.on('message', async (messageArray) => {
             try {
-                const message = new Uint8Array(messageArray)
-                const [header, payload] = this.extractHeader(message)
-                if (header && this.targetExists(header.target)) await this.send(payload, header.source, header.target)
+                const [header, payload] = this.extractHeader(new Uint8Array(messageArray))
+                if (!header) return
+                const message = this.codec.decode(payload as Uint8Array) as Message
+                if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
             } catch (e) {
-                console.log('Exception: ', e)
+                // A peer that sends a frame this codec cannot read must not take the client down.
+                this.emit(TransportEvent.rejected, { source: 'unknown', reason: `undecodable frame: ${String(e)}` })
             }
         })
         // socket.io emits 'connect' on reconnects too, so this fires on every transition.
@@ -65,11 +70,11 @@ export class SocketIoClientTransport extends GenericModule<string | Uint8Array, 
         })
     }
 
-    override async receive(message: string | Uint8Array, source: string, target: string) {
+    override async receive(message: Message, source: string, target: string) {
         // No blind sleep while disconnected: socket.io already buffers outgoing frames and flushes
         // them on reconnect, so sleeping only delayed every send during a blip without helping.
         // If the link never comes back the call fails on its own timeout.
-        this.socket?.emit('message', this.prependHeader(source, target, message))
+        this.socket?.emit('message', this.frameMessage(this.buildHeader(source, target), this.codec.encode(message)))
     }
 
     override isTransport() {

@@ -4,10 +4,12 @@ import { EventEmitter } from 'events'
 import { RpcServer } from './RpcServer.js'
 import { RpcClient, RpcProxy } from './RpcClient.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
-import { defaultWebSocketPort } from './RPC/Rpc.js'
 import { TransportEvent } from './RPC/Core.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 //import whyIsNodeRunning from 'why-is-node-running'
+
+/** Deliberately not the default 3000: a test suite should not squat on a port people develop on. */
+const SHARED_PORT = 3910
 
 const waitFor = async (condition: () => boolean, timeout = 5000) => {
     const deadline = Date.now() + timeout
@@ -69,16 +71,16 @@ interface Context {
 const testWithContext = test as TestFn<Context>
 
 testWithContext.before(async (t) => {
-    const rpcServer = new RpcServer()
+    const rpcServer = new RpcServer({ transports: [{ port: SHARED_PORT }] })
 
     await rpcServer.ready()
     const testRpc = new TestRpc()
     rpcServer.exposeClassInstance(testRpc, 'testRpc')
     rpcServer.exposeClassInstance(new EventingRpc(), 'eventing')
-    const rpcClient = new RpcClient()
+    const rpcClient = new RpcClient(`http://localhost:${SHARED_PORT}`)
     await rpcClient.ready()
     const proxy = await rpcClient.proxy<TestRpc>('testRpc')
-    const impatientClient = new RpcClient(undefined, { callTimeout: 300 })
+    const impatientClient = new RpcClient(`http://localhost:${SHARED_PORT}`, { callTimeout: 300 })
     await impatientClient.ready()
     t.context = { rpcServer, rpcClient, impatientClient, proxy }
 })
@@ -155,7 +157,7 @@ testWithContext.serial('settled calls leave no pending state behind', async (t) 
 
 testWithContext.serial('a reply reaches only the client that made the call', async (t) => {
     // A bare socket.io connection that never identifies itself. It must see nothing.
-    const eavesdropper = ioClient(`http://localhost:${defaultWebSocketPort}`)
+    const eavesdropper = ioClient(`http://localhost:${SHARED_PORT}`)
     await new Promise<void>((resolve) => eavesdropper.on('connect', () => resolve()))
     const captured: unknown[] = []
     eavesdropper.on('message', (frame) => captured.push(frame))
@@ -168,7 +170,7 @@ testWithContext.serial('a reply reaches only the client that made the call', asy
 })
 
 testWithContext.serial('an event reaches only the subscribing client', async (t) => {
-    const eavesdropper = ioClient(`http://localhost:${defaultWebSocketPort}`)
+    const eavesdropper = ioClient(`http://localhost:${SHARED_PORT}`)
     await new Promise<void>((resolve) => eavesdropper.on('connect', () => resolve()))
     const captured: unknown[] = []
     eavesdropper.on('message', (frame) => captured.push(frame))

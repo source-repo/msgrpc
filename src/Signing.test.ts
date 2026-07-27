@@ -220,7 +220,7 @@ test('a peer holding its own valid key cannot sign as another peer', async (t) =
     const plant = new Plant()
     server.exposeClassInstance(plant, 'plant')
     const rejected: unknown[] = []
-    server.transports[0].on('rejected', (info) => rejected.push(info))
+    server.transports[0].on('rejected', (info: unknown) => rejected.push(info))
 
     // 'rogue-im' holds a key the server trusts, and signs a frame claiming to be 'hmi-im'.
     const rogue = await connectAsync(BROKER_URL)

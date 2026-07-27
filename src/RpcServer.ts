@@ -1,10 +1,10 @@
 import { Server } from 'http'
-import { GenericModule, PeerRegistry, TransportEvent } from './RPC/Core.js'
+import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
-import { JsonParser, JsonStringifierToUint8Array, MsgPackDecoder, MsgPackEncoder } from './Utilities/Converters.js'
+import { codecFor } from './RPC/Codec.js'
 import { Switch } from './Utilities/Switch.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 
@@ -29,7 +29,7 @@ export interface MqttServerOptions extends ServerOptions, MqttTransportOptions {
 
 export interface RpcServerOptions {
     name: string
-    transports: (HttpServerOptions | ExternalServerOptions | MqttServerOptions | GenericModule)[]
+    transports: (HttpServerOptions | ExternalServerOptions | MqttServerOptions | Transport)[]
     useMsgPack: boolean
     /**
      * Verify credentials when a peer connects. Applied to socket.io transports this server builds.
@@ -55,20 +55,18 @@ export interface RpcServerOptions {
 }
 
 export class RpcServer implements IManageRpc {
-    parser?: JsonParser
     public rpc: RpcServerHandler
-    stringifier?: JsonStringifierToUint8Array<object>
     readyFlag = false
     switch?: Switch
-    transports: GenericModule[] = []
+    transports: Transport[] = []
     /** Peer name -> transport, shared by this server's modules and nothing outside them. */
     readonly peers = new PeerRegistry()
     options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true, readyTimeout: 30000 }
     constructor(options: Partial<RpcServerOptions> = {}) {
         this.options = { ...this.options, ...options }
         this.transports = this.options.transports.map((serveroption) => {
-            let transport: GenericModule | undefined
-            if (serveroption instanceof GenericModule) transport = serveroption
+            let transport: Transport | undefined
+            if (serveroption instanceof GenericModule) transport = serveroption as Transport
             else if ((serveroption as HttpServerOptions).port)
                 transport = new SocketIoServerTransport(
                     this.options.name,
@@ -105,16 +103,17 @@ export class RpcServer implements IManageRpc {
         })
         if (this.transports.length == 0) this.transports.push(new SocketIoServerTransport('*', undefined, defaultWebSocketPort, false))
 
-        if (this.options.useMsgPack) this.parser = new MsgPackDecoder(this.transports)
-        else this.parser = new JsonParser(this.transports)
-        this.rpc = new RpcServerHandler(this.options.name, [this.parser])
-        if (this.options.useMsgPack) this.stringifier = new MsgPackEncoder([this.rpc])
-        else this.stringifier = new JsonStringifierToUint8Array([this.rpc])
-        this.switch = new Switch([this.stringifier])
+        // The transports encode, so there is no converter between them and the handler. A
+        // structured wire format such as MQTT 5 needs to see the message rather than bytes a
+        // converter already flattened.
+        const codec = codecFor(this.options.useMsgPack)
+        for (const transport of this.transports) transport.codec = codec
+        this.rpc = new RpcServerHandler(this.options.name, this.transports)
+        this.switch = new Switch([this.rpc])
         this.switch.setTargets(this.transports)
         // One registry for this server's modules only. The transports record which peer they saw a
         // message from; the switch reads it back to route the reply out of the same transport.
-        for (const module of [...this.transports, this.parser, this.rpc, this.stringifier, this.switch]) module.usePeerRegistry(this.peers)
+        for (const module of [...this.transports, this.rpc, this.switch]) module.usePeerRegistry(this.peers)
         this.transports.forEach((transport) =>
             transport.on(TransportEvent.peerGone, (peer: string) => {
                 // Drop the peer's event subscriptions and forget its route as soon as it goes away.

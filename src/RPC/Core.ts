@@ -2,6 +2,7 @@ import { EventEmitter } from 'events'
 import { stringToUint8Array, uint8ArrayToString } from 'uint8array-extras'
 import { v4 as uuidv4 } from 'uuid'
 import { RpcIdentity } from './Auth.js'
+import { FrameCodec } from './Codec.js'
 
 export const MAX_HEADER_LENGTH = 256
 export const HEADER_DELIMITER = '$'
@@ -79,6 +80,12 @@ export class PeerRegistry {
         return this.peers.size
     }
 }
+
+/**
+ * A module that owns its wire format. RpcClient and RpcServer drive these directly rather than
+ * through a converter, so a transport whose framing is structured can see the message itself.
+ */
+export type Transport = GenericModule<Message, unknown, Message, unknown> & { codec: FrameCodec }
 
 export interface MessageHeader {
     source: string

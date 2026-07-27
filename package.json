@@ -43,7 +43,7 @@
     "clean": "rimraf dist",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
     "lint": "eslint . --max-warnings 0",
-    "test": "npm run build && ava",
+    "test": "npm run clean && npm run build && ava",
     "prepack": "npm run clean && npm run build"
   },
   "dependencies": {

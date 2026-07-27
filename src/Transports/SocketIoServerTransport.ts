@@ -1,13 +1,16 @@
 import * as SocketIo from 'socket.io'
 import { createServer as createHttpServer, Server as HttpServer } from 'http'
 import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
-import { GenericModule, IGenericModule, TransportEvent } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
+import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
 
-export class SocketIoServerTransport extends GenericModule<string | Uint8Array, unknown, string | Uint8Array, unknown> {
+export class SocketIoServerTransport extends GenericModule<Message, unknown, Message, unknown> {
     closed = false
+    /** Owned here rather than by a converter above, so the transport decides its own wire form. */
+    codec: FrameCodec = msgPackCodec
     io?: SocketIo.Server
     ourServer = false
     /**
@@ -60,8 +63,14 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
         this.io.on('connection', (socket) => {
             this.emit('connection', socket)
             socket.on('message', async (messageArray) => {
-                const message = new Uint8Array(messageArray)
-                const [header, payload] = this.extractHeader(message)
+                let header, payload
+                try {
+                    ;[header, payload] = this.extractHeader(new Uint8Array(messageArray))
+                } catch (e) {
+                    // A malformed frame from one peer must not take the whole server down.
+                    this.emit(TransportEvent.rejected, { source: 'unknown', reason: `unparsable header: ${String(e)}` })
+                    return
+                }
                 if (!header) return
                 const identity = socket.data.identity as RpcIdentity | undefined
                 if (this.authenticate) {
@@ -77,7 +86,14 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
                 // Learned before the routing check, so a peer stays addressable even when a
                 // particular frame turns out to be undeliverable.
                 this.peerSockets.set(header.source, socket)
-                if (this.targetExists(header.target)) await this.send(payload, header.source, header.target)
+                let message: Message
+                try {
+                    message = this.codec.decode(payload as Uint8Array) as Message
+                } catch (e) {
+                    this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
+                    return
+                }
+                if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
             })
             socket.on('disconnect', (reason, details) => {
                 for (const [peer, peerSocket] of this.peerSockets) {
@@ -107,7 +123,7 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
         this.readyFlag = true
     }
 
-    override async receive(message: string | Uint8Array, source: string, target: string) {
+    override async receive(message: Message, source: string, target: string) {
         const socket = target === undefined ? undefined : this.peerSockets.get(target)
         if (!socket) {
             // Deliberately no io.emit() fallback: broadcasting would put this peer's reply on
@@ -116,7 +132,7 @@ export class SocketIoServerTransport extends GenericModule<string | Uint8Array, 
             this.emit(TransportEvent.unroutable, { source, target })
             return
         }
-        socket.emit('message', this.prependHeader(source, target, message))
+        socket.emit('message', this.frameMessage(this.buildHeader(source, target), this.codec.encode(message)))
     }
 
     override async close() {
