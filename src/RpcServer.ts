@@ -2,7 +2,7 @@ import { Server } from 'http'
 import { GenericModule, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
-import { MqttTransport } from './Transports/MqttTransport.js'
+import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
 import { JsonParser, JsonStringifierToUint8Array, MsgPackDecoder, MsgPackEncoder } from './Utilities/Converters.js'
 import { Switch } from './Utilities/Switch.js'
@@ -23,7 +23,7 @@ export interface ExternalServerOptions extends ServerOptions {
     path?: string
 }
 
-export interface MqttServerOptions extends ServerOptions {
+export interface MqttServerOptions extends ServerOptions, MqttTransportOptions {
     brokerurl: string
 }
 
@@ -50,6 +50,8 @@ export interface RpcServerOptions {
      * Off by default: it is remote object construction, and it is rarely needed.
      */
     exposeManagement?: boolean
+    /** How long ready() waits for every transport to connect before throwing. 0 waits forever. */
+    readyTimeout: number
 }
 
 export class RpcServer implements IManageRpc {
@@ -59,7 +61,7 @@ export class RpcServer implements IManageRpc {
     readyFlag = false
     switch?: Switch
     transports: GenericModule[] = []
-    options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true }
+    options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true, readyTimeout: 30000 }
     constructor(options: Partial<RpcServerOptions> = {}) {
         this.options = { ...this.options, ...options }
         this.transports = this.options.transports.map((serveroption) => {
@@ -75,8 +77,17 @@ export class RpcServer implements IManageRpc {
                     { path: (serveroption as HttpServerOptions).path },
                     this.options.authenticate
                 )
-            else if ((serveroption as MqttServerOptions).brokerurl)
-                transport = new MqttTransport(this.options.name, (serveroption as MqttServerOptions).brokerurl)
+            else if ((serveroption as MqttServerOptions).brokerurl) {
+                const mqttServerOptions = serveroption as MqttServerOptions
+                transport = new MqttTransport(this.options.name, mqttServerOptions.brokerurl, {
+                    // A server should not lose requests published while it was restarting, so it
+                    // keeps its broker session by default. Clients do not: a late reply is useless
+                    // to a call that has already timed out, and every short-lived peer would leave
+                    // session state behind on the broker.
+                    persistentSession: true,
+                    ...mqttServerOptions
+                })
+            }
             else if ((serveroption as ExternalServerOptions).server)
                 transport = new SocketIoServerTransport(
                     this.options.name,
@@ -147,6 +158,15 @@ export class RpcServer implements IManageRpc {
         const allTransportsReady = () => {
             return this.transports.filter((trp) => !trp.readyFlag).length == 0
         }
-        while (!allTransportsReady() || !this.readyFlag) await new Promise((res) => setTimeout(res, 10))
+        // Previously an unbounded wait, so a server whose broker was unreachable hung at startup
+        // with no diagnostic at all.
+        const deadline = Date.now() + this.options.readyTimeout
+        while (!allTransportsReady() || !this.readyFlag) {
+            if (this.options.readyTimeout > 0 && Date.now() > deadline) {
+                const pending = this.transports.filter((trp) => !trp.readyFlag).map((trp) => trp.getName())
+                throw new Error(`RpcServer '${this.options.name}': transports not ready within ${this.options.readyTimeout} ms: ${pending.join(', ')}`)
+            }
+            await new Promise((res) => setTimeout(res, 10))
+        }
     }
 }

@@ -23,7 +23,9 @@ export class SocketIoClientTransport extends GenericModule<string | Uint8Array, 
         if (!socket) return
         // Disarm reconnection before disconnecting. An explicit close is not a link failure, and
         // a manager left free to reconnect keeps a timer armed that outlives the transport.
-        socket.io.opts.reconnection = false
+        // reconnection(false) is the setter; assigning to opts.reconnection does not reach the
+        // manager's own flag and left the timer armed anyway.
+        socket.io.reconnection(false)
         // Only disconnect() - close() is an alias for it, and calling both corrupted the manager's
         // socket bookkeeping.
         socket.disconnect()

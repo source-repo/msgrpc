@@ -78,7 +78,7 @@ export class RpcClient extends EventEmitter {
             const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
             const mqttOptions = (this.options.credentials ?? {}) as IClientOptions
             if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.url, undefined, socketOptions)
-            else if (this.url?.startsWith('mqtt')) transport = new MqttTransport(this.options.name, this.url, undefined, undefined, mqttOptions)
+            else if (this.url?.startsWith('mqtt')) transport = new MqttTransport(this.options.name, this.url, { mqtt: mqttOptions })
             else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
         }
         this.options.transport = transport

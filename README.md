@@ -232,13 +232,18 @@ MQTT has no server-side handshake to authenticate against - both peers connect t
 each other - so `authenticate` does not apply to MQTT transports and `identity` is undefined for
 MQTT callers. Trust comes from the broker instead:
 
-- Set broker credentials or TLS client certificates through `MqttTransport`'s `mqttOptions`.
+- Set broker credentials or TLS client certificates through the transport's `mqtt` options.
 - Restrict which peer may publish or subscribe to which topic with broker ACLs.
 - `authorize` still runs, but its `source` is only as trustworthy as those ACLs make it.
 
 A server that mixes an authenticating socket.io transport with an MQTT transport will reject its
 MQTT peers, because `requireAuthenticatedPeers` turns on with `authenticate`. Set it to `false`
 explicitly to allow both, and rely on the broker for the MQTT half.
+
+**msgrpc cannot isolate MQTT peers from each other on its own.** Peer names can no longer widen
+their own subscription (see below), but anyone holding broker credentials can subscribe to
+`<prefix>/rpc/#` directly and read every peer's traffic. Only broker ACLs prevent that. Grant each
+peer publish/subscribe rights to its own topics and nothing else.
 
 ## The management surface
 
@@ -264,6 +269,60 @@ could:
 A remote caller can only send serialized data, so it could not publish *callable* methods of its
 own choosing. If you are upgrading, treat the first two as reachable by anyone who could open a
 socket or publish to the broker topic.
+
+# MQTT
+
+Every peer owns two topics under a configurable prefix:
+
+```
+<prefix>/rpc/<peer>        RPC messages addressed to <peer>
+<prefix>/presence/<peer>   retained: "online", or "offline" via the last will
+```
+
+```typescript
+interface MqttTransportOptions {
+    prefix?: string             // default 'msgrpc/v1'
+    topic?: string              // peer name to subscribe as, defaults to the transport name
+    qos?: 0 | 1 | 2             // default 1
+    presence?: boolean          // default true
+    persistentSession?: boolean // default false; RpcServer sets it true for its own transports
+    mqtt?: IClientOptions       // credentials, TLS, keepalive, clientId
+}
+```
+
+```typescript
+const server = new RpcServer({
+    name: 'plantServer',
+    transports: [{ brokerurl: 'mqtt://broker:1883', prefix: 'site-4', mqtt: { username: 'plant', password: '...' } }]
+})
+
+const client = new RpcClient('mqtt://broker:1883', {
+    name: 'hmi-1',
+    defaultTarget: 'plantServer',
+    credentials: { username: 'hmi', password: '...' }   // MQTT credentials go to the broker
+})
+```
+
+**Peer names are validated.** A name is one topic level, so `#`, `+`, `/`, spaces, an empty name
+and names over 128 characters are rejected when the transport is constructed. Without this a peer
+named `#` subscribed to `<prefix>/#` and received every other peer's requests and replies.
+
+**QoS 1 by default.** QoS 0 drops messages silently whenever the broker or link hiccups, which
+surfaces as an unexplained call timeout. At-least-once permits duplicate delivery, so the server
+suppresses repeats by request id and answers them from a cache rather than running the method
+again - a redelivered `writeSetpoint` must not execute twice. Publishes are awaited, so a failure
+to reach the broker rejects the call instead of vanishing.
+
+**Presence replaces the connection MQTT does not have.** Each peer registers a retained last will,
+so when it disappears the broker publishes `offline` on its behalf and servers release the event
+subscriptions they held for it. Without this those subscriptions leaked forever, because an MQTT
+server never sees a disconnect. A peer that closes gracefully announces `offline` and then clears
+its retained value, so it leaves nothing behind on the broker.
+
+**Sessions.** Servers connect with a stable client id and a persistent session, so requests
+published while they restart are queued rather than lost. Clients use a clean session: a reply to
+a call that has already timed out is useless, and a persistent session per short-lived client
+accumulates state on the broker.
 
 # Low level interface
 

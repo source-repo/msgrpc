@@ -83,13 +83,13 @@ testWithContext.before(async (t) => {
     t.context = { rpcServer, rpcClient, impatientClient, proxy }
 })
 
-testWithContext('simple test', async (t) => {
+testWithContext.serial('simple test', async (t) => {
     const ctx = t.context
     const result = await ctx.proxy.remote?.square(3)
     t.is(result, 9)
 })
 
-testWithContext('a server-side throw rejects the caller promptly with the remote error', async (t) => {
+testWithContext.serial('a server-side throw rejects the caller promptly with the remote error', async (t) => {
     const started = Date.now()
     const error = await t.throwsAsync(async () => t.context.proxy.remote?.boom(), { instanceOf: RpcError })
     const elapsed = Date.now() - started
@@ -100,24 +100,24 @@ testWithContext('a server-side throw rejects the caller promptly with the remote
     t.true(elapsed < 1000, `expected a prompt rejection, took ${elapsed} ms`)
 })
 
-testWithContext('a remote stack is carried back to the caller', async (t) => {
+testWithContext.serial('a remote stack is carried back to the caller', async (t) => {
     const error = await t.throwsAsync(async () => t.context.proxy.remote?.boom(), { instanceOf: RpcError })
     t.regex(error?.remoteStack ?? '', /deliberate server-side failure/)
 })
 
-testWithContext('calling a method that is not exposed rejects with MethodNotFound', async (t) => {
+testWithContext.serial('calling a method that is not exposed rejects with MethodNotFound', async (t) => {
     const untyped = t.context.proxy.remote as unknown as { nope: () => Promise<void> }
     const error = await t.throwsAsync(async () => untyped.nope(), { instanceOf: RpcError })
     t.is(error?.code, 'MethodNotFound')
 })
 
-testWithContext('calling into a namespace that is not exposed rejects with ClassNotFound', async (t) => {
+testWithContext.serial('calling into a namespace that is not exposed rejects with ClassNotFound', async (t) => {
     const missing = await t.context.rpcClient!.proxy<TestRpc>('noSuchInstance')
     const error = await t.throwsAsync(async () => missing.remote?.square(2), { instanceOf: RpcError })
     t.is(error?.code, 'ClassNotFound')
 })
 
-testWithContext('an unanswered call rejects with Timeout after the configured interval', async (t) => {
+testWithContext.serial('an unanswered call rejects with Timeout after the configured interval', async (t) => {
     const proxy = await t.context.impatientClient!.proxy<TestRpc>('testRpc')
     const started = Date.now()
     const error = await t.throwsAsync(async () => proxy.remote?.never(), { instanceOf: RpcError })
@@ -127,7 +127,7 @@ testWithContext('an unanswered call rejects with Timeout after the configured in
     t.true(elapsed < 3000, `expected the 300 ms timeout to apply, took ${elapsed} ms`)
 })
 
-testWithContext('a Uint8Array survives a round trip intact', async (t) => {
+testWithContext.serial('a Uint8Array survives a round trip intact', async (t) => {
     const sent = new Uint8Array([0, 1, 2, 250, 255])
     const received = await t.context.proxy.remote?.echoBuffer(sent)
 
@@ -135,7 +135,7 @@ testWithContext('a Uint8Array survives a round trip intact', async (t) => {
     t.deepEqual(Array.from(received!), Array.from(sent))
 })
 
-testWithContext('a nested Uint8Array survives a round trip intact', async (t) => {
+testWithContext.serial('a nested Uint8Array survives a round trip intact', async (t) => {
     const sent = { label: 'chunk', bytes: new Uint8Array([9, 8, 7]) }
     const received = (await t.context.proxy.remote?.echo(sent)) as typeof sent
 
@@ -144,7 +144,7 @@ testWithContext('a nested Uint8Array survives a round trip intact', async (t) =>
     t.is(received.label, 'chunk')
 })
 
-testWithContext('settled calls leave no pending state behind', async (t) => {
+testWithContext.serial('settled calls leave no pending state behind', async (t) => {
     const handler = t.context.rpcClient!.rpcClient!
     await t.context.proxy.remote?.square(4)
     await t.throwsAsync(async () => t.context.proxy.remote?.boom())
@@ -153,7 +153,7 @@ testWithContext('settled calls leave no pending state behind', async (t) => {
     t.is(handler.responseTimeoutMap.size, 0, 'pending response timers leaked')
 })
 
-testWithContext('a reply reaches only the client that made the call', async (t) => {
+testWithContext.serial('a reply reaches only the client that made the call', async (t) => {
     // A bare socket.io connection that never identifies itself. It must see nothing.
     const eavesdropper = ioClient(`http://localhost:${defaultWebSocketPort}`)
     await new Promise<void>((resolve) => eavesdropper.on('connect', () => resolve()))
@@ -167,7 +167,7 @@ testWithContext('a reply reaches only the client that made the call', async (t) 
     t.is(captured.length, 0, 'an unrelated socket received frames addressed to another client')
 })
 
-testWithContext('an event reaches only the subscribing client', async (t) => {
+testWithContext.serial('an event reaches only the subscribing client', async (t) => {
     const eavesdropper = ioClient(`http://localhost:${defaultWebSocketPort}`)
     await new Promise<void>((resolve) => eavesdropper.on('connect', () => resolve()))
     const captured: unknown[] = []
@@ -186,14 +186,14 @@ testWithContext('an event reaches only the subscribing client', async (t) => {
     t.is(captured.length, 0, "an unrelated socket received another client's event")
 })
 
-testWithContext('two clients each receive their own replies', async (t) => {
+testWithContext.serial('two clients each receive their own replies', async (t) => {
     const second = await t.context.impatientClient!.proxy<TestRpc>('testRpc')
     const [a, b] = await Promise.all([t.context.proxy.remote!.square(3), second.remote!.square(4)])
     t.is(a, 9)
     t.is(b, 16)
 })
 
-testWithContext('repeating a subscription does not stack server-side listeners', async (t) => {
+testWithContext.serial('repeating a subscription does not stack server-side listeners', async (t) => {
     const { server, client, eventing, dispose } = await isolatedPair(3101)
     const proxy = await client.proxy<EventingRpc>('eventing')
 
@@ -204,7 +204,7 @@ testWithContext('repeating a subscription does not stack server-side listeners',
     await dispose()
 })
 
-testWithContext('events resume after the link drops and comes back', async (t) => {
+testWithContext.serial('events resume after the link drops and comes back', async (t) => {
     const { server, client, eventing, socket, dispose } = await isolatedPair(3102)
     const proxy = await client.proxy<EventingRpc>('eventing')
     const received: string[] = []
@@ -228,7 +228,7 @@ testWithContext('events resume after the link drops and comes back', async (t) =
     await dispose()
 })
 
-testWithContext('a departing client releases its subscriptions', async (t) => {
+testWithContext.serial('a departing client releases its subscriptions', async (t) => {
     const { server, client, eventing, dispose } = await isolatedPair(3103)
     const proxy = await client.proxy<EventingRpc>('eventing')
     await proxy.remote?.on('ping', () => {})
@@ -241,7 +241,7 @@ testWithContext('a departing client releases its subscriptions', async (t) => {
     await dispose()
 })
 
-testWithContext('an in-flight call fails as soon as the link drops', async (t) => {
+testWithContext.serial('an in-flight call fails as soon as the link drops', async (t) => {
     const { client, socket, dispose } = await isolatedPair(3104)
     const proxy = await client.proxy<TestRpc>('testRpc')
 
@@ -257,7 +257,7 @@ testWithContext('an in-flight call fails as soon as the link drops', async (t) =
     await dispose()
 })
 
-testWithContext('ready() gives up instead of hanging when nothing is listening', async (t) => {
+testWithContext.serial('ready() gives up instead of hanging when nothing is listening', async (t) => {
     const client = new RpcClient('http://localhost:3199', { readyTimeout: 500 })
     await t.throwsAsync(client.ready(), { message: /not ready within 500 ms/ })
     await client.close()

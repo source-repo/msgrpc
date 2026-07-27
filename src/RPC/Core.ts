@@ -20,7 +20,8 @@ export const TransportEvent = {
     disconnected: 'disconnected',
     peerGone: 'peerGone',
     rejected: 'rejected',
-    unroutable: 'unroutable'
+    unroutable: 'unroutable',
+    transportError: 'transportError'
 } as const
 
 export interface IGenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown> {
