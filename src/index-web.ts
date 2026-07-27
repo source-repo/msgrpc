@@ -5,6 +5,8 @@ export * from './Transports/SocketIoClientTransport.js'
 
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'
+export * from './RPC/Messages.js'
+export * from './RPC/Codec.js'
 export * from './RPC/Signing.js'
 export * from './RPC/RpcClientHandler.js'
 export * from './RPC/RpcServerHandler.js'

@@ -70,13 +70,30 @@ export interface SignedFrame {
     payload: Uint8Array
 }
 
-/** Produce a signature for a frame, base64 encoded. */
-export type MessageSigner = (frame: SignedFrame) => string | Promise<string>
+/** What a signer knows about the frame beyond the bytes it is signing. */
+export interface SigningContext {
+    /** Peer that claims to have sent the frame. Selects which key to sign or verify with. */
+    source: string
+}
 
 /**
- * Check a frame's signature. Return the sender's identity to accept it, undefined to reject.
+ * Produce a base64 signature over already-canonicalised bytes.
  *
- * The returned identity's `name` must equal the frame's `source`; a transport rejects the frame
+ * Signers take bytes rather than a frame so one signer works across wire formats: the v1 header
+ * and the MQTT 5 property layout canonicalise different fields, and only the transport knows which
+ * it is speaking.
+ */
+export type MessageSigner = (canonicalBytes: Uint8Array, context: SigningContext) => string | Promise<string>
+
+/**
+ * Check a signature over canonicalised bytes. Return the sender's identity to accept the frame,
+ * undefined to reject it.
+ *
+ * The returned identity's `name` must equal the frame's source; a transport rejects the frame
  * otherwise, so a peer holding one key cannot sign messages claiming to come from another.
  */
-export type MessageVerifier = (frame: SignedFrame, signature: string) => RpcIdentity | undefined | Promise<RpcIdentity | undefined>
+export type MessageVerifier = (
+    canonicalBytes: Uint8Array,
+    signature: string,
+    context: SigningContext
+) => RpcIdentity | undefined | Promise<RpcIdentity | undefined>

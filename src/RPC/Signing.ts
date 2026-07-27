@@ -35,6 +35,47 @@ export const canonicalSignedBytes = (frame: SignedFrame): Uint8Array => {
     return result
 }
 
+/** Fields the MQTT 5 layout covers. Signed positionally by value, so property naming never enters
+ *  the canonical form and renaming one later cannot silently change what verifies. */
+export interface SignedFrameV5 {
+    version: string
+    topic: string
+    source: string
+    kind: string
+    path: string
+    methodOrEvent: string
+    correlation: string
+    timestamp: number
+    nonce: string
+    payload: Uint8Array
+}
+
+/**
+ * The MQTT 5 canonical form. The topic is signed rather than a target field, because under this
+ * layout the topic is what carries the addressing. contentType is deliberately absent: it says how
+ * to read bytes that are themselves covered, so altering it can only make the payload fail to
+ * parse, never change what was authorised.
+ */
+export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
+    const preamble = stringToUint8Array(
+        JSON.stringify([
+            frame.version,
+            frame.topic,
+            frame.source,
+            frame.kind,
+            frame.path,
+            frame.methodOrEvent,
+            frame.correlation,
+            frame.timestamp,
+            frame.nonce
+        ])
+    )
+    const result = new Uint8Array(preamble.length + frame.payload.length)
+    result.set(preamble, 0)
+    result.set(frame.payload, preamble.length)
+    return result
+}
+
 /** A nonce with enough entropy that collisions are not a practical concern. */
 export const createNonce = () => uint8ArrayToBase64(globalThis.crypto.getRandomValues(new Uint8Array(16)))
 
@@ -95,20 +136,20 @@ const identityOf = (source: string, identityFor?: (source: string) => RpcIdentit
 export const createHmacSigner = (secret: Uint8Array | string): MessageSigner => {
     let imported: Promise<CryptoKey> | undefined
     const key = () => (imported ??= subtle().importKey('raw', toBytes(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']))
-    return async (frame) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('HMAC', await key(), canonicalSignedBytes(frame))))
+    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('HMAC', await key(), canonicalBytes)))
 }
 
 export const createHmacVerifier = (
     resolveSecret: KeyResolver<Uint8Array | string>,
     identityFor?: (source: string) => RpcIdentity | undefined
 ): MessageVerifier => {
-    return async (frame, signature) => {
-        const secret = await resolveSecret(frame.source)
+    return async (canonicalBytes, signature, { source }) => {
+        const secret = await resolveSecret(source)
         if (!secret) return undefined
         const key = await subtle().importKey('raw', toBytes(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
         // subtle.verify compares in constant time, so this does not leak the expected signature.
-        const valid = await subtle().verify('HMAC', key, base64ToUint8Array(signature), canonicalSignedBytes(frame))
-        return valid ? identityOf(frame.source, identityFor) : undefined
+        const valid = await subtle().verify('HMAC', key, base64ToUint8Array(signature), canonicalBytes)
+        return valid ? identityOf(source, identityFor) : undefined
     }
 }
 
@@ -118,17 +159,17 @@ export const createHmacVerifier = (
  * forge messages from its peers.
  */
 export const createEd25519Signer = (privateKey: CryptoKey): MessageSigner => {
-    return async (frame) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('Ed25519', privateKey, canonicalSignedBytes(frame))))
+    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('Ed25519', privateKey, canonicalBytes)))
 }
 
 export const createEd25519Verifier = (
     resolvePublicKey: KeyResolver<CryptoKey>,
     identityFor?: (source: string) => RpcIdentity | undefined
 ): MessageVerifier => {
-    return async (frame, signature) => {
-        const publicKey = await resolvePublicKey(frame.source)
+    return async (canonicalBytes, signature, { source }) => {
+        const publicKey = await resolvePublicKey(source)
         if (!publicKey) return undefined
-        const valid = await subtle().verify('Ed25519', publicKey, base64ToUint8Array(signature), canonicalSignedBytes(frame))
-        return valid ? identityOf(frame.source, identityFor) : undefined
+        const valid = await subtle().verify('Ed25519', publicKey, base64ToUint8Array(signature), canonicalBytes)
+        return valid ? identityOf(source, identityFor) : undefined
     }
 }

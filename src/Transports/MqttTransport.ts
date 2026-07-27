@@ -2,11 +2,23 @@ import * as mqtt from 'mqtt'
 
 import { stringToUint8Array } from 'uint8array-extras'
 import { GenericModule, IGenericModule, Message, MessageHeader, TransportEvent } from '../RPC/Core.js'
-import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
-import { MessageSigner, MessageVerifier, RpcIdentity, SignedFrame } from '../RPC/Auth.js'
-import { createNonce, ReplayGuard } from '../RPC/Signing.js'
+import { FrameCodec, jsonCodec, msgPackCodec } from '../RPC/Codec.js'
+import type { IPublishPacket } from 'mqtt-packet'
+import { MessageSigner, MessageVerifier, RpcIdentity } from '../RPC/Auth.js'
+import { canonicalSignedBytes, canonicalSignedBytesV5, createNonce, ReplayGuard } from '../RPC/Signing.js'
+import {
+    Channel,
+    correlationToBytes,
+    correlationToString,
+    FRAME_VERSION,
+    fromInboundFrame,
+    MR,
+    readControlProperties,
+    toOutboundFrame
+} from './Mqtt5Frame.js'
 
-export const defaultTopicPrefix = 'msgrpc/v1'
+/** v1 is the $-header layout; v2 is the MQTT 5 property layout, so the two never share a topic. */
+export const defaultTopicPrefix = { 4: 'msgrpc/v1', 5: 'msgrpc/v2' } as const
 
 const PRESENCE_ONLINE = 'online'
 const PRESENCE_OFFLINE = 'offline'
@@ -78,6 +90,16 @@ export interface MqttTransportOptions {
     maxClockSkew?: number
     /** How many recent nonces to remember for replay detection. Default 5000. */
     maxTrackedNonces?: number
+    /**
+     * MQTT protocol version. 5 carries the reply address, correlation and method as packet
+     * properties, so a peer with no msgrpc code can take part and standard tooling can read the
+     * traffic. 4 (MQTT 3.1.1) keeps the older $-delimited header for brokers that need it.
+     */
+    protocol?: 4 | 5
+    /** MQTT 5 only: request lifetime the broker enforces, so a stale request is never executed. */
+    requestExpirySeconds?: number
+    /** MQTT 5 only: which of this peer's channels to subscribe to. Defaults to all three. */
+    channels?: Channel[]
 }
 
 export class MqttTransport extends GenericModule<Message, unknown, Message, unknown> {
@@ -91,11 +113,21 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     readonly presence: boolean
     readonly persistentSession: boolean
     readonly mqttOptions: mqtt.IClientOptions
+    readonly protocol: 4 | 5
+    readonly requestExpirySeconds: number
+    readonly channels: Channel[]
     readonly sign?: MessageSigner
     readonly verify?: MessageVerifier
     readonly replayGuard: ReplayGuard
     /** Peer name -> identity established by verifying that peer's signature. */
     peerIdentities = new Map<string, RpcIdentity>()
+    /**
+     * Correlation -> the contentType its request arrived in, so the reply goes back in the same
+     * encoding. A third party that speaks JSON must not be answered in msgpack it cannot read.
+     * Bounded, since the keys come off the wire.
+     */
+    private replyEncoding = new Map<string, string>()
+    private maxTrackedReplies = 1000
 
     constructor(
         name: string,
@@ -104,7 +136,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         sources?: IGenericModule<unknown, unknown, Message, unknown>[]
     ) {
         super(name, sources)
-        this.prefix = options.prefix ?? defaultTopicPrefix
+        this.protocol = options.protocol ?? 5
+        this.requestExpirySeconds = options.requestExpirySeconds ?? 30
+        this.channels = options.channels ?? ['req', 'rsp', 'evt']
+        this.prefix = options.prefix ?? defaultTopicPrefix[this.protocol]
         this.topic = options.topic ?? this.name
         this.qos = options.qos ?? 1
         this.presence = options.presence ?? true
@@ -125,6 +160,9 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     rpcTopic(peer: string) {
         return `${this.prefix}/rpc/${peer}`
     }
+    channelTopic(channel: Channel, peer: string) {
+        return `${this.prefix}/${channel}/${peer}`
+    }
     presenceTopic(peer: string) {
         return `${this.prefix}/presence/${peer}`
     }
@@ -140,13 +178,14 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             // A stable clientId is what lets the broker recognise this peer across a reconnect.
             // It used to be random per connection, so no session could ever be resumed.
             clientId: `msgrpc-${this.name}`,
+            protocolVersion: this.protocol,
             ...this.mqttOptions,
             clean: this.mqttOptions.clean ?? !this.persistentSession,
             will: this.presence
                 ? { topic: this.presenceTopic(this.name), payload: Buffer.from(PRESENCE_OFFLINE), qos: this.qos, retain: true }
                 : this.mqttOptions.will
         })
-        this.client.on('message', (topic, messageBuffer) => void this.onBrokerMessage(topic, messageBuffer))
+        this.client.on('message', (topic, messageBuffer, packet) => void this.onBrokerMessage(topic, messageBuffer, packet))
         // mqtt.js reconnects on its own and re-emits 'connect', so subscriptions are renewed on
         // every transition.
         this.client.on('connect', () => void this.onConnect())
@@ -165,7 +204,9 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     private async onConnect() {
         this.connected = true
         try {
-            await this.client?.subscribeAsync(this.rpcTopic(this.topic), { qos: this.qos })
+            if (this.protocol === 5) {
+                for (const channel of this.channels) await this.client?.subscribeAsync(this.channelTopic(channel, this.topic), { qos: this.qos })
+            } else await this.client?.subscribeAsync(this.rpcTopic(this.topic), { qos: this.qos })
             if (this.presence) {
                 await this.client?.subscribeAsync(this.presenceTopic('+'), { qos: this.qos })
                 await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, { qos: this.qos, retain: true })
@@ -179,7 +220,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.emit(TransportEvent.connected)
     }
 
-    private async onBrokerMessage(topic: string, messageBuffer: Buffer) {
+    private async onBrokerMessage(topic: string, messageBuffer: Buffer, packet?: IPublishPacket) {
         if (this.presence && topic.startsWith(this.presenceRoot)) {
             const peer = topic.slice(this.presenceRoot.length)
             // Retained presence means a late subscriber also learns about peers that already left.
@@ -189,6 +230,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             }
             return
         }
+        if (this.protocol === 5) return await this.receiveV5(topic, messageBuffer, packet)
         const frame = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
         const [header, payload] = this.extractHeader(frame)
         if (!header) return
@@ -214,6 +256,111 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
     }
 
+    private async receiveV5(topic: string, messageBuffer: Buffer, packet?: IPublishPacket) {
+        const properties = packet?.properties
+        const control = readControlProperties(properties?.userProperties)
+        if ('duplicate' in control) {
+            this.emit(TransportEvent.rejected, { source: 'unknown', reason: `repeated control property ${control.duplicate}` })
+            return
+        }
+        const values = control.values
+        const source = values[MR.source]
+        if (!isSafeTopicSegment(source)) {
+            this.emit(TransportEvent.rejected, { source, reason: 'missing or unsafe peer name' })
+            return
+        }
+        const body = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
+        const correlation = correlationToString(properties?.correlationData)
+
+        if (this.verify) {
+            const rejection = await this.verifyV5(topic, values, correlation, body)
+            if (rejection) {
+                this.emit(TransportEvent.rejected, { source, reason: rejection })
+                return
+            }
+        }
+
+        let decoded: unknown
+        try {
+            decoded = messageBuffer.length ? this.codecFor(properties?.contentType).decode(body) : undefined
+        } catch (e) {
+            this.emit(TransportEvent.rejected, { source, reason: `undecodable payload: ${String(e)}` })
+            return
+        }
+        // Recorded before dispatch so the reply can mirror it.
+        if (correlation) this.rememberReplyEncoding(correlation, properties?.contentType)
+        const message = fromInboundFrame({
+            kind: values[MR.kind],
+            correlation,
+            path: values[MR.path],
+            method: values[MR.method],
+            event: values[MR.event],
+            code: values[MR.code],
+            body: decoded
+        })
+        if (!message) {
+            this.emit(TransportEvent.rejected, { source, reason: `unrecognised frame kind '${values[MR.kind]}'` })
+            return
+        }
+        this.setKnownSource(source)
+        // The reply address is this peer's own name under the MQTT 5 layout, so route on it.
+        if (this.targetExists(this.name)) await this.send(message, source, this.name)
+    }
+
+    private rememberReplyEncoding(correlation: string, contentType: string | undefined) {
+        if (!contentType || contentType === this.codec.contentType) return
+        this.replyEncoding.set(correlation, contentType)
+        while (this.replyEncoding.size > this.maxTrackedReplies) {
+            const oldest = this.replyEncoding.keys().next()
+            if (oldest.done) break
+            this.replyEncoding.delete(oldest.value)
+        }
+    }
+
+    private takeReplyEncoding(correlation: string) {
+        const contentType = this.replyEncoding.get(correlation)
+        if (!contentType) return undefined
+        this.replyEncoding.delete(correlation)
+        return this.codecFor(contentType)
+    }
+
+    /** A peer may speak JSON while this one defaults to msgpack; contentType says which. */
+    private codecFor(contentType: string | undefined) {
+        if (contentType && contentType !== this.codec.contentType) return contentType === jsonCodec.contentType ? jsonCodec : msgPackCodec
+        return this.codec
+    }
+
+    private async verifyV5(topic: string, values: { [key: string]: string }, correlation: string | undefined, body: Uint8Array) {
+        const signature = values[MR.signature]
+        const nonce = values[MR.nonce]
+        const timestamp = Number(values[MR.timestamp])
+        if (!signature || !nonce) return 'unsigned'
+        if (!this.replayGuard.accept(nonce, timestamp)) return 'stale or replayed'
+        const source = values[MR.source]
+        const canonical = canonicalSignedBytesV5({
+            version: values[MR.version] ?? FRAME_VERSION,
+            topic,
+            source,
+            kind: values[MR.kind] ?? '',
+            path: values[MR.path] ?? '',
+            methodOrEvent: values[MR.method] ?? values[MR.event] ?? '',
+            correlation: correlation ?? '',
+            timestamp,
+            nonce,
+            payload: body
+        })
+        let identity
+        try {
+            identity = await this.verify!(canonical, signature, { source })
+        } catch {
+            return 'verifier error'
+        }
+        if (!identity) return 'bad signature'
+        if (identity.name !== source) return 'identity does not match source'
+        this.peerIdentities.set(source, identity)
+        return undefined
+    }
+
     /**
      * Returns a reason to reject, or undefined when the frame is authentic. Every check is a
      * separate failure mode worth naming, because "message dropped" with no reason is the hardest
@@ -224,17 +371,17 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         // trivially bypassed by omitting the signature.
         if (!header.sig || !header.nonce) return 'unsigned'
         if (!this.replayGuard.accept(header.nonce, header.time)) return 'stale or replayed'
-        const frame: SignedFrame = {
+        const canonical = canonicalSignedBytes({
             source: header.source,
             target: header.target,
             time: header.time,
             seq: header.seq,
             nonce: header.nonce,
             payload: typeof payload === 'string' ? stringToUint8Array(payload) : payload
-        }
+        })
         let identity: RpcIdentity | undefined
         try {
-            identity = await this.verify!(frame, header.sig)
+            identity = await this.verify!(canonical, header.sig, { source: header.source })
         } catch {
             // A verifier that throws rejects, for the same reason an authorizer that throws denies.
             return 'verifier error'
@@ -252,10 +399,11 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.unroutable, { source, target, reason: 'unsafe peer name' })
             return
         }
+        if (this.protocol === 5) return await this.publishV5(message, source, target)
         const body = this.codec.encode(message)
         const header = this.buildHeader(source, target, this.sign ? { nonce: createNonce() } : undefined)
         if (this.sign) {
-            header.sig = await this.sign({
+            const canonical = canonicalSignedBytes({
                 source: header.source,
                 target: header.target,
                 time: header.time,
@@ -263,12 +411,70 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 nonce: header.nonce!,
                 payload: body
             })
+            header.sig = await this.sign(canonical, { source: header.source })
         }
         const framed = this.frameMessage(header, body)
         const payload = typeof framed === 'string' ? framed : Buffer.from(framed.buffer, framed.byteOffset, framed.byteLength)
         // Awaited, so at QoS > 0 a publish that never reaches the broker surfaces as a failed call
         // rather than a silent drop followed by a timeout.
         await this.client?.publishAsync(this.rpcTopic(target), payload, { qos: this.qos })
+    }
+
+    /** Maps an RPC message onto the MQTT 5 packet layout. See docs/mqtt5-frame-spec.md. */
+    private async publishV5(message: Message, source: string, target: string) {
+        const frame = toOutboundFrame(message)
+        if (!frame) {
+            this.emit(TransportEvent.unroutable, { source, target, reason: 'no MQTT 5 representation for this message' })
+            return
+        }
+        const topic = this.channelTopic(frame.channel, target)
+        // A reply mirrors the encoding its request used; anything else uses this peer's own.
+        const replyCodec = frame.channel === 'rsp' && frame.correlation ? this.takeReplyEncoding(frame.correlation) : undefined
+        const codec = replyCodec ?? this.codec
+        const body = codec.encode(frame.body)
+        const userProperties: { [key: string]: string } = {
+            [MR.version]: FRAME_VERSION,
+            [MR.source]: source,
+            [MR.kind]: frame.kind
+        }
+        if (frame.path) userProperties[MR.path] = frame.path
+        if (frame.method) userProperties[MR.method] = frame.method
+        if (frame.event) userProperties[MR.event] = frame.event
+        if (frame.code) userProperties[MR.code] = frame.code
+
+        if (this.sign) {
+            const nonce = createNonce()
+            const timestamp = Date.now()
+            const canonical = canonicalSignedBytesV5({
+                version: FRAME_VERSION,
+                topic,
+                source,
+                kind: frame.kind,
+                path: frame.path ?? '',
+                methodOrEvent: frame.method ?? frame.event ?? '',
+                correlation: frame.correlation ?? '',
+                timestamp,
+                nonce,
+                payload: body
+            })
+            userProperties[MR.nonce] = nonce
+            userProperties[MR.timestamp] = String(timestamp)
+            userProperties[MR.signature] = await this.sign(canonical, { source })
+        }
+
+        await this.client?.publishAsync(topic, Buffer.from(body), {
+            qos: this.qos,
+            properties: {
+                contentType: codec.contentType,
+                payloadFormatIndicator: codec.contentType === jsonCodec.contentType,
+                correlationData: frame.correlation ? Buffer.from(correlationToBytes(frame.correlation)!) : undefined,
+                // Only a request expects an answer, and only a request should expire.
+                ...(frame.channel === 'req'
+                    ? { responseTopic: this.channelTopic('rsp', this.name), messageExpiryInterval: this.requestExpirySeconds }
+                    : {}),
+                userProperties
+            }
+        })
     }
 
     override async close() {

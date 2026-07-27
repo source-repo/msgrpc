@@ -1,8 +1,13 @@
 # msgrpc over MQTT 5 — frame layout
 
-**Status: agreed design, not implemented.** This replaces the custom `$`-delimited header with
-MQTT 5 packet properties. Settled before any peers are deployed; retrofitting a frame format across
-a live plant network is the expensive version.
+**Status: implemented.** `MqttTransport` speaks this by default (`protocol: 5`); `protocol: 4`
+keeps the older `$`-delimited header for brokers that need it. Verified against a live broker with
+vanilla mqtt.js on the far side, in `src/Mqtt5.test.ts`.
+
+Not yet implemented, and independent of the frame layout: shared subscriptions for server replicas
+(a deployment subscribes `$share/<group>/...` itself; msgrpc has no option for it yet) and MQTT 5
+`sessionExpiryInterval`, which would let a client keep a session without leaving one on the broker
+forever.
 
 ## Why
 

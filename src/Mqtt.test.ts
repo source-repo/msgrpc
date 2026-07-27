@@ -131,7 +131,7 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
     const observer = await connectAsync(BROKER_URL)
     const topics: string[] = []
     observer.on('message', (topic) => topics.push(topic))
-    await observer.subscribeAsync(`${prefix}/rpc/#`)
+    await observer.subscribeAsync(`${prefix}/#`)
 
     const client = new RpcClient(undefined, {
         name: 'mqttClient2',
@@ -142,8 +142,9 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
     await (await client.proxy<Plant>('plant')).remote?.add(1, 1)
     await waitFor(() => topics.length >= 2)
 
-    // One topic per addressee: the request to the server, the reply to the client.
-    t.deepEqual([...new Set(topics)].sort(), [`${prefix}/rpc/mqttClient2`, `${prefix}/rpc/mqttServer2`])
+    // One topic per addressee and per channel: the request to the server, the reply to the client.
+    const rpcTopics = [...new Set(topics)].filter((topic) => !topic.includes('/presence/')).sort()
+    t.deepEqual(rpcTopics, [`${prefix}/req/mqttServer2`, `${prefix}/rsp/mqttClient2`])
 
     await observer.endAsync()
     await client.close()

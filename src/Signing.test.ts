@@ -4,6 +4,7 @@ import { encode as msgPackEncode } from '@msgpack/msgpack'
 import { stringToUint8Array } from 'uint8array-extras'
 import { MqttTransport, RpcClient, RpcServer } from './index.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
+import { MessageSigner } from './RPC/Auth.js'
 import { canonicalSignedBytes, createHmacSigner, createHmacVerifier, createEd25519Signer, createEd25519Verifier, createNonce, ReplayGuard } from './RPC/Signing.js'
 import { RpcMessageType } from './RPC/RpcServerHandler.js'
 
@@ -83,13 +84,14 @@ test('the signed bytes commit to every field and to the payload', (t) => {
 test('a valid HMAC signature verifies and a tampered one does not', async (t) => {
     const sign = createHmacSigner(SECRETS.hmi)
     const frame = { source: 'hmi', target: 'plantServer', time: Date.now(), seq: 1, nonce: createNonce(), payload: stringToUint8Array('payload') }
-    const signature = await sign(frame)
+    const signature = await sign(canonicalSignedBytes(frame), { source: frame.source })
+    const check = (f: typeof frame, source = f.source) => verifier(canonicalSignedBytes(f), signature, { source })
 
-    t.deepEqual(await verifier(frame, signature), { name: 'hmi', roles: ['operator'] })
-    t.is(await verifier({ ...frame, payload: stringToUint8Array('tampered') }, signature), undefined)
-    t.is(await verifier({ ...frame, target: 'elsewhere' }, signature), undefined)
-    t.is(await verifier({ ...frame, source: 'rogue' }, signature), undefined, 'a signature verified under the wrong key')
-    t.is(await verifier({ ...frame, source: 'unknown-peer' }, signature), undefined, 'a peer with no key on file was accepted')
+    t.deepEqual(await check(frame), { name: 'hmi', roles: ['operator'] })
+    t.is(await check({ ...frame, payload: stringToUint8Array('tampered') }), undefined)
+    t.is(await check({ ...frame, target: 'elsewhere' }), undefined)
+    t.is(await check({ ...frame, source: 'rogue' }), undefined, 'a signature verified under the wrong key')
+    t.is(await check({ ...frame, source: 'unknown-peer' }), undefined, 'a peer with no key on file was accepted')
 })
 
 test('Ed25519 signing verifies and rejects a foreign key', async (t) => {
@@ -97,10 +99,11 @@ test('Ed25519 signing verifies and rejects a foreign key', async (t) => {
     const other = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair
     const sign = createEd25519Signer(pair.privateKey)
     const frame = { source: 'hmi', target: 'srv', time: Date.now(), seq: 1, nonce: createNonce(), payload: stringToUint8Array('p') }
-    const signature = await sign(frame)
+    const canonical = canonicalSignedBytes(frame)
+    const signature = await sign(canonical, { source: frame.source })
 
-    t.deepEqual(await createEd25519Verifier(() => pair.publicKey)(frame, signature), { name: 'hmi' })
-    t.is(await createEd25519Verifier(() => other.publicKey)(frame, signature), undefined)
+    t.deepEqual(await createEd25519Verifier(() => pair.publicKey)(canonical, signature, { source: 'hmi' }), { name: 'hmi' })
+    t.is(await createEd25519Verifier(() => other.publicKey)(canonical, signature, { source: 'hmi' }), undefined)
 })
 
 test('the replay guard rejects stale and repeated nonces', (t) => {
@@ -123,21 +126,24 @@ test('the replay guard does not grow without bound', (t) => {
 
 // ------------------------------------------------------------------ over a real broker
 
+// protocol 4 throughout: these forge $-header frames by hand, which is the v1 layout. The MQTT 5
+// equivalents live in Mqtt5.test.ts.
 const signedServer = (name: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
-    new RpcServer({ name, transports: [{ brokerurl: BROKER_URL, prefix, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
+    new RpcServer({ name, transports: [{ brokerurl: BROKER_URL, prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
 
 const signedClient = (name: string, target: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
     new RpcClient(undefined, {
         name,
         defaultTarget: target,
-        transport: new MqttTransport(name, BROKER_URL, { prefix, sign: keys.signerFor(name), verify: keys.verifier }),
+        transport: new MqttTransport(name, BROKER_URL, { prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }),
         ...extra
     })
 
 /** Build the exact bytes a peer would publish, so a test can forge or replay one. */
-const forgeFrame = async (sign: ReturnType<typeof makeKeyring>['signerFor'] extends (p: string) => infer S ? S : never, header: { source: string; target: string; time: number; seq: number; nonce: string }, call: object) => {
+const forgeFrame = async (sign: MessageSigner, header: { source: string; target: string; time: number; seq: number; nonce: string }, call: object) => {
     const payload = msgPackEncode({ type: 'REQUEST', payload: call })
-    const signature = await sign({ ...header, payload: new Uint8Array(payload) })
+    const canonical = canonicalSignedBytes({ ...header, payload: new Uint8Array(payload) })
+    const signature = await sign(canonical, { source: header.source })
     return Buffer.concat([Buffer.from(JSON.stringify({ ...header, sig: signature }) + '$', 'utf8'), Buffer.from(payload)])
 }
 
@@ -199,7 +205,7 @@ test('an unsigned peer cannot reach a server that requires signatures', async (t
         name: 'hmi-un',
         defaultTarget: 'srv-un',
         callTimeout: 900,
-        transport: new MqttTransport('hmi-un', BROKER_URL, { prefix })
+        transport: new MqttTransport('hmi-un', BROKER_URL, { prefix, protocol: 4 })
     })
     await client.ready()
 
