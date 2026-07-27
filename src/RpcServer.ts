@@ -1,5 +1,5 @@
 import { Server } from 'http'
-import { GenericModule, TransportEvent } from './RPC/Core.js'
+import { GenericModule, PeerRegistry, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
@@ -61,6 +61,8 @@ export class RpcServer implements IManageRpc {
     readyFlag = false
     switch?: Switch
     transports: GenericModule[] = []
+    /** Peer name -> transport, shared by this server's modules and nothing outside them. */
+    readonly peers = new PeerRegistry()
     options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true, readyTimeout: 30000 }
     constructor(options: Partial<RpcServerOptions> = {}) {
         this.options = { ...this.options, ...options }
@@ -110,8 +112,16 @@ export class RpcServer implements IManageRpc {
         else this.stringifier = new JsonStringifierToUint8Array([this.rpc])
         this.switch = new Switch([this.stringifier])
         this.switch.setTargets(this.transports)
-        // Drop a peer's event subscriptions as soon as its connection goes away.
-        this.transports.forEach((transport) => transport.on(TransportEvent.peerGone, (peer: string) => this.rpc.removePeer(peer)))
+        // One registry for this server's modules only. The transports record which peer they saw a
+        // message from; the switch reads it back to route the reply out of the same transport.
+        for (const module of [...this.transports, this.parser, this.rpc, this.stringifier, this.switch]) module.usePeerRegistry(this.peers)
+        this.transports.forEach((transport) =>
+            transport.on(TransportEvent.peerGone, (peer: string) => {
+                // Drop the peer's event subscriptions and forget its route as soon as it goes away.
+                this.rpc.removePeer(peer)
+                this.peers.delete(peer)
+            })
+        )
 
         this.rpc.authorize = this.options.authorize
         this.rpc.requireIdentity = this.options.requireAuthenticatedPeers ?? !!this.options.authenticate
@@ -134,6 +144,7 @@ export class RpcServer implements IManageRpc {
         // listeners were still open.
         await Promise.all(this.transports.map((transport) => transport.close()))
         this.transports = []
+        this.peers.clear()
     }
     exposeClassInstance(instance: object, name: string, prototypeSteps?: number): void {
         this.rpc.manageRpc.exposeClassInstance(instance, name, prototypeSteps)

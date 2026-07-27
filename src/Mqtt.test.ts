@@ -201,3 +201,19 @@ test('events reach a subscriber over MQTT', async (t) => {
     await client.close()
     await server.close()
 })
+
+test('a client built from an mqtt url connects through the on-demand transport', async (t) => {
+    if (skipWithoutBroker(t)) return
+    // Exercises the dynamic import RpcClient uses so browser bundles need not carry the MQTT client.
+    const server = new RpcServer({ name: 'mqttServer5', transports: [{ brokerurl: BROKER_URL }] })
+    await server.ready()
+    server.exposeClassInstance(new Plant(3), 'plant')
+
+    const client = new RpcClient(BROKER_URL, { name: 'mqttClient5', defaultTarget: 'mqttServer5' })
+    await client.ready()
+
+    t.is(await (await client.proxy<Plant>('plant')).remote?.add(1, 1), 5)
+
+    await client.close()
+    await server.close()
+})

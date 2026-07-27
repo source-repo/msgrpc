@@ -1,10 +1,9 @@
 import { EventEmitter } from 'events'
-import { GenericModule, TransportEvent } from './RPC/Core.js'
+import { GenericModule, PeerRegistry, TransportEvent } from './RPC/Core.js'
 import { MessageSigner } from './RPC/Auth.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
-import { MqttTransport } from './Transports/MqttTransport.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { JsonParser, JsonStringifierToUint8Array, MsgPackDecoder, MsgPackEncoder } from './Utilities/Converters.js'
 import { v4 as uuidv4 } from 'uuid'
@@ -51,6 +50,8 @@ export class RpcClient extends EventEmitter {
     stringifier?: JsonStringifierToUint8Array<object>
     manageRpc?: IManageRpc
     readyFlag = false
+    /** Peer name -> module, shared by this client's modules and nothing outside them. */
+    readonly peers = new PeerRegistry()
     // No transport here: constructing one in a field initialiser opened a socket on every client
     // that init() then replaced and orphaned, leaving it reconnecting forever.
     options: RpcClientOptions = {
@@ -74,6 +75,7 @@ export class RpcClient extends EventEmitter {
         this.rpcClient?.subscriptions.clear()
         await this.rpcClient?.close()
         await this.options.transport?.close()
+        this.peers.clear()
         this.readyFlag = false
     }
     async init() {
@@ -82,10 +84,17 @@ export class RpcClient extends EventEmitter {
         let transport = this.options.transport
         if (!transport) {
             const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
-            const mqttOptions = (this.options.credentials ?? {}) as IClientOptions
             if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.url, undefined, socketOptions)
-            else if (this.url?.startsWith('mqtt')) transport = new MqttTransport(this.options.name, this.url, { mqtt: mqttOptions, sign: this.options.sign })
-            else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
+            else if (this.url?.startsWith('mqtt')) {
+                // Imported on demand so a browser bundle that only speaks WebSocket does not have
+                // to carry the MQTT client. Bundlers split this into a chunk fetched only when an
+                // mqtt:// url is actually used.
+                const { MqttTransport } = await import('./Transports/MqttTransport.js')
+                transport = new MqttTransport(this.options.name, this.url, {
+                    mqtt: (this.options.credentials ?? {}) as IClientOptions,
+                    sign: this.options.sign
+                })
+            } else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
         }
         this.options.transport = transport
         if (this.options.useMsgPack) this.parser = new MsgPackDecoder([this.options.transport])
@@ -94,6 +103,7 @@ export class RpcClient extends EventEmitter {
         if (this.options.useMsgPack) this.stringifier = new MsgPackEncoder([this.rpcClient])
         else this.stringifier = new JsonStringifierToUint8Array([this.rpcClient])
         this.stringifier.pipe(this.options.transport)
+        for (const module of [this.options.transport, this.parser, this.rpcClient, this.stringifier]) module.usePeerRegistry(this.peers)
         this.wireTransportLifecycle(transport)
         this.readyFlag = true
         // Built directly instead of via proxy(), which awaits ready(). init() is not awaited by

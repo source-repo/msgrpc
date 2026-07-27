@@ -382,6 +382,28 @@ published while they restart are queued rather than lost. Clients use a clean se
 a call that has already timed out is useless, and a persistent session per short-lived client
 accumulates state on the broker.
 
+# Browser use
+
+The `browser` export condition resolves to a build whose static dependencies are `socket.io-client`,
+`@msgpack/msgpack`, `uint8array-extras`, `uuid` and `events`. The MQTT client is **not** among them:
+`RpcClient` imports it on demand, so a bundle only carries it if an `mqtt://` url is actually used,
+in which case bundlers place it in a separate chunk.
+
+`events` is a real dependency rather than a `node:` builtin so bundlers can substitute the browser
+shim. Signing uses WebCrypto, which browsers expose only in a secure context (https, or localhost).
+
+# Peer routing
+
+Each `RpcServer` and `RpcClient` owns a `PeerRegistry`, shared by its own modules and nothing wider:
+transports record which peer a message arrived from, and the switch reads it back to send the reply
+out of the same transport. Entries are dropped when a peer disconnects and the registry is bounded,
+since the keys arrive from remote peers.
+
+This used to be one process-wide static. Two servers in a single process that saw the same peer name
+would overwrite each other's routes, and one server's reply could be delivered through the other's
+transport - to a different client. Peer names must be unique within a graph; across separate
+`RpcServer` instances they no longer interfere.
+
 # Low level interface
 
 Additional transports, message formats and connections can be implemented using msgrpc Modules.

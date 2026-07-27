@@ -38,6 +38,48 @@ export interface IGenericModule<I = unknown, IP = unknown, O = unknown, OP = unk
     close(): Promise<void>
 }
 
+/**
+ * Which module a peer name was last seen on, so a reply can be routed back out of the transport
+ * its request arrived on.
+ *
+ * This was a static on GenericModule, which meant every client and server in one process shared a
+ * single map keyed by names supplied by remote peers. Two graphs using the same peer name routed
+ * into each other's transports, entries were never removed, and it grew for the life of the
+ * process. One registry is now shared by one connected set of modules and nothing wider.
+ */
+export class PeerRegistry {
+    private peers = new Map<string, IGenericModule>()
+
+    constructor(
+        /** Upper bound, since the keys come off the wire. Least recently seen entries go first. */
+        public maxPeers = 10000
+    ) {}
+
+    set(source: string, module: IGenericModule) {
+        // Re-inserting moves the entry to the end, which is what makes eviction least-recent-first.
+        this.peers.delete(source)
+        this.peers.set(source, module)
+        while (this.peers.size > this.maxPeers) {
+            const oldest = this.peers.keys().next()
+            if (oldest.done) break
+            this.peers.delete(oldest.value)
+        }
+    }
+
+    get(source: string) {
+        return this.peers.get(source)
+    }
+    delete(source: string) {
+        return this.peers.delete(source)
+    }
+    clear() {
+        this.peers.clear()
+    }
+    get size() {
+        return this.peers.size
+    }
+}
+
 export interface MessageHeader {
     source: string
     target: string
@@ -51,7 +93,11 @@ export interface MessageHeader {
 
 export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown> extends EventEmitter implements IGenericModule<I, IP, O, OP> {
     destinations: { id: string; target: IGenericModule }[] = []
-    static knownSources: { [source: string]: IGenericModule } = {}
+    /**
+     * Shared with the other modules in this graph by usePeerRegistry(). A module built on its own
+     * gets a private one, so it still routes correctly without leaking into anyone else's.
+     */
+    peerRegistry = new PeerRegistry()
     readyFlag = false
     seq = 0
 
@@ -141,7 +187,8 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
         if (this.name === name) {
             result = this as IGenericModule
         }
-        if (GenericModule.knownSources[name]) result = GenericModule.knownSources[name]
+        const knownPeer = this.peerRegistry.get(name)
+        if (knownPeer) result = knownPeer
         if (!result) {
             this.destinations.map((dest) => {
                 if (!result && !dest.target.isTransport() && dest.target.targetExists(name, (level ? level : 0) + 1)) result = dest.target
@@ -175,7 +222,13 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
         )
     }
     setKnownSource(source: string) {
-        GenericModule.knownSources[source] = this
+        this.peerRegistry.set(source, this)
+    }
+
+    /** Route peer lookups for this module through a registry shared with the rest of its graph. */
+    usePeerRegistry(registry: PeerRegistry) {
+        this.peerRegistry = registry
+        return this
     }
     /**
      * The authenticated identity bound to a peer name, for transports that authenticate.
