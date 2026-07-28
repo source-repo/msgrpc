@@ -5,6 +5,22 @@
 **Discovery and routing over socket.io**, so a network with no broker works the way an MQTT one
 always has - and so a server hosted in a browser page is a peer like any other.
 
+- **`RpcServer.proxy()`**, the mirror of `RpcClient.proxy`. A peer that both serves and calls now
+  needs one object and one connection, under one name, rather than an `RpcServer` and an
+  `RpcClient` under two - which over MQTT meant two broker sessions. Its subscriptions are replayed
+  on reconnect the way a client's are.
+- **A bus without a broker.** An `RpcServer` that exposes nothing and only relays is one; everything
+  else joins with `{ connect: url }` and gets presence, addressing by name, and any-to-any calling.
+- **More than one hop.** A peer announces the peers reachable *through* it as well as its own name,
+  so a server that is a hub for its own peers and a member of a bus makes each visible to the other.
+  Calls, replies and events all traverse it, and departures propagate. Verified to three hops.
+  Split horizon - never advertising a peer back along the link it came from, in the broadcasts and
+  in the snapshot handed to a newly connected peer - keeps two hubs from concluding the other is
+  the way to a peer and losing it. Frames carry a hop count and are dropped after 8 relays, since a
+  mesh that has just lost a link can hold a cycle until the tables settle. A peer offered by two
+  links keeps the first and falls back to the second; a peer announcing itself outranks one merely
+  carried.
+
 - **Every peer announces itself on connect**, and is told who else is there. A socket.io server used
   to learn a peer only from the header of a frame it sent, so a peer that merely listened was
   invisible and could not be addressed at all. `peerOnline` and `peerGone` now come from both

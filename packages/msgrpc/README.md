@@ -104,6 +104,26 @@ const server = new RpcServer({
 server.exposeClassInstance(new Plant(), 'plant')     // reachable over both
 ```
 
+### A bus without a broker
+
+An `RpcServer` that exposes nothing and only relays is a broker. Everything else dials it, and gets
+what MQTT gives you: presence, addressing by name, any peer calling any other.
+
+```typescript
+const bus = new RpcServer({ name: 'bus', transports: [{ port: 8080 }] })
+
+const cellSrv = new RpcServer({ name: 'cellSrv', transports: [{ connect: 'http://bus:8080' }] })
+cellSrv.exposeClassInstance(new Cell(), 'cell')
+
+// The same object calls back out, over the same connection and under the same name.
+const oven = await cellSrv.proxy<Oven>('oven', 'ovenSrv')
+await oven.remote!.temperature()
+```
+
+`proxy()` is the mirror of `RpcClient.proxy`. A peer that both serves and calls needs one object and
+one connection, rather than an `RpcServer` and an `RpcClient` under two names — which over MQTT
+would mean two broker sessions.
+
 ### Serving over a connection you open
 
 A browser cannot listen, so a page that wants to *host* a service has to dial out. `connect` gives
@@ -177,9 +197,36 @@ them. Without `authenticate`, a relaying server prints a warning the first time 
 anything: `source` is a claim until a connection vouches for it, so it passes on whatever it is
 told.
 
-**What relaying is not.** It does not make a server a broker. There is no store-and-forward, no
-queueing for a peer that is not connected, and no fan-out — a frame is passed to one peer that is
-there now, or reported as `unroutable`.
+### More than one hop
+
+A peer announces not only its own name but the peers reachable **through** it, so a server that is a
+hub for its own peers and a member of a bus makes both sides visible to each other:
+
+```
+panel1 ── cellCtl ── bus ── hmi
+```
+
+`cellCtl` advertises `panel1` upwards; the bus routes to `panel1` by handing frames to `cellCtl`,
+which passes them inwards. Calls, replies and events all traverse it, and `panel1` leaving
+propagates the same way. Verified to three hops.
+
+Two rules keep that from eating itself:
+
+- **Split horizon.** A peer is never advertised back along the link it was learned from, and the
+  list a server hands a newly connected peer excludes whatever that peer reaches for it. Without
+  either, two hubs each conclude the other is the way to a peer and it disappears from everyone
+  further out.
+- **A hop limit.** Frames carry a count and are dropped after 8 relays. Split horizon keeps a tree's
+  tables loop-free, but a mesh that has just lost a link can hold a cycle until the tables settle,
+  and a frame going round one never stops on its own.
+
+A peer offered by two links keeps the first; the second is remembered, and used if the first goes
+away. A peer announcing *itself* always wins over one merely carried.
+
+**What relaying is not.** It does not make a server a broker in the MQTT sense. There is no
+store-and-forward, no queueing for a peer that is not connected, and no fan-out — a frame is passed
+to one peer that is there now, or reported as `unroutable`. Discovery is not a routing protocol
+either: there are no metrics and no shortest path, only reachability.
 
 ### Ready and close
 
@@ -671,6 +718,7 @@ off or absent.
 | `exposeManagement` | `false` | publish `manageRpc.createRpcInstance` |
 | `exposeIntrospection` | `false` | publish `msgrpc.describe()` |
 | `relay` | `true` | forward frames addressed to another connected peer; `false`, or a predicate per connection |
+| `callTimeout` | `10000` | for this server's own outgoing calls, via `proxy()` |
 
 A transport entry is `{ port, https?, path? }` for a socket.io server, `{ server, path? }` to attach
 to an existing `http.Server`, `{ connect, path?, credentials? }` to serve over a connection this

@@ -201,6 +201,110 @@ test.serial('an announced name has to match the identity the connection authenti
     await hub.close()
 })
 
+test.serial('a server calls out over its own connection, under its own name', async (t) => {
+    // A peer on a bus is rarely only a server. Doing this with a separate RpcClient means a second
+    // name and a second connection, which over MQTT is a second broker session.
+    const hub = new RpcServer({ name: peer('hub6'), transports: [{ port: 3977 }] })
+    await hub.ready()
+
+    const cell = new RpcServer({ name: peer('cell6'), transports: [{ connect: 'http://localhost:3977' }], callTimeout: 4000 })
+    cell.exposeClassInstance(new Boiler('the cell'), 'boiler')
+    await cell.ready()
+    const oven = new RpcServer({ name: peer('oven6'), transports: [{ connect: 'http://localhost:3977' }], callTimeout: 4000 })
+    oven.exposeClassInstance(new Boiler('the oven'), 'boiler')
+    await oven.ready()
+    await waitFor(() => (hub.transports[0] as unknown as { peerSockets: Map<string, unknown> }).peerSockets.has(peer('oven6')))
+
+    t.is(await (await cell.proxy<Boiler>('boiler', peer('oven6'))).remote!.whoAnswered(), 'the oven')
+    t.is(await (await oven.proxy<Boiler>('boiler', peer('cell6'))).remote!.whoAnswered(), 'the cell')
+
+    // Events too, so a server can watch its peers rather than poll them.
+    const heard: number[] = []
+    const watched = await cell.proxy<Boiler>('boiler', peer('oven6'))
+    await watched.remote!.on('changed', (value: number) => heard.push(value))
+    await watched.remote!.setTemperature(70)
+    await waitFor(() => heard.length === 1)
+    t.deepEqual(heard, [70])
+
+    await oven.close()
+    await cell.close()
+    await hub.close()
+})
+
+test.serial('a peer two hops away is discovered, called and watched', async (t) => {
+    const bus = new RpcServer({ name: peer('bus7'), transports: [{ port: 3978 }] })
+    await bus.ready()
+    // A cell controller: a hub for its own panels, and a member of the bus.
+    const cell = new RpcServer({ name: peer('cellCtl7'), transports: [{ port: 3979 }, { connect: 'http://localhost:3978' }] })
+    await cell.ready()
+
+    const hmi = new RpcClient('http://localhost:3978', { name: peer('hmi7'), callTimeout: 4000 })
+    const seen: string[] = []
+    hmi.options.transport!.on(TransportEvent.peerOnline, (found: string) => seen.push(found))
+    hmi.options.transport!.on(TransportEvent.peerGone, (gone: string) => seen.push(`-${gone}`))
+    await hmi.ready()
+
+    // The panel knows only its cell controller, and the HMI only the bus.
+    const panel = new RpcServer({ name: peer('panel7'), transports: [{ connect: 'http://localhost:3979' }] })
+    const boiler = new Boiler('the panel')
+    panel.exposeClassInstance(boiler, 'boiler')
+    await panel.ready()
+
+    await waitFor(() => seen.includes(peer('panel7')), 8000)
+    const proxy = await hmi.proxy<Boiler>('boiler', peer('panel7'))
+    t.is(await proxy.remote!.whoAnswered(), 'the panel')
+
+    const heard: number[] = []
+    await proxy.remote!.on('changed', (value: number) => heard.push(value))
+    await proxy.remote!.setTemperature(91)
+    await waitFor(() => heard.length === 1)
+    t.deepEqual(heard, [91])
+
+    // Departure travels the same way, so nothing is left listed and unreachable.
+    await panel.close()
+    await waitFor(() => seen.includes(`-${peer('panel7')}`), 8000)
+    t.true(seen.includes(`-${peer('panel7')}`))
+
+    await hmi.close()
+    await cell.close()
+    await bus.close()
+})
+
+test.serial('two hubs dialling each other do not storm or loop', async (t) => {
+    const hubA = new RpcServer({ name: peer('hubA8'), transports: [{ port: 3981 }] })
+    await hubA.ready()
+    const hubB = new RpcServer({ name: peer('hubB8'), transports: [{ port: 3982 }, { connect: 'http://localhost:3981' }] })
+    await hubB.ready()
+    // Closes the cycle: now each hub is reachable from the other in both directions.
+    const backLink = new RpcServer({ name: peer('backLink8'), transports: [{ connect: 'http://localhost:3982' }] })
+    await backLink.ready()
+
+    const service = new RpcServer({ name: peer('service8'), transports: [{ connect: 'http://localhost:3981' }] })
+    service.exposeClassInstance(new Boiler('across the cycle'), 'boiler')
+    await service.ready()
+
+    const client = new RpcClient('http://localhost:3982', { name: peer('client8'), callTimeout: 4000 })
+    const events: string[] = []
+    client.options.transport!.on(TransportEvent.peerOnline, (found: string) => events.push(found))
+    client.options.transport!.on(TransportEvent.peerGone, (gone: string) => events.push(`-${gone}`))
+    await client.ready()
+
+    await waitFor(() => events.includes(peer('service8')), 8000)
+    t.is(await (await client.proxy<Boiler>('boiler', peer('service8'))).remote!.whoAnswered(), 'across the cycle')
+
+    // Split horizon is what keeps this finite: without it the two hubs advertise each other's peers
+    // back and forth and the presence traffic never settles.
+    const settled = events.length
+    await new Promise((resolve) => setTimeout(resolve, 1000))
+    t.is(events.length, settled, `presence kept churning: ${JSON.stringify(events)}`)
+
+    await client.close()
+    await service.close()
+    await backLink.close()
+    await hubB.close()
+    await hubA.close()
+})
+
 // ---------------------------------------------------------------- mixed with a broker
 
 const skipWithoutBroker = (t: { context: Context; pass: (m?: string) => void }) => {

@@ -1,7 +1,7 @@
 import { io, ManagerOptions, Socket, SocketOptions } from 'socket.io-client'
 import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
-import { isUsablePeerName, PRESENCE_EVENT, PresenceUpdate } from './Presence.js'
+import { isUsablePeerName, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate } from './Presence.js'
 
 export class SocketIoClientTransport extends GenericModule<Message, unknown, Message, unknown> {
     socket?: Socket
@@ -10,6 +10,8 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
     codec: FrameCodec = msgPackCodec
     /** Peers this transport has been told are online, so a reconnect can report only what changed. */
     readonly knownPeers = new Set<string>()
+    /** Peers reachable through whatever owns this transport, advertised to the far end. */
+    private carrying: string[] = []
 
     constructor(
         /**
@@ -68,7 +70,7 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
                 const [header, payload] = this.extractHeader(new Uint8Array(messageArray))
                 if (!header) return
                 const message = this.codec.decode(payload as Uint8Array) as Message
-                if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
+                await this.deliver(message, header.source, header.target, header.hops ?? 0)
             } catch (e) {
                 // A peer that sends a frame this codec cannot read must not take the client down.
                 this.emit(TransportEvent.rejected, { source: 'unknown', reason: `undecodable frame: ${String(e)}` })
@@ -81,7 +83,7 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             this.readyFlag = true
             // Announced on every connect, not only the first: the server forgets a peer when its
             // socket drops, so a reconnected peer that stayed silent would be unaddressable.
-            if (this.announcePresence) this.socket?.emit(PRESENCE_EVENT, { name: this.name })
+            if (this.announcePresence) this.announce()
             this.emit(TransportEvent.connected)
         })
         this.socket.on('disconnect', (reason) => {
@@ -97,12 +99,40 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         })
     }
 
+    /**
+     * A peer heard about through this link is routable through it - but only if nothing already
+     * reaches it. A server that serves a peer locally must not start sending its traffic up to the
+     * hub and back, and it would, since the hub lists that peer like any other.
+     */
+    private registerIfUnrouted(peer: string) {
+        if (this.peerRegistry.get(peer)) return
+        this.setKnownSource(peer)
+    }
+
+    private announce() {
+        const announcement: PresenceAnnouncement = { name: this.name }
+        if (this.carrying.length) announcement.carrying = this.carrying
+        this.socket?.emit(PRESENCE_EVENT, announcement)
+    }
+
+    /**
+     * Say which peers can be reached through this connection. Sent again whenever the set changes,
+     * which is how a peer appearing three hops away eventually becomes addressable from here.
+     */
+    advertise(peers: string[]) {
+        const next = [...peers].sort()
+        if (next.length === this.carrying.length && next.every((peer, index) => peer === this.carrying[index])) return
+        this.carrying = next
+        if (this.connected && this.announcePresence) this.announce()
+    }
+
     /** The server's view of who else is connected, turned into the same events MQTT emits. */
     private onPresence(update: PresenceUpdate) {
         if (Array.isArray(update.peers)) {
             for (const peer of update.peers) {
                 if (!isUsablePeerName(peer) || peer === this.name || this.knownPeers.has(peer)) continue
                 this.knownPeers.add(peer)
+                this.registerIfUnrouted(peer)
                 this.emit(TransportEvent.peerOnline, peer)
             }
             return
@@ -114,8 +144,41 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         } else {
             if (this.knownPeers.has(update.peer)) return
             this.knownPeers.add(update.peer)
+            this.registerIfUnrouted(update.peer)
             this.emit(TransportEvent.peerOnline, update.peer)
         }
+    }
+
+    /**
+     * Hand a frame to this peer's own handlers, or on to whichever transport reaches its addressee.
+     * The second case is what makes a server that is both a hub for its own peers and a member of a
+     * bus work: a call for one of its peers arrives down this link and has to be passed inwards,
+     * not answered here. Without it the frame reached the right process and was refused by it.
+     */
+    private async deliver(message: Message, source: string, target: string, hops: number) {
+        if (target !== this.name) {
+            const carrier = this.peerRegistry.get(target)
+            if (carrier && carrier !== (this as IGenericModule) && carrier.isTransport()) {
+                if (hops + 1 > MAX_RELAY_HOPS) {
+                    this.emit(TransportEvent.unroutable, { source, target, reason: `over ${MAX_RELAY_HOPS} relays` })
+                    return
+                }
+                const relay = carrier as { forward?: (message: Message, source: string, target: string, hops: number) => void }
+                if (relay.forward) relay.forward(message, source, target, hops + 1)
+                else await carrier.receive(message, source, target)
+                return
+            }
+        }
+        if (this.targetExists(target)) {
+            await this.send(message, source, target)
+            return
+        }
+        this.emit(TransportEvent.unroutable, { source, target })
+    }
+
+    /** Send over this link with a hop count, for a frame being passed along rather than originated. */
+    forward(message: Message, source: string, target: string, hops: number) {
+        this.socket?.emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
     }
 
     override async receive(message: Message, source: string, target: string) {

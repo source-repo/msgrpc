@@ -103,6 +103,8 @@ export interface MessageHeader {
     target: string
     time: number
     seq: number
+    /** How many relays this frame has already passed through. Absent means none. */
+    hops?: number
     /** Present on signed frames: single-use value that makes a captured frame unreplayable. */
     nonce?: string
     /** Present on signed frames: base64 signature over the fields above plus the payload. */

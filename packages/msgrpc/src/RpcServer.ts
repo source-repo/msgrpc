@@ -4,6 +4,8 @@ import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
+import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
+import { RpcProxy } from './RpcClient.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
@@ -74,6 +76,8 @@ export interface RpcServerOptions {
     exposeManagement?: boolean
     /** How long ready() waits for every transport to connect before throwing. 0 waits forever. */
     readyTimeout: number
+    /** How long this server's own outgoing calls wait. See proxy(). */
+    callTimeout?: number
     /** Describes what exposed methods accept, so arguments off the wire can be checked. */
     schema?: RpcSchema
     /**
@@ -97,6 +101,13 @@ export interface RpcServerOptions {
 
 export class RpcServer implements IManageRpc {
     public rpc: RpcServerHandler
+    /**
+     * This server as a caller. A server on a bus is rarely only a server: it answers its peers and
+     * calls them back. Sharing the transports means it does so under its own name, over the
+     * connection it already has, rather than needing a second RpcClient with a second name - which
+     * over MQTT means a second broker session, and over socket.io a second announced peer.
+     */
+    public caller: RpcClientHandler
     readyFlag = false
     switch?: Switch
     transports: Transport[] = []
@@ -165,11 +176,14 @@ export class RpcServer implements IManageRpc {
             if (this.options.relay !== undefined && transport instanceof SocketIoServerTransport) transport.relay = this.options.relay
         }
         this.rpc = new RpcServerHandler(this.options.name, this.transports)
-        this.switch = new Switch([this.rpc])
+        // Both handlers see every inbound frame and each ignores what is not theirs: the server
+        // handler acts only on calls, the client handler only on responses and events.
+        this.caller = new RpcClientHandler(this.options.name, this.transports, this.options.callTimeout ?? defaultCallTimeout)
+        this.switch = new Switch([this.rpc, this.caller])
         this.switch.setTargets(this.transports)
         // One registry for this server's modules only. The transports record which peer they saw a
         // message from; the switch reads it back to route the reply out of the same transport.
-        for (const module of [...this.transports, this.rpc, this.switch]) module.usePeerRegistry(this.peers)
+        for (const module of [...this.transports, this.rpc, this.caller, this.switch]) module.usePeerRegistry(this.peers)
         this.transports.forEach((transport) => {
             transport.on(TransportEvent.peerGone, (peer: string) => {
                 // Drop the peer's event subscriptions and forget its route as soon as it goes away.
@@ -182,6 +196,10 @@ export class RpcServer implements IManageRpc {
             // A peer that arrives on one transport is announced on the others, so a browser
             // connected over socket.io learns about a peer that only exists on the broker.
             transport.on(TransportEvent.peerOnline, (peer: string) => this.relayPresence(transport, peer, 'online'))
+            // Subscriptions this server holds on other peers are replayed when a link returns, the
+            // same way RpcClient does it - otherwise a server that watches its peers goes deaf
+            // after a blip with nothing to say so.
+            transport.on(TransportEvent.connected, () => void this.caller.resubscribe().catch((e) => this.emitSafely('resubscribeError', e)))
         })
 
         this.rpc.authorize = this.options.authorize
@@ -206,13 +224,49 @@ export class RpcServer implements IManageRpc {
         this.readyFlag = true
         this.init()
     }
-    /** Pass a presence change from the transport that saw it to the socket.io listeners. */
+    /**
+     * Pass a presence change from the transport that saw it to the other links: told directly to
+     * the peers connected here, and advertised to the hubs this server has dialled into. The
+     * advertisement is what makes a network deeper than a star work - and it never includes a peer
+     * back on the link it was learned from, or two hubs each end up believing the other is the way
+     * to it.
+     */
     private relayPresence(from: Transport, peer: string, state: 'online' | 'offline') {
-        for (const transport of this.transports)
-            if (transport !== from && transport instanceof SocketIoServerTransport) transport.announcePeer(peer, state)
+        for (const transport of this.transports) {
+            if (transport === from) continue
+            if (transport instanceof SocketIoServerTransport) transport.announcePeer(peer, state)
+        }
+        this.advertiseReachability()
+    }
+
+    private advertiseReachability() {
+        for (const transport of this.transports) {
+            if (!(transport instanceof SocketIoClientTransport)) continue
+            transport.advertise(this.peers.names().filter((name) => name !== this.options.name && this.peers.get(name) !== transport))
+        }
+    }
+
+    /** Not 'error': an EventEmitter throws on an unhandled 'error' event. */
+    private emitSafely(event: string, payload: unknown) {
+        for (const transport of this.transports) transport.emit(event, payload)
+    }
+
+    /**
+     * A typed proxy for calling another peer, over this server's own transports and under its own
+     * name. The mirror of RpcClient.proxy, so a peer that both serves and calls needs one object.
+     */
+    async proxy<T>(name: string, target?: string) {
+        await this.ready()
+        const result: RpcProxy<T> = { name }
+        if (target) result.target = target
+        result.remote = this.caller.proxy<T>(name, target ?? '*')
+        return result
     }
 
     async close() {
+        this.caller.failPendingCalls('server closed')
+        this.caller.subscriptions.clear()
+        await this.caller.close()
         // forEach with an async callback did not await anything, so close() returned while the
         // listeners were still open.
         await Promise.all(this.transports.map((transport) => transport.close()))

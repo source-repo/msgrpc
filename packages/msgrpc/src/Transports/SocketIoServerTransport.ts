@@ -4,7 +4,7 @@ import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
 import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
-import { isUsablePeerName, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
+import { isUsablePeerName, MAX_CARRIED_PEERS, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
 
@@ -31,6 +31,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
      * operator's page may deserve a route to a cell controller where a visitor's does not.
      */
     relay: RelayRule = true
+    /**
+     * What each connection says it can reach, beyond itself. Kept per socket so a link going away
+     * takes exactly its own peers with it, and so a peer offered by two links can fall back to the
+     * other one instead of vanishing.
+     */
+    private readonly carriedBy = new Map<SocketIo.Socket, Set<string>>()
 
     constructor(
         name: string,
@@ -116,6 +122,19 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                         this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
                         return
                     }
+                    // Forwarding within this transport is done here rather than through receive(),
+                    // so the hop count survives it. A frame that has been round too many relays is
+                    // dropped: tables settle after a link fails, but a frame circling in the
+                    // meantime never stops on its own.
+                    if (elsewhere === (this as IGenericModule)) {
+                        const hops = (header.hops ?? 0) + 1
+                        if (hops > MAX_RELAY_HOPS) {
+                            this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: `over ${MAX_RELAY_HOPS} relays` })
+                            return
+                        }
+                        this.forward(message, header.source, header.target, hops)
+                        return
+                    }
                     await elsewhere.receive(message, header.source, header.target)
                     return
                 }
@@ -128,15 +147,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 this.emit(TransportEvent.unroutable, { source: header.source, target: header.target })
             })
             socket.on('disconnect', (reason, details) => {
-                for (const [peer, peerSocket] of this.peerSockets) {
-                    if (peerSocket !== socket) continue
-                    this.peerSockets.delete(peer)
-                    this.peerIdentities.delete(peer)
-                    // Lets the RPC layer drop any event subscriptions held for this peer instead
-                    // of emitting to a socket that is gone.
-                    this.emit(TransportEvent.peerGone, peer)
-                    this.forgetRoutes(peer)
-                    this.broadcastPresence({ peer, state: 'offline' })
+                this.carriedBy.delete(socket)
+                for (const peer of [...this.peerSockets.keys()]) {
+                    if (this.peerSockets.get(peer) !== socket) continue
+                    // forgetPeer keeps it if another link still carries it; otherwise this is what
+                    // lets the RPC layer drop the event subscriptions held for a peer that is gone.
+                    this.forgetPeer(peer, socket)
                 }
                 if (details) {
                     // the low-level reason of the disconnection, for example "xhr post error"
@@ -224,13 +240,42 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         )
     }
 
-    /** Record a peer against its socket and tell everyone else it is here. */
-    private learnPeer(name: string, socket: SocketIo.Socket) {
+    /**
+     * Record a peer against the socket that reaches it and tell everyone else it is here.
+     *
+     * A peer announcing itself owns its name and takes the route over. One merely carried by a
+     * neighbour does not: the first link to offer it keeps it, and a second offering the same name
+     * is remembered only as a fallback. Letting carried announcements steal the route would make
+     * two neighbours advertising the same peer flip it back and forth, each flip re-announced
+     * onwards - chatter that never settles.
+     */
+    private learnPeer(name: string, socket: SocketIo.Socket, carried = false) {
         const known = this.peerSockets.get(name)
-        this.peerSockets.set(name, socket)
         if (known === socket) return
+        if (known && carried) return
+        this.peerSockets.set(name, socket)
+        // Registered as well as recorded: the shared registry is what the switch routes on, and
+        // what a server reads to work out which peers it can advertise onwards.
+        this.setKnownSource(name)
         this.emit(TransportEvent.peerOnline, name)
         this.broadcastPresence({ peer: name, state: 'online' })
+    }
+
+    /** A peer is gone from here unless another link still offers it. */
+    private forgetPeer(name: string, socket: SocketIo.Socket) {
+        if (this.peerSockets.get(name) !== socket) return
+        this.peerSockets.delete(name)
+        this.peerIdentities.delete(name)
+        for (const [other, carried] of this.carriedBy) {
+            if (other === socket || !carried.has(name)) continue
+            // Still reachable the other way, so nothing above this needs to hear about it.
+            this.peerSockets.set(name, other)
+            this.setKnownSource(name)
+            return
+        }
+        this.emit(TransportEvent.peerGone, name)
+        this.forgetRoutes(name)
+        this.broadcastPresence({ peer: name, state: 'offline' })
     }
 
     /**
@@ -254,7 +299,13 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             this.peerIdentities.set(name, identity)
         }
         this.learnPeer(name, socket)
-        socket.emit(PRESENCE_EVENT, { peers: this.reachablePeers().filter((peer) => peer !== name) } as PresenceUpdate)
+        this.updateCarried(socket, name, announcement.carrying)
+        // Split horizon applies to the snapshot too. Handing a link back the peers it just told
+        // this one about makes it believe they are reachable the way it came, so it stops
+        // advertising them - and they disappear from everyone a hop further out.
+        socket.emit(PRESENCE_EVENT, {
+            peers: this.reachablePeers().filter((peer) => peer !== name && this.peerSockets.get(peer) !== socket)
+        } as PresenceUpdate)
     }
 
     /**
@@ -275,10 +326,33 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         this.broadcastPresence({ peer, state })
     }
 
+    /** Apply a link's latest claim about what lies behind it, adding and dropping as it changes. */
+    private updateCarried(socket: SocketIo.Socket, announcer: string, carrying: string[] | undefined) {
+        const claimed = new Set(
+            (Array.isArray(carrying) ? carrying : [])
+                .slice(0, MAX_CARRIED_PEERS)
+                .filter((peer) => isUsablePeerName(peer) && peer !== this.name && peer !== announcer)
+        )
+        const previous = this.carriedBy.get(socket) ?? new Set<string>()
+        this.carriedBy.set(socket, claimed)
+        for (const peer of previous) if (!claimed.has(peer)) this.forgetPeer(peer, socket)
+        for (const peer of claimed) if (!previous.has(peer)) this.learnPeer(peer, socket, true)
+    }
+
     private broadcastPresence(update: PresenceUpdate) {
         // Everyone but the peer it is about; it already knows.
         const subject = update.peer ? this.peerSockets.get(update.peer) : undefined
         for (const socket of new Set(this.peerSockets.values())) if (socket !== subject) socket.emit(PRESENCE_EVENT, update)
+    }
+
+    /** Send to a peer's socket, carrying a hop count the ordinary send path has no reason to know. */
+    forward(message: Message, source: string, target: string, hops: number) {
+        const socket = this.peerSockets.get(target)
+        if (!socket) {
+            this.emit(TransportEvent.unroutable, { source, target })
+            return
+        }
+        socket.emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
     }
 
     override async receive(message: Message, source: string, target: string) {
