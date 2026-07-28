@@ -104,6 +104,18 @@ const server = new RpcServer({
 server.exposeClassInstance(new Plant(), 'plant')     // reachable over both
 ```
 
+### Serving over a connection you open
+
+A browser cannot listen, so a page that wants to *host* a service has to dial out. `connect` gives
+an `RpcServer` an outbound link, and it serves over it exactly as it would over one it accepted:
+
+```typescript
+const panel = new RpcServer({ name: 'cellPanel', transports: [{ connect: 'https://hub.plant' }] })
+panel.exposeClassInstance(new Cell(), 'cell')        // now callable, from a browser tab
+```
+
+Whatever it connects to relays calls to it — see [Discovery](#discovery).
+
 ### Names and targets
 
 Every peer has a `name`. A server's name is how callers address it; a client's name is how the
@@ -120,6 +132,54 @@ const plant = await client.proxy<Plant>('plant', 'plantServer')
 Client names must be unique among the peers sharing a server; the default is a UUID, which is unique
 but tells you nothing in a log. Over MQTT a name is also the broker client id, and a broker allows
 one connection per id, so two peers sharing a name disconnect each other in a loop.
+
+### Discovery
+
+Every peer announces its name when it connects, and is told who else is there. The events are the
+same on both transports, so code that watches a network does not care which one it is on:
+
+```typescript
+transport.on(TransportEvent.peerOnline, (peer) => console.log(peer, 'is up'))
+transport.on(TransportEvent.peerGone, (peer) => console.log(peer, 'is gone'))
+```
+
+Over MQTT this is retained presence: subscribing to `<prefix>/presence/+` hands over everyone
+already online, and a last will covers a peer that dies rather than leaves. Over socket.io the
+server keeps the list and sends it to each peer that announces itself.
+
+**A server relays for the peers connected to it.** A frame addressed to another peer it can see is
+forwarded rather than executed locally, which is what makes a peer that can only dial out reachable
+at all. A server holding both a socket.io listener and a broker connection therefore bridges them:
+a browser peer discovers a peer that exists only on the broker, and calls it, with the call arriving
+under the browser peer's own name rather than the bridge's.
+
+```typescript
+const bridge = new RpcServer({
+    name: 'bridge',
+    transports: [{ port: 8080 }, new MqttTransport('bridge', 'mqtt://broker:1883')]
+})
+```
+
+Relaying is on by default. `relay: false` forwards nothing, and a predicate decides per connection:
+
+```typescript
+const hub = new RpcServer({
+    name: 'hub',
+    transports: [{ port: 8080 }],
+    authenticate,
+    relay: ({ identity, target }) => identity?.roles?.includes('engineer') || target === 'readOnlyGateway'
+})
+```
+
+The rule is asked once per pair of peers, and the answer covers the traffic going back — a call has
+a reply and usually events after it, and a rule written about the caller would otherwise strand
+them. Without `authenticate`, a relaying server prints a warning the first time it forwards
+anything: `source` is a claim until a connection vouches for it, so it passes on whatever it is
+told.
+
+**What relaying is not.** It does not make a server a broker. There is no store-and-forward, no
+queueing for a peer that is not connected, and no fan-out — a frame is passed to one peer that is
+there now, or reported as `unroutable`.
 
 ### Ready and close
 
@@ -610,10 +670,12 @@ off or absent.
 | `requireExplicitExposure` | `false` | refuse a class that marks no `@rpc` methods |
 | `exposeManagement` | `false` | publish `manageRpc.createRpcInstance` |
 | `exposeIntrospection` | `false` | publish `msgrpc.describe()` |
+| `relay` | `true` | forward frames addressed to another connected peer; `false`, or a predicate per connection |
 
 A transport entry is `{ port, https?, path? }` for a socket.io server, `{ server, path? }` to attach
-to an existing `http.Server`, `{ brokerurl, ...MqttTransportOptions }` for MQTT, or a `Transport`
-instance you built yourself.
+to an existing `http.Server`, `{ connect, path?, credentials? }` to serve over a connection this
+server opens, `{ brokerurl, ...MqttTransportOptions }` for MQTT, or a `Transport` instance you built
+yourself.
 
 ### RpcClientOptions
 
@@ -656,6 +718,10 @@ in which case bundlers place it in a separate chunk.
 
 `events` is a real dependency rather than a `node:` builtin so bundlers can substitute the browser
 shim. Signing uses WebCrypto, which browsers expose only in a secure context (https, or localhost).
+
+A page can host an `RpcServer` as well as call one: `transports: [{ connect: url }]` serves over the
+connection it opens, and the hub relays calls to it. See
+[Serving over a connection you open](#serving-over-a-connection-you-open).
 
 ## Peer routing
 

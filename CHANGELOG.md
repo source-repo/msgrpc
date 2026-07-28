@@ -1,5 +1,57 @@
 # Changelog
 
+## msgrpc 2.2.0 and msgrpc-cli 2.3.0
+
+**Discovery and routing over socket.io**, so a network with no broker works the way an MQTT one
+always has - and so a server hosted in a browser page is a peer like any other.
+
+- **Every peer announces itself on connect**, and is told who else is there. A socket.io server used
+  to learn a peer only from the header of a frame it sent, so a peer that merely listened was
+  invisible and could not be addressed at all. `peerOnline` and `peerGone` now come from both
+  transports, so code watching a network no longer cares which one it is on.
+- **`transports: [{ connect: url }]`** lets an `RpcServer` serve over a connection it opens. A
+  browser cannot listen, so this is the only way a page can host a service; the hub relays calls to
+  it.
+- **A server relays for its connected peers.** A frame addressed to another peer it can see is
+  forwarded instead of executed locally. `relay: false` forwards nothing, and a predicate decides
+  per connection. The decision is remembered per pair of peers, because a rule written about the
+  caller would otherwise strand the reply travelling the other way. A relaying server with no
+  `authenticate` warns once, the first time it actually forwards something.
+- **A server holding both a socket.io listener and a broker connection bridges them.** A browser
+  peer discovers a peer that exists only on MQTT and calls it, with the call arriving under the
+  browser peer's own name rather than the bridge's, so per-peer authorization and subscriptions
+  still mean something. The bridge subscribes to the reply and event topics of the peers it
+  forwards for, and publishes presence on their behalf - without that, a departing browser peer
+  left its event subscriptions on the MQTT server forever.
+- **`msgrpc console --hub <url>`**, on its own or alongside `--broker`. With both, one list covers
+  both networks and each peer is called over the link it was found on.
+
+### Fixed
+
+- **A socket.io server executed calls addressed to another peer.** The target was tested only for
+  being a name the server had heard of, never for being the server itself, so a call meant for
+  someone else was answered by whoever it reached - with that server's own implementation, reported
+  as success. It now forwards, or refuses; it never substitutes itself. A frame that can be neither
+  delivered nor relayed is reported as `unroutable` rather than dropped in silence, which callers
+  only ever saw as an unexplained timeout.
+- `MqttTransport` set the response topic of a forwarded request to its own address, so a
+  non-msgrpc peer honouring it would have replied to the wrong peer.
+
+### Tests
+
+- MQTT test peers get a 10 s session expiry. Names became unique per run in 2.1.1, which fixed one
+  problem and created another: a server keeps a persistent session for an hour by default, so every
+  run left another one behind. After a day of runs the broker held 1024 sessions and 3628
+  subscriptions and stopped accepting connections. The one test that is *about* the hour-long
+  default keeps it and clears its own session afterwards.
+
+### Breaking
+
+- `new SocketIoClientTransport(url, sources, options)` is now
+  `new SocketIoClientTransport(name, url, sources, options)`. A peer has to know its own name to
+  announce it, the same way `MqttTransport` has always taken one. `RpcClient` passes its `name`
+  through, so this only affects code constructing the transport directly.
+
 ## msgrpc 2.1.1
 
 Documentation and test hygiene; no change to shipped code.

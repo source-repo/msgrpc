@@ -88,7 +88,7 @@ export class RpcClient extends EventEmitter {
         let transport = this.options.transport
         if (!transport) {
             const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
-            if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.url, undefined, socketOptions)
+            if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.options.name, this.url, undefined, socketOptions)
             else if (this.url?.startsWith('mqtt')) {
                 // Imported on demand so a browser bundle that only speaks WebSocket does not have
                 // to carry the MQTT client. Bundlers split this into a chunk fetched only when an
@@ -98,7 +98,7 @@ export class RpcClient extends EventEmitter {
                     mqtt: (this.options.credentials ?? {}) as IClientOptions,
                     sign: this.options.sign
                 })
-            } else transport = new SocketIoClientTransport(`http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
+            } else transport = new SocketIoClientTransport(this.options.name, `http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
         }
         this.options.transport = transport
         // The transport encodes, so there is no converter between it and the handler. A structured

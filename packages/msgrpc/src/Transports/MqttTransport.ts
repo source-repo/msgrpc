@@ -279,6 +279,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             const peer = topic.slice(this.presenceRoot.length)
             // Retained presence means a late subscriber also learns about peers that already left.
             if (!peer || peer === this.name) return
+            // Presence this transport published on a proxied peer's behalf comes straight back to
+            // it. Acting on it would register that peer as living on the broker and break the route
+            // home, since it actually lives on whichever transport asked for the forwarding.
+            if (this.proxied.has(peer)) return
             const state = messageBuffer.toString()
             if (state === PRESENCE_OFFLINE) {
                 this.peerIdentities.delete(peer)
@@ -286,6 +290,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             } else if (state === PRESENCE_ONLINE) {
                 // Retained, so a subscriber learns about every peer already online the moment it
                 // subscribes. That is the whole of peer discovery.
+                // Registered as well as announced: presence is how this transport knows a peer
+                // exists, and a bridge has to be able to route to it without having heard from it
+                // first. Without this a peer discovered over the broker was visible but unreachable.
+                this.setKnownSource(peer)
                 this.emit(TransportEvent.peerOnline, peer)
             }
             return
@@ -313,7 +321,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
             return
         }
-        if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
+        await this.deliver(message, header.source, header.target)
     }
 
     private async receiveV5(topic: string, messageBuffer: Buffer, packet?: IPublishPacket) {
@@ -364,8 +372,78 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             return
         }
         this.setKnownSource(source)
-        // The reply address is this peer's own name under the MQTT 5 layout, so route on it.
-        if (this.targetExists(this.name)) await this.send(message, source, this.name)
+        // The addressee is in the topic under the MQTT 5 layout. It is this peer for everything it
+        // subscribed to for itself, and someone else for a topic it watches on their behalf.
+        await this.deliver(message, source, this.topicAddressee(topic) ?? this.name)
+    }
+
+    /** The peer a topic addresses: <prefix>/<channel>/<peer>. */
+    private topicAddressee(topic: string) {
+        if (!topic.startsWith(`${this.prefix}/`)) return undefined
+        const rest = topic.slice(this.prefix.length + 1)
+        const slash = rest.indexOf('/')
+        return slash < 0 ? undefined : rest.slice(slash + 1)
+    }
+
+    /**
+     * Hand a decoded frame to this peer's own handler, or on to whichever transport carries its
+     * addressee. The second case is a bridge: this transport is subscribed to a topic belonging to
+     * a peer that lives on another link, and its job is to pass the frame along unchanged - the
+     * source and any signature stay as the original sender wrote them.
+     */
+    private async deliver(message: Message, source: string, target: string) {
+        if (target !== this.name) {
+            const carrier = this.peerRegistry.get(target)
+            if (carrier && carrier !== (this as unknown as IGenericModule) && carrier.isTransport()) {
+                await carrier.receive(message, source, target)
+                return
+            }
+        }
+        if (this.targetExists(target)) {
+            await this.send(message, source, target)
+            return
+        }
+        this.emit(TransportEvent.unroutable, { source, target })
+    }
+
+    /** Peers this transport collects answers for, so the subscriptions are made once and dropped once. */
+    private readonly proxied = new Set<string>()
+
+    private async watchOnBehalfOf(peer: string) {
+        if (this.proxied.has(peer) || peer === this.name || !isSafeTopicSegment(peer)) return
+        this.proxied.add(peer)
+        try {
+            if (this.protocol === 5) {
+                for (const channel of ['rsp', 'evt'] as Channel[]) await this.client?.subscribeAsync(this.channelTopic(channel, peer), { qos: this.qos })
+            } else await this.client?.subscribeAsync(this.rpcTopic(peer), { qos: this.qos })
+            // Presence for it too. A server drops a departed peer's event subscriptions when its
+            // presence goes offline, and a peer that only exists on the other side of this bridge
+            // has no other way to say it left - its subscriptions would sit there forever, with
+            // every emit producing a frame nobody collects.
+            if (this.presence) await this.client?.publishAsync(this.presenceTopic(peer), PRESENCE_ONLINE, { qos: this.qos, retain: true })
+        } catch (e) {
+            this.proxied.delete(peer)
+            this.emit(TransportEvent.transportError, e)
+        }
+    }
+
+    /** Stop collecting for a peer that has gone, so a departed browser leaves no subscription behind. */
+    async stopWatchingFor(peer: string) {
+        if (!this.proxied.delete(peer)) return
+        try {
+            if (this.presence) {
+                // Offline first, so a server holding its subscriptions releases them, then cleared
+                // so the peer leaves no retained state behind - the same pair this transport
+                // publishes for itself on a clean shutdown.
+                await this.client?.publishAsync(this.presenceTopic(peer), PRESENCE_OFFLINE, { qos: this.qos, retain: true })
+                await this.client?.publishAsync(this.presenceTopic(peer), '', { qos: this.qos, retain: true })
+            }
+            if (this.protocol === 5) {
+                for (const channel of ['rsp', 'evt'] as Channel[]) await this.client?.unsubscribeAsync(this.channelTopic(channel, peer))
+            } else await this.client?.unsubscribeAsync(this.rpcTopic(peer))
+        } catch (e) {
+            this.emit(TransportEvent.transportError, e)
+        }
     }
 
     private rememberReplyEncoding(correlation: string, contentType: string | undefined) {
@@ -460,6 +538,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.unroutable, { source, target, reason: 'unsafe peer name' })
             return
         }
+        // Publishing for a peer that is not this one means acting as its gateway onto the broker.
+        // Its replies and events are addressed to it, on topics this transport does not otherwise
+        // watch, so they have to be subscribed to or the call can only ever time out.
+        if (source !== this.name) await this.watchOnBehalfOf(source)
         if (this.protocol === 5) return await this.publishV5(message, source, target)
         const body = this.codec.encode(message)
         const header = this.buildHeader(source, target, this.sign ? { nonce: createNonce() } : undefined)
@@ -532,7 +614,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 correlationData: frame.correlation ? Buffer.from(correlationToBytes(frame.correlation)!) : undefined,
                 // Only a request expects an answer, and only a request should expire.
                 ...(frame.channel === 'req'
-                    ? { responseTopic: this.channelTopic('rsp', this.name), messageExpiryInterval: this.requestExpirySeconds }
+                    ? { responseTopic: this.channelTopic('rsp', source), messageExpiryInterval: this.requestExpirySeconds }
                     : {}),
                 userProperties
             }
@@ -547,6 +629,18 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.connected = false
         this.readyFlag = false
         if (!client) return
+        // Peers this transport was standing in for go with it. Its own will covers its own name;
+        // nothing covers theirs, so a bridge that is killed does leave their presence retained.
+        if (this.presence && client.connected)
+            for (const peer of [...this.proxied]) {
+                this.proxied.delete(peer)
+                try {
+                    await client.publishAsync(this.presenceTopic(peer), PRESENCE_OFFLINE, { qos: this.qos, retain: true })
+                    await client.publishAsync(this.presenceTopic(peer), '', { qos: this.qos, retain: true })
+                } catch {
+                    // Going away regardless.
+                }
+            }
         if (this.announcePresence && client.connected) {
             const topic = this.presenceTopic(this.name)
             try {

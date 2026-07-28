@@ -4,6 +4,7 @@ import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
 import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
+import { isUsablePeerName, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
 
@@ -22,6 +23,14 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
     peerSockets = new Map<string, SocketIo.Socket>()
     /** Peer name -> the identity its connection authenticated as. Empty when no authenticator is set. */
     peerIdentities = new Map<string, RpcIdentity>()
+    /**
+     * Forward a frame addressed to another connected peer instead of handling it here. On by
+     * default: a peer that can only be reached by dialling out - a browser page hosting an
+     * RpcServer, most obviously - is reachable no other way. `false` keeps a server strictly
+     * point-to-point, and a predicate decides per connection, which is the useful case: an
+     * operator's page may deserve a route to a cell controller where a visitor's does not.
+     */
+    relay: RelayRule = true
 
     constructor(
         name: string,
@@ -62,6 +71,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         }
         this.io.on('connection', (socket) => {
             this.emit('connection', socket)
+            socket.on(PRESENCE_EVENT, (announcement: PresenceAnnouncement) => this.onAnnouncement(socket, announcement))
             socket.on('message', async (messageArray) => {
                 let header, payload
                 try {
@@ -85,7 +95,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 }
                 // Learned before the routing check, so a peer stays addressable even when a
                 // particular frame turns out to be undeliverable.
-                this.peerSockets.set(header.source, socket)
+                this.learnPeer(header.source, socket)
                 let message: Message
                 try {
                     message = this.codec.decode(payload as Uint8Array) as Message
@@ -93,7 +103,29 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                     this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
                     return
                 }
-                if (this.targetExists(header.target)) await this.send(message, header.source, header.target)
+                // Whether this frame is for us at all. A server used to run whatever reached it,
+                // testing the target only for being a name it had heard of - so a call addressed to
+                // another peer was executed here, the addressee never saw it, and the caller was
+                // answered by the wrong peer.
+                const elsewhere = header.target !== this.name ? this.peerCarrying(header.target) : undefined
+                if (elsewhere) {
+                    if (!this.mayRelay(header.source, header.target, identity)) {
+                        // Deliberately not falling through to local handling: running a call meant
+                        // for a peer this caller is not allowed to reach would answer it with the
+                        // wrong implementation and call that a success.
+                        this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
+                        return
+                    }
+                    await elsewhere.receive(message, header.source, header.target)
+                    return
+                }
+                if (this.targetExists(header.target)) {
+                    await this.send(message, header.source, header.target)
+                    return
+                }
+                // Neither this server nor anywhere it can forward to. Reported rather than dropped
+                // in silence, which the caller only ever saw as an unexplained timeout.
+                this.emit(TransportEvent.unroutable, { source: header.source, target: header.target })
             })
             socket.on('disconnect', (reason, details) => {
                 for (const [peer, peerSocket] of this.peerSockets) {
@@ -103,6 +135,8 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                     // Lets the RPC layer drop any event subscriptions held for this peer instead
                     // of emitting to a socket that is gone.
                     this.emit(TransportEvent.peerGone, peer)
+                    this.forgetRoutes(peer)
+                    this.broadcastPresence({ peer, state: 'offline' })
                 }
                 if (details) {
                     // the low-level reason of the disconnection, for example "xhr post error"
@@ -121,6 +155,130 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 console.log(`Socket.io server listening on port ${port}`)
             })
         this.readyFlag = true
+    }
+
+    /**
+     * Which module carries a peer, or undefined to handle the frame here. The registry is shared
+     * with this server's other transports, so a peer on the broker resolves to the MQTT transport
+     * and a socket.io peer can call it without either end knowing the other's transport.
+     */
+    private peerCarrying(target: string) {
+        if (this.peerSockets.has(target)) return this as IGenericModule
+        // The registry is shared with this server's other transports, so a peer on the broker
+        // resolves to the MQTT transport and a socket.io peer can reach it without either end
+        // knowing which transport the other is on.
+        const known = this.peerRegistry.get(target)
+        return known && known !== (this as IGenericModule) && known.isTransport() ? known : undefined
+    }
+
+    /** Asked only once a frame really is deliverable elsewhere, never about a peer that is absent. */
+    private mayRelay(source: string, target: string, identity?: RpcIdentity) {
+        if (this.relay === false) return false
+        if (typeof this.relay === 'function' && !this.permitted(source, target, identity)) return false
+        this.warnAboutUnauthenticatedRelay()
+        return true
+    }
+
+    /**
+     * Routes a rule has already allowed, in both directions. Every call has a reply and most have
+     * events after it, so asking a rule about each frame separately would mean `source === 'hmi'`
+     * silently stranding the answer coming back - the reply's source is the far peer, not the hmi.
+     * A permitted call opens the pair, the way connection tracking does, until one of them leaves.
+     */
+    private readonly openRoutes = new Set<string>()
+    private static pair = (a: string, b: string) => `${a}\u0000${b}`
+
+    private permitted(source: string, target: string, identity?: RpcIdentity) {
+        if (this.openRoutes.has(SocketIoServerTransport.pair(source, target))) return true
+        let allowed = false
+        try {
+            allowed = (this.relay as (context: RelayContext) => boolean)({ source, target, identity })
+        } catch {
+            // A rule that throws refuses, for the same reason an authorizer that throws denies.
+            allowed = false
+        }
+        if (!allowed) return false
+        this.openRoutes.add(SocketIoServerTransport.pair(source, target))
+        this.openRoutes.add(SocketIoServerTransport.pair(target, source))
+        return true
+    }
+
+    private forgetRoutes(peer: string) {
+        const mark = `${peer}\u0000`
+        for (const route of this.openRoutes) if (route.startsWith(mark) || route.endsWith(`\u0000${peer}`)) this.openRoutes.delete(route)
+    }
+
+    private warnedAboutRelay = false
+    /**
+     * Said once, and only when this server actually forwards something. Without an authenticator
+     * the source of a frame is an unverified claim, so a relay passes on whatever it is told and
+     * the peer at the far end has no way to tell who really sent it. Warning at construction would
+     * fire for every ordinary server that never relays anything.
+     */
+    private warnAboutUnauthenticatedRelay() {
+        if (this.warnedAboutRelay || this.authenticate) return
+        this.warnedAboutRelay = true
+        console.warn(
+            `msgrpc: '${this.name}' is relaying frames between peers with no authenticate configured, so their source is an unverified claim. ` +
+                'Set authenticate, or relay: false to forward nothing.'
+        )
+    }
+
+    /** Record a peer against its socket and tell everyone else it is here. */
+    private learnPeer(name: string, socket: SocketIo.Socket) {
+        const known = this.peerSockets.get(name)
+        this.peerSockets.set(name, socket)
+        if (known === socket) return
+        this.emit(TransportEvent.peerOnline, name)
+        this.broadcastPresence({ peer: name, state: 'online' })
+    }
+
+    /**
+     * A peer saying who it is, which is the whole of discovery here. It answers with the peers
+     * already connected, standing in for the retained presence an MQTT subscriber is handed.
+     */
+    private onAnnouncement(socket: SocketIo.Socket, announcement: PresenceAnnouncement) {
+        const name = announcement?.name
+        if (!isUsablePeerName(name)) {
+            this.emit(TransportEvent.rejected, { source: String(name), reason: 'unusable peer name in presence announcement' })
+            return
+        }
+        const identity = socket.data.identity as RpcIdentity | undefined
+        if (this.authenticate) {
+            // Same rule as a frame's source: a name is a claim until a connection vouches for it,
+            // and an unchecked one here would let a peer be listed and addressed as someone else.
+            if (!identity || name !== identity.name) {
+                this.emit(TransportEvent.rejected, { source: name, reason: 'announced name does not match authenticated identity' })
+                return
+            }
+            this.peerIdentities.set(name, identity)
+        }
+        this.learnPeer(name, socket)
+        socket.emit(PRESENCE_EVENT, { peers: this.reachablePeers().filter((peer) => peer !== name) } as PresenceUpdate)
+    }
+
+    /**
+     * Everyone this server can put a frame in front of: its own connections, plus whatever its
+     * other transports have registered. On a server holding a socket.io listener and a broker
+     * connection, that is what lets a browser peer see and call a peer on the broker.
+     */
+    reachablePeers() {
+        const names = new Set(this.peerSockets.keys())
+        for (const name of this.peerRegistry.names()) names.add(name)
+        names.delete(this.name)
+        return [...names]
+    }
+
+    /** Tell the connected peers about one that arrived or left on a different transport. */
+    announcePeer(peer: string, state: 'online' | 'offline') {
+        if (this.peerSockets.has(peer)) return
+        this.broadcastPresence({ peer, state })
+    }
+
+    private broadcastPresence(update: PresenceUpdate) {
+        // Everyone but the peer it is about; it already knows.
+        const subject = update.peer ? this.peerSockets.get(update.peer) : undefined
+        for (const socket of new Set(this.peerSockets.values())) if (socket !== subject) socket.emit(PRESENCE_EVENT, update)
     }
 
     override async receive(message: Message, source: string, target: string) {

@@ -6,6 +6,8 @@ import { Introspection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
+import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
+import { RelayRule } from './Transports/Presence.js'
 import { codecFor } from './RPC/Codec.js'
 import { Switch } from './Utilities/Switch.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
@@ -25,13 +27,25 @@ export interface ExternalServerOptions extends ServerOptions {
     path?: string
 }
 
+/**
+ * Serve over a connection this server opens, rather than one it accepts. A browser page cannot
+ * listen, so this is the only way it can host an RpcServer: it dials a hub, announces its name, and
+ * the hub relays calls to it.
+ */
+export interface ConnectServerOptions extends ServerOptions {
+    connect: string
+    path?: string
+    /** Presented to a hub that authenticates. */
+    credentials?: unknown
+}
+
 export interface MqttServerOptions extends ServerOptions, MqttTransportOptions {
     brokerurl: string
 }
 
 export interface RpcServerOptions {
     name: string
-    transports: (HttpServerOptions | ExternalServerOptions | MqttServerOptions | Transport)[]
+    transports: (HttpServerOptions | ExternalServerOptions | ConnectServerOptions | MqttServerOptions | Transport)[]
     useMsgPack: boolean
     /**
      * Verify credentials when a peer connects. Applied to socket.io transports this server builds.
@@ -47,6 +61,12 @@ export interface RpcServerOptions {
      * explicitly false.
      */
     requireAuthenticatedPeers?: boolean
+    /**
+     * Forward frames addressed to another peer connected to this server's socket.io transports,
+     * instead of running them here. On by default, because a peer that can only dial out has no
+     * other way to be reached. A predicate decides per connection; `false` forwards nothing.
+     */
+    relay?: RelayRule
     /**
      * Publish manageRpc.createRpcInstance so peers can instantiate exposed classes remotely.
      * Off by default: it is remote object construction, and it is rarely needed.
@@ -109,6 +129,18 @@ export class RpcServer implements IManageRpc {
                     ...mqttServerOptions
                 })
             }
+            else if ((serveroption as ConnectServerOptions).connect) {
+                const connectOptions = serveroption as ConnectServerOptions
+                transport = new SocketIoClientTransport(
+                    this.options.name,
+                    connectOptions.connect,
+                    [],
+                    {
+                        ...(connectOptions.path ? { path: connectOptions.path } : {}),
+                        ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
+                    }
+                )
+            }
             else if ((serveroption as ExternalServerOptions).server)
                 transport = new SocketIoServerTransport(
                     this.options.name,
@@ -128,20 +160,29 @@ export class RpcServer implements IManageRpc {
         // structured wire format such as MQTT 5 needs to see the message rather than bytes a
         // converter already flattened.
         const codec = codecFor(this.options.useMsgPack)
-        for (const transport of this.transports) transport.codec = codec
+        for (const transport of this.transports) {
+            transport.codec = codec
+            if (this.options.relay !== undefined && transport instanceof SocketIoServerTransport) transport.relay = this.options.relay
+        }
         this.rpc = new RpcServerHandler(this.options.name, this.transports)
         this.switch = new Switch([this.rpc])
         this.switch.setTargets(this.transports)
         // One registry for this server's modules only. The transports record which peer they saw a
         // message from; the switch reads it back to route the reply out of the same transport.
         for (const module of [...this.transports, this.rpc, this.switch]) module.usePeerRegistry(this.peers)
-        this.transports.forEach((transport) =>
+        this.transports.forEach((transport) => {
             transport.on(TransportEvent.peerGone, (peer: string) => {
                 // Drop the peer's event subscriptions and forget its route as soon as it goes away.
                 this.rpc.removePeer(peer)
                 this.peers.delete(peer)
+                this.relayPresence(transport, peer, 'offline')
+                // A gateway subscription taken out for this peer has nothing left to collect.
+                for (const other of this.transports) if (other instanceof MqttTransport) void other.stopWatchingFor(peer)
             })
-        )
+            // A peer that arrives on one transport is announced on the others, so a browser
+            // connected over socket.io learns about a peer that only exists on the broker.
+            transport.on(TransportEvent.peerOnline, (peer: string) => this.relayPresence(transport, peer, 'online'))
+        })
 
         this.rpc.authorize = this.options.authorize
         this.rpc.requireIdentity = this.options.requireAuthenticatedPeers ?? !!this.options.authenticate
@@ -165,6 +206,12 @@ export class RpcServer implements IManageRpc {
         this.readyFlag = true
         this.init()
     }
+    /** Pass a presence change from the transport that saw it to the socket.io listeners. */
+    private relayPresence(from: Transport, peer: string, state: 'online' | 'offline') {
+        for (const transport of this.transports)
+            if (transport !== from && transport instanceof SocketIoServerTransport) transport.announcePeer(peer, state)
+    }
+
     async close() {
         // forEach with an async callback did not await anything, so close() returned while the
         // listeners were still open.

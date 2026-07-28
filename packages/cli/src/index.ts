@@ -27,7 +27,9 @@ const usage = `msgrpc <command> [options]
     --keep-history              move the previous contract into history before writing
 
   console
-    --broker <url>              required, e.g. mqtt://localhost:1883
+    --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
+    --hub <url>                 a socket.io network, e.g. http://hub:8080
+                                one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
     --port <n>                  default 7300
     --host <address>            default 127.0.0.1 - see the warning it prints before widening this
@@ -106,8 +108,9 @@ const readSigningKeys = (path: string) => {
 
 const runConsole = async (argv: string[]) => {
     const broker = argument(argv, '--broker', '')
-    if (!broker) {
-        process.stderr.write('msgrpc console: --broker is required\n')
+    const hub = argument(argv, '--hub', '')
+    if (!broker && !hub) {
+        process.stderr.write('msgrpc console: give it --broker, --hub, or both\n')
         process.exit(1)
     }
     const host = argument(argv, '--host', '127.0.0.1')
@@ -126,7 +129,8 @@ const runConsole = async (argv: string[]) => {
     const name = requestedName || signing?.keys.name || `msgrpc-console-${process.pid}`
 
     const running = await startConsole({
-        broker,
+        ...(broker ? { broker } : {}),
+        ...(hub ? { hub } : {}),
         ...(prefix ? { prefix } : {}),
         port: Number(argument(argv, '--port', '7300')),
         host,
@@ -134,7 +138,8 @@ const runConsole = async (argv: string[]) => {
         callTimeout: Number(argument(argv, '--timeout', '10000')),
         ...(signing ? { sign: signing.sign, ...(signing.verify ? { verify: signing.verify } : {}) } : {})
     })
-    process.stdout.write(`msgrpc console on ${running.url}, watching ${broker} as ${name}${signing ? ', signing frames' : ''}\n`)
+    const watching = [broker, hub].filter(Boolean).join(' and ')
+    process.stdout.write(`msgrpc console on ${running.url}, watching ${watching} as ${name}${signing ? ', signing frames' : ''}\n`)
     if (host !== '127.0.0.1' && host !== 'localhost')
         // Anyone who can reach it can invoke anything the console's own credentials permit.
         process.stderr.write(`msgrpc console: bound to ${host}, so it is reachable from the network. It can call any method it is allowed to.\n`)

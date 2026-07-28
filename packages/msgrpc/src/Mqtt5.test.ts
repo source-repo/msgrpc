@@ -15,6 +15,12 @@ import { FRAME_VERSION, MR } from './Transports/Mqtt5Frame.js'
  */
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
+/**
+ * Test peers get a short session expiry. Names are unique per run, so the broker's hour-long default
+ * would leave a fresh session behind on every run until it refused new connections.
+ */
+const TEST_SESSION_EXPIRY = 10
+
 const brokerAvailable = async () => {
     try {
         const probe = await connectAsync(BROKER_URL, { connectTimeout: 1500, reconnectPeriod: 0 })
@@ -79,7 +85,7 @@ test('a plain MQTT 5 client with no msgrpc code can serve an msgrpc call', async
     const client = new RpcClient(undefined, {
         name: peer('hmi-interop-1'),
         defaultTarget: peer('legacyDevice'),
-        transport: new MqttTransport(peer('hmi-interop-1'), BROKER_URL, { prefix })
+        transport: new MqttTransport(peer('hmi-interop-1'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY })
     })
     await client.ready()
     const sensor = await client.proxy<{ read: (n: number) => Promise<number> }>('sensor')
@@ -98,7 +104,7 @@ test('a plain MQTT 5 client can call an msgrpc server', async (t) => {
             return value + 1
         }
     }
-    const server = new RpcServer({ name: peer('plantServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('plantServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(), 'plant')
 
@@ -145,7 +151,7 @@ test('an error reaches a plain MQTT 5 caller with its code in a user property', 
             throw new Error('deliberate failure')
         }
     }
-    const server = new RpcServer({ name: peer('errServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('errServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Thing(), 'thing')
 
@@ -186,7 +192,7 @@ test('a frame repeating a control property is rejected', async (t) => {
             return calls
         }
     }
-    const server = new RpcServer({ name: peer('dupServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('dupServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Counter(), 'counter')
     const rejected: unknown[] = []
@@ -227,7 +233,7 @@ test('a JSON-speaking caller is answered in JSON', async (t) => {
         }
     }
     // The server's own codec is msgpack; the caller's contentType has to win for the reply.
-    const server = new RpcServer({ name: peer('jsonServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('jsonServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(), 'plant')
 
@@ -316,7 +322,7 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
     const seen: (string | undefined)[] = []
     const server = new RpcServer({
         name: peer('srv-v5'),
-        transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-v5')]), verify: v5Verifier }],
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-v5')]), verify: v5Verifier }],
         requireAuthenticatedPeers: true,
         authorize: ({ identity }) => {
             seen.push(identity?.name)
@@ -329,7 +335,7 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
     const client = new RpcClient(undefined, {
         name: peer('hmi-v5'),
         defaultTarget: peer('srv-v5'),
-        transport: new MqttTransport(peer('hmi-v5'), BROKER_URL, { prefix, sign: createHmacSigner(SIGN_SECRETS[peer('hmi-v5')]), verify: v5Verifier })
+        transport: new MqttTransport(peer('hmi-v5'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY, sign: createHmacSigner(SIGN_SECRETS[peer('hmi-v5')]), verify: v5Verifier })
     })
     await client.ready()
 
@@ -351,7 +357,7 @@ test('an MQTT 5 frame signed by the wrong key cannot claim another peer', async 
     }
     const server = new RpcServer({
         name: peer('srv-forge'),
-        transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner('srv-forge-secret'), verify: v5Verifier }]
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner('srv-forge-secret'), verify: v5Verifier }]
     })
     await server.ready()
     server.exposeClassInstance(new Counter(), 'counter')
@@ -390,7 +396,7 @@ test('a captured MQTT 5 frame cannot be replayed', async (t) => {
     }
     const server = new RpcServer({
         name: peer('srv-replay'),
-        transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner('srv-replay-secret'), verify: v5Verifier }]
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner('srv-replay-secret'), verify: v5Verifier }]
     })
     await server.ready()
     server.exposeClassInstance(new Counter(), 'counter')
@@ -439,7 +445,7 @@ test('a shared subscription distributes requests across replicas', async (t) => 
     const replicas = ['a', 'b'].map((id) => {
         const server = new RpcServer({
             name: peer('replicaSrv'),
-            transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: id }]
+            transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sharedGroup: 'workers', replicaId: id }]
         })
         server.exposeClassInstance(new Work(id), 'work')
         return server
@@ -449,7 +455,7 @@ test('a shared subscription distributes requests across replicas', async (t) => 
     const client = new RpcClient(undefined, {
         name: peer('shared-client'),
         defaultTarget: peer('replicaSrv'),
-        transport: new MqttTransport(peer('shared-client'), BROKER_URL, { prefix })
+        transport: new MqttTransport(peer('shared-client'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY })
     })
     await client.ready()
     const work = await client.proxy<Work>('work')
@@ -473,7 +479,7 @@ test('a replica does not announce presence for the whole group', async (t) => {
 
     const replica = new RpcServer({
         name: peer('quietSrv'),
-        transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: 'solo' }]
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sharedGroup: 'workers', replicaId: 'solo' }]
     })
     await replica.ready()
     await new Promise((resolve) => setTimeout(resolve, 300))
@@ -530,4 +536,9 @@ test('a persistent session delivers a request published while the server was dow
 
     await caller.endAsync()
     await second.close()
+
+    // The one place a test keeps the hour-long default, so the one place that has to clean up after
+    // itself: connecting with the same client id and a clean start discards the stored session.
+    const sweep = await connectAsync(BROKER_URL, { clientId: `msgrpc-${peer('sessionSrv')}`, clean: true, protocolVersion: 5, reconnectPeriod: 0 })
+    await sweep.endAsync()
 })

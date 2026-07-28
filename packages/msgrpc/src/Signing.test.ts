@@ -11,6 +11,12 @@ import { RpcMessageType } from './RPC/RpcServerHandler.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
+/**
+ * Test peers get a short session expiry. Names are unique per run, so the broker's hour-long default
+ * would leave a fresh session behind on every run until it refused new connections.
+ */
+const TEST_SESSION_EXPIRY = 10
+
 const brokerAvailable = async () => {
     try {
         const probe = await connectAsync(BROKER_URL, { connectTimeout: 1500, reconnectPeriod: 0 })
@@ -141,13 +147,13 @@ test('the replay guard does not grow without bound', (t) => {
 // protocol 4 throughout: these forge $-header frames by hand, which is the v1 layout. The MQTT 5
 // equivalents live in Mqtt5.test.ts.
 const signedServer = (name: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
-    new RpcServer({ name: peer(name), transports: [{ brokerurl: BROKER_URL, prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
+    new RpcServer({ name: peer(name), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
 
 const signedClient = (name: string, target: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
     new RpcClient(undefined, {
         name: peer(name),
         defaultTarget: peer(target),
-        transport: new MqttTransport(peer(name), BROKER_URL, { prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }),
+        transport: new MqttTransport(peer(name), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }),
         ...extra
     })
 
@@ -217,7 +223,7 @@ test('an unsigned peer cannot reach a server that requires signatures', async (t
         name: peer('hmi-un'),
         defaultTarget: peer('srv-un'),
         callTimeout: 900,
-        transport: new MqttTransport(peer('hmi-un'), BROKER_URL, { prefix, protocol: 4 })
+        transport: new MqttTransport(peer('hmi-un'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY, protocol: 4 })
     })
     await client.ready()
 

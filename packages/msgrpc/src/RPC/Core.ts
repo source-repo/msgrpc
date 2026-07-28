@@ -81,6 +81,15 @@ export class PeerRegistry {
     get size() {
         return this.peers.size
     }
+    /** Every peer currently routed through one module, which is how a bridge lists what it can reach. */
+    namesFor(module: IGenericModule) {
+        const result: string[] = []
+        for (const [name, carrier] of this.peers) if (carrier === module) result.push(name)
+        return result
+    }
+    names() {
+        return [...this.peers.keys()]
+    }
 }
 
 /**

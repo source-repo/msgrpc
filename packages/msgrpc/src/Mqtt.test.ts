@@ -11,6 +11,12 @@ import { RpcCallInstanceMethodPayload, RpcMessageType } from './RPC/RpcServerHan
  */
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
+/**
+ * Test peers get a short session expiry. Names are unique per run, so the broker's hour-long default
+ * would leave a fresh session behind on every run until it refused new connections.
+ */
+const TEST_SESSION_EXPIRY = 10
+
 const brokerAvailable = async () => {
     try {
         const probe = await connectAsync(BROKER_URL, { connectTimeout: 1500, reconnectPeriod: 0 })
@@ -71,11 +77,11 @@ const skipWithoutBroker = (t: { context: Context; pass: (m?: string) => void }) 
 test('a peer name that would widen its own subscription is rejected', (t) => {
     // '#' as a name previously produced a subscription to <prefix>/#, which is every peer's
     // traffic. These throw during construction, before any connection is opened.
-    t.throws(() => new MqttTransport('#', BROKER_URL), { message: /unsafe peer name/ })
-    t.throws(() => new MqttTransport('+', BROKER_URL), { message: /unsafe peer name/ })
-    t.throws(() => new MqttTransport('plant/sub', BROKER_URL), { message: /unsafe peer name/ })
-    t.throws(() => new MqttTransport('', BROKER_URL, { topic: '#' }), { message: /unsafe topic/ })
-    t.throws(() => new MqttTransport('ok', BROKER_URL, { prefix: 'site/#' }), { message: /unsafe topic prefix/ })
+    t.throws(() => new MqttTransport('#', BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }), { message: /unsafe peer name/ })
+    t.throws(() => new MqttTransport('+', BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }), { message: /unsafe peer name/ })
+    t.throws(() => new MqttTransport('plant/sub', BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }), { message: /unsafe peer name/ })
+    t.throws(() => new MqttTransport('', BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY, topic: '#' }), { message: /unsafe topic/ })
+    t.throws(() => new MqttTransport('ok', BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix: 'site/#' }), { message: /unsafe topic prefix/ })
 })
 
 test('a redelivered request does not run the method twice', async (t) => {
@@ -115,13 +121,13 @@ test('a server whose broker is unreachable gives up instead of hanging', async (
 
 test('a call is answered over MQTT', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: peer('mqttServer1'), transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer1'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY }] })
     await server.ready()
     server.exposeClassInstance(new Plant(10), 'plant')
 
     const client = new RpcClient(undefined, {
         name: peer('mqttClient1'),
-        transport: new MqttTransport(peer('mqttClient1'), BROKER_URL),
+        transport: new MqttTransport(peer('mqttClient1'), BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }),
         defaultTarget: peer('mqttServer1')
     })
     await client.ready()
@@ -136,7 +142,7 @@ test('a call is answered over MQTT', async (t) => {
 test('rpc traffic is published per peer, not to a shared topic', async (t) => {
     if (skipWithoutBroker(t)) return
     const prefix = prefixFor('test-isolation')
-    const server = new RpcServer({ name: peer('mqttServer2'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('mqttServer2'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(1), 'plant')
 
@@ -147,7 +153,7 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
 
     const client = new RpcClient(undefined, {
         name: peer('mqttClient2'),
-        transport: new MqttTransport(peer('mqttClient2'), BROKER_URL, { prefix }),
+        transport: new MqttTransport(peer('mqttClient2'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY }),
         defaultTarget: peer('mqttServer2')
     })
     await client.ready()
@@ -167,14 +173,14 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
 
 test('a departing peer releases its subscriptions through presence', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: peer('mqttServer3'), transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer3'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY }] })
     await server.ready()
     const plant = new Plant()
     server.exposeClassInstance(plant, 'plant')
 
     const client = new RpcClient(undefined, {
         name: peer('mqttClient3'),
-        transport: new MqttTransport(peer('mqttClient3'), BROKER_URL),
+        transport: new MqttTransport(peer('mqttClient3'), BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }),
         defaultTarget: peer('mqttServer3')
     })
     await client.ready()
@@ -194,14 +200,14 @@ test('a departing peer releases its subscriptions through presence', async (t) =
 
 test('events reach a subscriber over MQTT', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: peer('mqttServer4'), transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer4'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY }] })
     await server.ready()
     const plant = new Plant()
     server.exposeClassInstance(plant, 'plant')
 
     const client = new RpcClient(undefined, {
         name: peer('mqttClient4'),
-        transport: new MqttTransport(peer('mqttClient4'), BROKER_URL),
+        transport: new MqttTransport(peer('mqttClient4'), BROKER_URL, { sessionExpirySeconds: TEST_SESSION_EXPIRY }),
         defaultTarget: peer('mqttServer4')
     })
     await client.ready()
@@ -220,7 +226,7 @@ test('events reach a subscriber over MQTT', async (t) => {
 test('a client built from an mqtt url connects through the on-demand transport', async (t) => {
     if (skipWithoutBroker(t)) return
     // Exercises the dynamic import RpcClient uses so browser bundles need not carry the MQTT client.
-    const server = new RpcServer({ name: peer('mqttServer5'), transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer5'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY }] })
     await server.ready()
     server.exposeClassInstance(new Plant(3), 'plant')
 
@@ -236,8 +242,8 @@ test('a client built from an mqtt url connects through the on-demand transport',
 test('one client watching two peers keeps their events apart', async (t) => {
     if (skipWithoutBroker(t)) return
     const prefix = prefixFor('event-routing')
-    const first = new RpcServer({ name: peer('routeA'), transports: [{ brokerurl: BROKER_URL, prefix }] })
-    const second = new RpcServer({ name: peer('routeB'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const first = new RpcServer({ name: peer('routeA'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
+    const second = new RpcServer({ name: peer('routeB'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
     const plantA = new Plant()
     const plantB = new Plant()
     first.exposeClassInstance(plantA, 'plant')
@@ -246,7 +252,7 @@ test('one client watching two peers keeps their events apart', async (t) => {
     await second.ready()
 
     // One client and one transport across both peers, which is how the console watches a network.
-    const client = new RpcClient(undefined, { name: peer('routeWatcher'), transport: new MqttTransport(peer('routeWatcher'), BROKER_URL, { prefix }) })
+    const client = new RpcClient(undefined, { name: peer('routeWatcher'), transport: new MqttTransport(peer('routeWatcher'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY }) })
     await client.ready()
     const fromA: string[] = []
     const fromB: string[] = []

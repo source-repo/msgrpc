@@ -1,6 +1,7 @@
 export * from './RpcClient.js'
 export * from './RpcServer.js'
 
+export * from './Transports/Presence.js'
 export * from './Transports/SocketIoClientTransport.js'
 export * from './Transports/SocketIoServerTransport.js'
 export * from './Transports/MqttTransport.js'

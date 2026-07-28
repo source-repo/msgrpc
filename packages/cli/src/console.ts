@@ -6,6 +6,8 @@ import { EventEmitter } from 'events'
 import {
     MqttTransport,
     RpcClient,
+    SocketIoClientTransport,
+    type Transport,
     RpcServer,
     TransportEvent,
     rpc,
@@ -31,7 +33,16 @@ import {
 export const consolePeer = 'msgrpc-console'
 
 export interface ConsoleOptions {
-    broker: string
+    /** Watch an MQTT network. Either this or `hub`, or both. */
+    broker?: string
+    /**
+     * Watch a socket.io network by connecting to a hub. Peers there announce themselves on connect,
+     * which is how a network with no broker - and a server hosted in a browser page, which cannot
+     * listen at all - becomes visible.
+     */
+    hub?: string
+    /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
+    hubCredentials?: unknown
     prefix?: string
     port: number
     host: string
@@ -62,24 +73,34 @@ export class ConsoleService extends EventEmitter {
     readonly watching = new Map<string, (...args: unknown[]) => void>()
 
     constructor(
-        private readonly client: RpcClient,
-        /** Peers seen online, maintained by the MQTT transport's presence events. */
-        private readonly online: Set<string>,
+        /**
+         * One client per network the console watches, and the peer that was discovered on it. A
+         * peer's name says nothing about how to reach it, so the link it was seen on is what
+         * decides which client makes the call.
+         */
+        private readonly online: Map<string, RpcClient>,
         /** How long this console waits on the network, reported so the browser can wait longer. */
         private readonly callTimeout: number
     ) {
         super()
     }
 
+    /** The client that discovered a peer, or a plain error if nothing has. */
+    private clientFor(peer: string) {
+        const client = this.online.get(peer)
+        if (!client) throw Object.assign(new Error(`${peer} is not a peer this console can see`), { code: 'ClassNotFound' })
+        return client
+    }
+
     @rpc
     async peers() {
-        return { peers: [...this.online].sort(), watching: [...this.watching.keys()], callTimeout: this.callTimeout }
+        return { peers: [...this.online.keys()].sort(), watching: [...this.watching.keys()], callTimeout: this.callTimeout }
     }
 
     @rpc
     async describe(peer: string): Promise<ServerDescription | { error: string; code?: string }> {
         try {
-            const proxy = await this.client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc', peer)
+            const proxy = await this.clientFor(peer).proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc', peer)
             return await proxy.remote!.describe()
         } catch (e) {
             return asFailure(e)
@@ -90,7 +111,7 @@ export class ConsoleService extends EventEmitter {
     async call(peer: string, namespace: string, method: string, args: unknown[] = []): Promise<{ result?: unknown; error?: string; code?: string; ms: number }> {
         const started = Date.now()
         try {
-            const proxy = await this.client.proxy<Record<string, (...a: unknown[]) => Promise<unknown>>>(namespace, peer)
+            const proxy = await this.clientFor(peer).proxy<Record<string, (...a: unknown[]) => Promise<unknown>>>(namespace, peer)
             return { result: await proxy.remote![method](...args), ms: Date.now() - started }
         } catch (e) {
             // Reported rather than thrown: an RpcError's code is the useful part, and it would be
@@ -104,7 +125,7 @@ export class ConsoleService extends EventEmitter {
         const key = `${peer}/${namespace}/${event}`
         if (this.watching.has(key)) return { watching: true, already: true }
         const handler = (...args: unknown[]) => this.emit('event', { peer, namespace, event, args, at: Date.now() })
-        const proxy = await this.client.proxy<Subscribable>(namespace, peer)
+        const proxy = await this.clientFor(peer).proxy<Subscribable>(namespace, peer)
         await proxy.remote!.on(event, handler)
         this.watching.set(key, handler)
         return { watching: true, already: false }
@@ -115,7 +136,7 @@ export class ConsoleService extends EventEmitter {
         const key = `${peer}/${namespace}/${event}`
         const handler = this.watching.get(key)
         if (!handler) return { watching: false, already: true }
-        const proxy = await this.client.proxy<Subscribable>(namespace, peer)
+        const proxy = await this.clientFor(peer).proxy<Subscribable>(namespace, peer)
         // Removes the local listener and tells the server to drop its side.
         await proxy.remote!.off(event, handler)
         this.watching.delete(key)
@@ -176,26 +197,47 @@ const serveAsset = async (pathname: string, response: ServerResponse) => {
 }
 
 export const startConsole = async (options: ConsoleOptions) => {
-    const online = new Set<string>()
+    if (!options.broker && !options.hub) throw new Error('startConsole: give it a broker, a hub, or both')
 
-    const transport = new MqttTransport(options.name, options.broker, {
-        ...(options.prefix ? { prefix: options.prefix } : {}),
-        ...(options.sign ? { sign: options.sign } : {}),
-        ...(options.verify ? { verify: options.verify } : {})
-    })
-    const client = new RpcClient(undefined, { name: options.name, transport, callTimeout: options.callTimeout })
-    const service = new ConsoleService(client, online, options.callTimeout)
+    /** Peer -> the client that discovered it. A peer seen on both links is answered on whichever spoke first. */
+    const online = new Map<string, RpcClient>()
+    const service = new ConsoleService(online, options.callTimeout)
+    const clients: RpcClient[] = []
 
-    transport.on(TransportEvent.peerOnline, (peer: string) => {
-        if (online.has(peer)) return
-        online.add(peer)
-        service.emit('peer', { peer, state: 'online' })
-    })
-    transport.on(TransportEvent.peerGone, (peer: string) => {
-        online.delete(peer)
-        service.emit('peer', { peer, state: 'offline' })
-    })
-    await client.ready()
+    /** Wire one network's presence into the single list the browser sees. */
+    const watchNetwork = (transport: Transport, client: RpcClient) => {
+        clients.push(client)
+        transport.on(TransportEvent.peerOnline, (peer: string) => {
+            if (online.has(peer)) return
+            online.set(peer, client)
+            service.emit('peer', { peer, state: 'online' })
+        })
+        transport.on(TransportEvent.peerGone, (peer: string) => {
+            // Only if it left the link it was found on; the same name on the other link is a
+            // different peer as far as routing is concerned.
+            if (online.get(peer) !== client) return
+            online.delete(peer)
+            service.emit('peer', { peer, state: 'offline' })
+        })
+    }
+
+    if (options.broker) {
+        const transport = new MqttTransport(options.name, options.broker, {
+            ...(options.prefix ? { prefix: options.prefix } : {}),
+            ...(options.sign ? { sign: options.sign } : {}),
+            ...(options.verify ? { verify: options.verify } : {})
+        })
+        watchNetwork(transport, new RpcClient(undefined, { name: options.name, transport, callTimeout: options.callTimeout }))
+    }
+    if (options.hub) {
+        // An ordinary socket.io peer of the hub. Announcing itself is what makes the hub willing to
+        // relay to it, and what puts every other peer's presence on this connection.
+        const transport = new SocketIoClientTransport(options.name, options.hub, [], {
+            ...(options.hubCredentials ? { auth: options.hubCredentials as { [key: string]: unknown } } : {})
+        })
+        watchNetwork(transport, new RpcClient(undefined, { name: options.name, transport, callTimeout: options.callTimeout }))
+    }
+    await Promise.all(clients.map((client) => client.ready()))
 
     const http = createServer((request, response) => {
         void serveAsset(new URL(request.url ?? '/', 'http://console').pathname, response)
@@ -215,7 +257,7 @@ export const startConsole = async (options: ConsoleOptions) => {
             await service.releaseAll()
             await browserFacing.close()
             await new Promise<void>((resolve) => http.close(() => resolve()))
-            await client.close()
+            await Promise.all(clients.map((client) => client.close()))
         }
     }
 }

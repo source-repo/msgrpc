@@ -23,7 +23,8 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 | `--out <file>` | extract | `msgrpc.types.json` | where to write the contract |
 | `--against <file>` | check | `msgrpc.types.json` | the contract to compare against |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
-| `--broker <url>` | console | required | e.g. `mqtt://localhost:1883` |
+| `--broker <url>` | console | — | an MQTT network, e.g. `mqtt://localhost:1883` |
+| `--hub <url>` | console | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
 | `--prefix <topic>` | console | the transport's own | must match the network you are watching |
 | `--port <n>` | console | `7300` | |
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
@@ -121,15 +122,22 @@ is what lets both this check and the server recognise an older caller.
 ## console
 
 ```
-msgrpc console --broker mqtt://localhost:1883
+msgrpc console --broker mqtt://localhost:1883      # an MQTT network
+msgrpc console --hub http://hub:8080               # a socket.io network
+msgrpc console --broker mqtt://... --hub http://... # both at once
 ```
 
 Opens a console at `http://127.0.0.1:7300` listing every peer that is up, what each one exposes, a
 form to call it, and a live stream of its events.
 
-**Discovery costs nothing.** Every peer publishes retained presence, so subscribing to
-`<prefix>/presence/+` hands over everyone already online the moment the console connects. There is
-no scan, no probe and no configured list of hosts.
+**Discovery costs nothing.** Every peer announces itself, so the console is handed everyone already
+online the moment it connects. There is no scan, no probe and no configured list of hosts. Over MQTT
+that is retained presence under `<prefix>/presence/+`; over socket.io the hub keeps the list.
+
+With both, one list covers both networks and each peer is called over the link it was found on —
+which is the useful shape when a plant runs on a broker and the HMIs are browser pages. A peer
+hosted *in* a browser shows up like any other, since a page that dials a hub can serve as well as
+call.
 
 A peer only appears in detail if its server was started with `exposeIntrospection`; otherwise the
 console says so rather than guessing.
@@ -216,9 +224,13 @@ own `MessageSigner`.
 exposing it has to be a deliberate act: `--host 0.0.0.0` works and prints a warning saying what you
 have just done.
 
-**MQTT only.** It connects as an ordinary MQTT peer, so a network served purely over WebSocket
-cannot be browsed with it. Broker credentials work if they fit in the url
-(`mqtt://user:pass@host`); TLS client certificates have nowhere to go yet.
+**Credentials are thin.** Broker credentials work if they fit in the url (`mqtt://user:pass@host`);
+TLS client certificates have nowhere to go yet. A hub that authenticates needs a handshake token,
+which has no flag for the same reason the signing keys do not — build the console from the library's
+`startConsole` and pass `hubCredentials`.
+
+**`--prefix` is MQTT's.** A socket.io hub has no topic namespace, so the flag does nothing for
+`--hub`. Watching two MQTT networks at once is not possible either; it is one broker and one hub.
 
 **Give it its own name on a busy network.** The default is unique per process, but a peer name maps
 to an MQTT client id and a broker allows one connection per id, so two consoles sharing a `--name`

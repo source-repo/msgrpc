@@ -7,6 +7,12 @@ import { consolePeer, startConsole, type ConsoleService } from './console.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
+/**
+ * Test peers get a short session expiry. Names are unique per run, so the broker's hour-long default
+ * would leave a fresh session behind on every run until it refused new connections.
+ */
+const TEST_SESSION_EXPIRY = 10
+
 const brokerAvailable = async () => {
     try {
         const probe = await connectAsync(BROKER_URL, { connectTimeout: 1500, reconnectPeriod: 0 })
@@ -84,7 +90,7 @@ test('the console discovers a peer, describes it, calls it and streams its event
     const prefix = prefixFor('console-test')
     const server = new RpcServer({
         name: peer('boilerServer'),
-        transports: [{ brokerurl: BROKER_URL, prefix }],
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }],
         schema,
         exposeIntrospection: true
     })
@@ -153,6 +159,47 @@ test('the console discovers a peer, describes it, calls it and streams its event
     await client.close()
     await running.close()
     await server.close()
+})
+
+test('the console watches a socket.io network, with no broker anywhere', async (t) => {
+    // Nothing here touches MQTT, so it runs whether or not a broker is up.
+    const hub = new RpcServer({ name: peer('hub'), transports: [{ port: 3990 }] })
+    await hub.ready()
+
+    // A peer that can only dial out - what a server hosted in a browser page has to do.
+    const panel = new RpcServer({ name: peer('cellPanel'), transports: [{ connect: 'http://localhost:3990' }], exposeIntrospection: true })
+    panel.exposeClassInstance(new Boiler())
+    await panel.ready()
+
+    const running = await startConsole({ hub: 'http://localhost:3990', port: 7393, host: '127.0.0.1', name: peer('console-hub'), callTimeout: 5000 })
+    const { client, remote } = await browserClient(running.url)
+
+    const peers = await pollUntil(
+        async () => (await remote.peers()).peers,
+        (found) => found.includes(peer('cellPanel'))
+    )
+    t.true(peers.includes(peer('cellPanel')), `discovered: ${JSON.stringify(peers)}`)
+
+    const described = (await remote.describe(peer('cellPanel'))) as { namespaces: { name: string }[] }
+    t.true(described.namespaces.some((namespace) => namespace.name === 'boiler'))
+
+    const streamed: { event: string; args: unknown[] }[] = []
+    await remote.on('event', (event: unknown) => void streamed.push(event as (typeof streamed)[number]))
+    t.deepEqual(await remote.watch(peer('cellPanel'), 'boiler', 'changed'), { watching: true, already: false })
+    t.is((await remote.call(peer('cellPanel'), 'boiler', 'setTemperature', [64])).result, 64)
+    await waitFor(() => streamed.length > 0)
+    t.deepEqual(streamed[0].args, [64])
+
+    await client.close()
+    await running.close()
+    await panel.close()
+    await hub.close()
+})
+
+test('the console refuses to start with nothing to watch', async (t) => {
+    await t.throwsAsync(startConsole({ port: 7394, host: '127.0.0.1', name: peer('console-nothing'), callTimeout: 1000 }), {
+        message: /broker, a hub, or both/
+    })
 })
 
 test('the console app is served and needs no network to render', async (t) => {
