@@ -105,6 +105,7 @@ test('the contracts this package ships still match the source they came from', (
     // validation would refuse calls the method now accepts. `npm run contract` regenerates them.
     for (const [project, stored] of [
         ['../tsconfig.contract.json', '../src/console.types.json'],
+        ['../tsconfig.bus.json', '../src/bus.types.json'],
         ['../web/tsconfig.contract.json', '../web/src/chat.types.json'],
         // msgrpc's own, which it loads to describe describe(). It lives there and is generated
         // here, because the extractor that writes it is this package.

@@ -1,7 +1,7 @@
 import * as mqtt from 'mqtt'
 
 import { stringToUint8Array, uint8ArrayToBase64 } from 'uint8array-extras'
-import { GenericModule, IGenericModule, Message, MessageHeader, TransportEvent } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, MessageHeader, TransportEvent, type RelayedFrame } from '../RPC/Core.js'
 import { FrameCodec, jsonCodec, msgPackCodec } from '../RPC/Codec.js'
 import type { IPublishPacket } from 'mqtt-packet'
 import { MessageSigner, MessageVerifier, RpcIdentity } from '../RPC/Auth.js'
@@ -65,6 +65,26 @@ export interface MqttTransportOptions {
     prefix?: string
     /** Peer name to subscribe as. Defaults to the transport's own name. */
     topic?: string
+    /**
+     * Watch every peer's traffic instead of this one's, and report it rather than acting on it.
+     *
+     * There is no broker of ours on an MQTT network to hook the way a socket.io one can be, so the
+     * observation happens at the subscription: `<prefix>/rpc/+` under the 3.1.1 layout, and each of
+     * `<prefix>/{req,rsp,evt}/+` under MQTT 5. Everything decoded is emitted as
+     * `TransportEvent.relayed` and nothing is delivered - a tap answers no calls and runs no
+     * methods.
+     *
+     * **Give this its own transport rather than adding it to a working one.** A peer subscribed to
+     * both its own topic and the wildcard covering it has overlapping subscriptions, and a broker
+     * is permitted to deliver a matching message once per subscription - which for a request means
+     * running the method twice. A separate instance is a separate client id and a separate session,
+     * so the two never overlap. It follows that a tap needs a name of its own, and `presence: false`
+     * unless it should appear in everyone's peer list.
+     *
+     * Frames are reported without checking signatures: a tap holds no key for a conversation it is
+     * not part of, and what is on the wire is what it exists to show.
+     */
+    tap?: boolean
     /**
      * Quality of service for RPC traffic. Defaults to 1, at least once: QoS 0 drops messages
      * silently whenever the broker or link hiccups, which for RPC shows up as a call timeout.
@@ -143,6 +163,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     readonly requestExpirySeconds: number
     readonly channels: Channel[]
     readonly sharedGroup?: string
+    readonly tap: boolean
     readonly replicaId: string
     readonly sessionExpirySeconds: number
     /** A replica must not speak for the whole group; see the constructor. */
@@ -174,6 +195,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.topic = options.topic ?? this.name
         this.qos = options.qos ?? 1
         this.presence = options.presence ?? true
+        this.tap = options.tap ?? false
         this.persistentSession = options.persistentSession ?? false
         this.sharedGroup = options.sharedGroup
         this.replicaId = options.replicaId ?? uint8ArrayToBase64(globalThis.crypto.getRandomValues(new Uint8Array(6)))
@@ -334,14 +356,17 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.connected = true
         this.connectedSince = Date.now()
         try {
+            // A tap watches every peer's channel rather than its own, and only that: subscribing to
+            // both would overlap, and a broker may deliver a message once per matching subscription.
+            const watched = this.tap ? '+' : this.topic
             if (this.protocol === 5) {
                 for (const channel of this.channels) {
-                    const topic = this.channelTopic(channel, this.topic)
+                    const topic = this.channelTopic(channel, watched)
                     // Only requests are shared: replies and events must reach one specific peer.
-                    const filter = channel === 'req' && this.sharedGroup ? `$share/${this.sharedGroup}/${topic}` : topic
+                    const filter = channel === 'req' && this.sharedGroup && !this.tap ? `$share/${this.sharedGroup}/${topic}` : topic
                     await this.client?.subscribeAsync(filter, { qos: this.qos })
                 }
-            } else await this.client?.subscribeAsync(this.rpcTopic(this.topic), { qos: this.qos })
+            } else await this.client?.subscribeAsync(this.rpcTopic(watched), { qos: this.qos })
             if (this.presence) {
                 // Observed even by replicas, which still need to know when their own peers depart.
                 await this.client?.subscribeAsync(this.presenceTopic('+'), { qos: this.qos })
@@ -394,6 +419,9 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.rejected, { source: header.source, reason: 'unsafe peer name' })
             return
         }
+        // Before the signature check and instead of delivery: a tap holds no key for a conversation
+        // it is not part of, and it must not act on what it is only watching.
+        if (this.tap) return this.report(payload as Uint8Array, header.source, this.topicAddressee(topic) ?? header.target)
         if (this.verify) {
             const rejection = await this.verifyFrame(header, payload)
             if (rejection) {
@@ -458,10 +486,35 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.rejected, { source, reason: `unrecognised frame kind '${values[MR.kind]}'` })
             return
         }
+        // Watched rather than acted on: see the note in the v1 path above.
+        if (this.tap) {
+            if (this.listenerCount(TransportEvent.relayed))
+                this.emit(TransportEvent.relayed, { source, target: this.topicAddressee(topic) ?? this.name, message } satisfies RelayedFrame)
+            return
+        }
         this.setKnownSource(source)
         // The addressee is in the topic under the MQTT 5 layout. It is this peer for everything it
         // subscribed to for itself, and someone else for a topic it watches on their behalf.
         await this.deliver(message, source, this.topicAddressee(topic) ?? this.name)
+    }
+
+    /**
+     * A frame this transport is only watching, decoded and announced.
+     *
+     * The v1 layout carries no properties, so the payload has to be decoded here before anything can
+     * be said about it - which is also the only work a tap does per frame, and it is skipped
+     * entirely when nothing is listening.
+     */
+    private report(payload: Uint8Array, source: string, target: string) {
+        if (!this.listenerCount(TransportEvent.relayed)) return
+        let message: Message
+        try {
+            message = this.codec.decode(payload) as Message
+        } catch (e) {
+            this.emit(TransportEvent.rejected, { source, reason: `undecodable frame: ${String(e)}` })
+            return
+        }
+        this.emit(TransportEvent.relayed, { source, target, message } satisfies RelayedFrame)
     }
 
     /** The peer a topic addresses: <prefix>/<channel>/<peer>. */

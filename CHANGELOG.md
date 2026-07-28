@@ -1,5 +1,106 @@
 # Changelog
 
+## msgrpc 2.4.0 and msgrpc-cli 2.5.0
+
+- **The traffic tap.** `msgrpc broker` now exposes a `bus` namespace — `tap(filter?)`, `untap`,
+  `taps()` — and emits a `frame` event carrying what it is relaying. A console only ever sees its
+  own calls and the events it subscribed to, which on a real network is a small fraction of what is
+  happening; the broker sees everything, because it is the thing forwarding it.
+  - **Turned on by a call, not by a flag.** A plant bus that has to be restarted before it can be
+    watched will not be watched: the run worth looking at is the one already going wrong.
+  - **It knows what a frame is**, which is what a topic browser pointed at the same wire cannot do.
+    A call and its reply share a correlation id, so the reply is reported with the method it answers
+    and the time it took — neither of which is in the reply itself.
+  - Filters narrow by peer (either direction — "mirror that device"), namespace, and kind. Several
+    taps run at once with different filters, and each frame names the taps it matched.
+  - **Payloads are off by default.** The metadata is what a debugging session usually needs, and a
+    plant bus carries values nobody meant to hand to whoever happened to be tapping. They are
+    carried only if one of the taps that matched asked for them.
+  - Taps expire on their own (300 s by default, 3600 s at most). A console that closes without
+    untapping would otherwise leave the broker building and emitting frames for a subscriber that is
+    not there. The calls awaiting replies are dropped with the last tap, so nothing accumulates
+    between debugging sessions.
+  - Traffic addressed *to* the broker is not tapped, only what it relays, so reading the tap back
+    does not feed itself.
+- **The broker describes itself.** It used to expose nothing at all, so a peer addressing it got
+  `ClassNotFound` — true, and the plainest possible statement that this is a switchboard rather than
+  a service. It was also indistinguishable from a device whose server was started without
+  `exposeIntrospection`, which is what a broker in a peer list actually looked like. It now ships a
+  contract and answers `describe`, so `msgrpc describe plantBus` says `bus@1` instead of an error
+  that reads like a fault.
+- **The tap works on MQTT too**, where there is no broker of ours to hook: the observation happens
+  at the subscription instead — `<prefix>/rpc/+` under 3.1.1, each of `<prefix>/{req,rsp,evt}/+`
+  under MQTT 5 — and a console started with `--broker` exposes the same `bus` and watches for
+  itself. `MqttTransport` takes a `tap` option for it, and reports what it decodes rather than
+  delivering it: a tap answers no calls and runs no methods.
+  - **It gets its own broker connection**, opened when the first tap starts and closed after the
+    last ends. A peer subscribed to both its own topic and the wildcard covering it has overlapping
+    subscriptions, and a broker may deliver a matching message once per subscription — which for a
+    request means the method runs twice. A separate instance is a separate client id and session, so
+    the two can never overlap; there is a test asserting the device ran the method exactly once per
+    call while tapped. It also means an idle console costs a plant broker nothing.
+  - Frames are reported without checking signatures. A tap holds no key for a conversation it is not
+    part of, and what is on the wire is what it exists to show.
+- **`console.tap`, `untap` and `taps`**, so the page asks the console rather than hunting for a
+  broker from the browser. The console turns on whatever it can reach — a broker's `bus` over
+  socket.io, its own subscription over MQTT, both when it holds both links — and says which in
+  `sources`. Frames arrive on one `frame` event either way.
+  - Peers are described **in parallel** when looking for a bus. One peer that is registered but no
+    longer answering — a page whose tab was closed — takes the whole call timeout to fail, and in
+    sequence that was one timeout per stale peer before the tap started at all.
+  - The console's record of a tap is given the same life as the tap it stands for, so a page that
+    reloads without untapping takes its entry with it instead of leaving one for the life of the
+    console.
+- **A Traffic tab in the console**, next to Events and Chat: off until asked, with the filter set up
+  before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
+  tapping while another tab is showing — unmounting it would have stopped the watching exactly while
+  you looked away — and the count on the tab label is what arrived meanwhile.
+- The console's own contract now **declares its events**. It described five methods and none of its
+  three events, so a console pointed at another one showed an empty event list on a service that
+  emits `event`, `peer` and now `frame`.
+- **`TransportEvent.relayed`** reports a frame a server is passing between two other peers — the
+  only place traffic nobody here sent or received can be observed. Emitted from the one point both
+  relay paths cross, so a frame moving to another transport is reported too and a tap on a mixed
+  network does not quietly miss half of it. Guarded on the listener count, since it runs per frame
+  and building the object for nobody is the cost.
+
+- **`msgrpc peers`, `describe`, `call` and `watch`** — the console's verbs for a shell rather than a
+  browser. Everything the network could be asked was reachable only through `console`, which needs a
+  browser, or `mcp`, which needs a model on the other end; a shell script and a CI job had neither.
+  These take the same network flags, answer once, and exit 1 when a peer refuses, which is what
+  makes a smoke test a line in a CI file instead of a program that parses output.
+  - **Arguments come from the peer's own contract.** A shell has only strings, so the peer is
+    described first and its schema decides what each word means: `1200` is a number where the
+    contract says `number` and the text `1200` where it says `string`, `auto` matches a literal in a
+    union, `bytes` takes hex and `date` takes an ISO string. Without this,
+    `msgrpc call plant plant.writeSetpoint 1200` sends `"1200"` and comes back
+    `InvalidParams: expected number, got string` — correct, and useless. Where a peer publishes no
+    contract the rule is JSON-if-it-parses and the literal text otherwise, so `42` is a number and
+    `hello` is a string rather than a syntax error. `--args '[…]'` is the escape hatch.
+  - A word that cannot be what the contract asks for is refused before anything is sent, and the
+    argument is **named rather than numbered**: `argument 0 (celsius): expected a number, got 'warm'`.
+  - `--json` on every verb, rather than guessing from whether stdout is a tty — that guess is wrong
+    exactly when it matters. `call` puts the result on stdout and the timing on stderr, so a pipe
+    carries the value and nothing else. `watch` writes jsonl, since a stream that is pleasant to
+    read is a stream nothing can parse.
+  - Each verb waits up to `--wait` for the peer to become addressable. `ready()` means the links are
+    up, not that presence has arrived, and a one-shot command that gave up on that gap would fail
+    intermittently for reasons nobody could reproduce.
+  - Ctrl-C on `watch` drops the server's subscription as well as stopping the stream, so a debugging
+    session leaves no listeners behind on a device that outlives it.
+- Joining a network is now one function rather than three copies of twenty lines. `console`, `mcp`
+  and the verbs built the same transport list each, which is three places to forget `--prefix` in,
+  and the same two checks — that there is something to join, and that a `--name` does not contradict
+  the name the key file belongs to.
+
+### Security
+
+- Anyone who can reach an unauthenticated broker can now call `bus.tap()` and mirror everything
+  crossing it. They could always have read the same traffic by impersonating a peer — the broker
+  has never checked who anyone is — but not this conveniently. `authenticate` and `relay` are what
+  gate it, and the broker now says so on startup next to the warning it already printed about
+  relaying for whoever connects.
+
 ## msgrpc-cli 2.4.1
 
 - The `msgrpc` binary is made executable at build time. `tsc` writes `dist/index.js` with a shebang

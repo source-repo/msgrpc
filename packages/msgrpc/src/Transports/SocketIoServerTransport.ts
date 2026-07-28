@@ -1,7 +1,7 @@
 import * as SocketIo from 'socket.io'
 import { createServer as createHttpServer, Server as HttpServer } from 'http'
 import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
-import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, TransportEvent, type RelayedFrame } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
 import { isUsablePeerName, MAX_CARRIED_PEERS, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
@@ -191,6 +191,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
                 return
             }
+            // Announced here rather than in forward(), so that a frame crossing to another
+            // transport is reported too: this is the one point both relay paths pass through, and a
+            // tap that saw only same-transport traffic would quietly miss half a mixed network.
+            // Guarded because this runs per frame, and building the object for nobody is the cost.
+            if (this.listenerCount(TransportEvent.relayed))
+                this.emit(TransportEvent.relayed, { source: header.source, target: header.target, message } satisfies RelayedFrame)
             // Forwarding within this transport is done here rather than through receive(), so the
             // hop count survives it. A frame that has been round too many relays is dropped: tables
             // settle after a link fails, but a frame circling in the meantime never stops on its own.

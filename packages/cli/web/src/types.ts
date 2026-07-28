@@ -60,6 +60,33 @@ export const fetchConsoleName = async () => {
     return ((await response.json()) as { name: string }).name
 }
 
+/** What a tap asks to be shown. Mirrored from the CLI's bus.ts, like the rest of this file. */
+export interface TapFilter {
+    peer?: string
+    namespace?: string
+    kinds?: string[]
+    payloads?: boolean
+    ttl?: number
+}
+
+/** One frame the network carried between two peers. */
+export interface TappedFrame {
+    at: number
+    source: string
+    target: string
+    kind: string
+    namespace?: string
+    method?: string
+    event?: string
+    id?: string
+    ms?: number
+    code?: string
+    error?: string
+    params?: unknown[]
+    result?: unknown
+    taps: string[]
+}
+
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {
     peers(): Promise<{ peers: string[]; watching: string[]; callTimeout: number }>
@@ -67,6 +94,13 @@ export interface ConsoleService {
     call(peer: string, namespace: string, method: string, args: unknown[]): Promise<{ result?: unknown; error?: string; code?: string; ms: number }>
     watch(peer: string, namespace: string, event: string): Promise<{ watching: boolean; already: boolean }>
     unwatch(peer: string, namespace: string, event: string): Promise<{ watching: boolean; already: boolean }>
+    /**
+     * Start watching traffic between other peers. The console decides where that is possible - a
+     * broker's `bus` on socket.io, its own subscription on MQTT - and reports which it turned on.
+     */
+    tap(filter?: TapFilter): Promise<{ token: string; sources: string[] }>
+    untap(token: string): Promise<{ tapping: boolean; already: boolean }>
+    taps(): Promise<{ taps: { token: string; sources: string[] }[]; sources: string[] }>
 }
 
 export interface StreamedEvent {

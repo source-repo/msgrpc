@@ -1049,6 +1049,200 @@
           }
         }
       }
+    },
+    "TapFilter": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "namespace": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "kinds": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "optional": true
+        },
+        "payloads": {
+          "type": {
+            "kind": "boolean"
+          },
+          "optional": true
+        },
+        "ttl": {
+          "type": {
+            "kind": "number"
+          },
+          "optional": true
+        }
+      }
+    },
+    "ConsoleTap": {
+      "kind": "object",
+      "fields": {
+        "token": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "sources": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          }
+        }
+      }
+    },
+    "StreamedEvent": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "namespace": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "event": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "args": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "any"
+            }
+          }
+        },
+        "at": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "PeerChange": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "state": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
+    "TappedFrame": {
+      "kind": "object",
+      "fields": {
+        "at": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "source": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "target": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "kind": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "namespace": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "method": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "event": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "id": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "ms": {
+          "type": {
+            "kind": "number"
+          },
+          "optional": true
+        },
+        "code": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "error": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "params": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "any"
+            }
+          },
+          "optional": true
+        },
+        "result": {
+          "type": {
+            "kind": "any"
+          },
+          "optional": true
+        },
+        "taps": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          }
+        }
+      }
     }
   },
   "namespaces": {
@@ -1245,6 +1439,106 @@
               }
             }
           }
+        },
+        "tap": {
+          "params": [
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "ref",
+                  "name": "TapFilter"
+                },
+                {
+                  "kind": "literal",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "filter"
+          ],
+          "returns": {
+            "kind": "ref",
+            "name": "ConsoleTap"
+          }
+        },
+        "untap": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "token"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "tapping": {
+                "type": {
+                  "kind": "boolean"
+                }
+              },
+              "already": {
+                "type": {
+                  "kind": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "taps": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "taps": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "ref",
+                    "name": "ConsoleTap"
+                  }
+                }
+              },
+              "sources": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "events": {
+        "event": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "StreamedEvent"
+            }
+          ]
+        },
+        "peer": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "PeerChange"
+            }
+          ]
+        },
+        "frame": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "TappedFrame"
+            }
+          ]
         }
       }
     }

@@ -1,0 +1,269 @@
+{
+  "schema": 1,
+  "types": {
+    "TapFilter": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "namespace": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "kinds": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "optional": true
+        },
+        "payloads": {
+          "type": {
+            "kind": "boolean"
+          },
+          "optional": true
+        },
+        "ttl": {
+          "type": {
+            "kind": "number"
+          },
+          "optional": true
+        }
+      }
+    },
+    "TapRecord": {
+      "kind": "object",
+      "fields": {
+        "token": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "filter": {
+          "type": {
+            "kind": "ref",
+            "name": "TapFilter"
+          }
+        },
+        "expires": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "frames": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "TappedFrame": {
+      "kind": "object",
+      "fields": {
+        "at": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "source": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "target": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "kind": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "namespace": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "method": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "event": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "id": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "ms": {
+          "type": {
+            "kind": "number"
+          },
+          "optional": true
+        },
+        "code": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "error": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "params": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "any"
+            }
+          },
+          "optional": true
+        },
+        "result": {
+          "type": {
+            "kind": "any"
+          },
+          "optional": true
+        },
+        "taps": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          }
+        }
+      }
+    }
+  },
+  "namespaces": {
+    "bus": {
+      "version": "1",
+      "methods": {
+        "tap": {
+          "params": [
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "ref",
+                  "name": "TapFilter"
+                },
+                {
+                  "kind": "literal",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "filter"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "token": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "expires": {
+                "type": {
+                  "kind": "number"
+                }
+              },
+              "filter": {
+                "type": {
+                  "kind": "ref",
+                  "name": "TapFilter"
+                }
+              }
+            }
+          }
+        },
+        "untap": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "token"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "tapping": {
+                "type": {
+                  "kind": "boolean"
+                }
+              },
+              "already": {
+                "type": {
+                  "kind": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "taps": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "bus": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "taps": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "ref",
+                    "name": "TapRecord"
+                  }
+                }
+              },
+              "pending": {
+                "type": {
+                  "kind": "number"
+                }
+              }
+            }
+          }
+        }
+      },
+      "events": {
+        "frame": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "TappedFrame"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

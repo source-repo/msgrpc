@@ -1,4 +1,5 @@
-import { MqttTransport, RpcServer, SocketIoClientTransport, TransportEvent, type MessageSigner, type MessageVerifier, type ServerDescription } from '@source-repo/msgrpc'
+import type { ServerDescription } from '@source-repo/msgrpc'
+import { connectNetwork, type NetworkOptions } from './network.js'
 
 /**
  * An msgrpc network as an MCP server, so a model can look at a plant the way a person looks at the
@@ -19,16 +20,7 @@ import { MqttTransport, RpcServer, SocketIoClientTransport, TransportEvent, type
 /** What we answer initialize with when the client asks for something we do not recognise. */
 const FALLBACK_PROTOCOL_VERSION = '2025-06-18'
 
-export interface McpOptions {
-    broker?: string
-    hub?: string
-    prefix?: string
-    name: string
-    callTimeout: number
-    sign?: MessageSigner
-    verify?: MessageVerifier
-    hubCredentials?: unknown
-}
+export type McpOptions = NetworkOptions
 
 interface JsonRpcRequest {
     jsonrpc: '2.0'
@@ -87,37 +79,9 @@ const failureText = (e: unknown) => {
 export const startMcp = async (options: McpOptions) => {
     if (!options.broker && !options.hub) throw new Error('startMcp: give it a broker, a hub, or both')
 
-    const online = new Set<string>()
     // Exposes nothing. This is a window onto the network, not a peer offering anything to it.
-    const network = new RpcServer({
-        name: options.name,
-        callTimeout: options.callTimeout,
-        readyTimeout: 15000,
-        transports: [
-            ...(options.broker
-                ? [
-                      new MqttTransport(options.name, options.broker, {
-                          ...(options.prefix ? { prefix: options.prefix } : {}),
-                          ...(options.sign ? { sign: options.sign } : {}),
-                          ...(options.verify ? { verify: options.verify } : {})
-                      })
-                  ]
-                : []),
-            ...(options.hub
-                ? [
-                      new SocketIoClientTransport(options.name, options.hub, [], {
-                          ...(options.hubCredentials ? { auth: options.hubCredentials as { [key: string]: unknown } } : {})
-                      })
-                  ]
-                : [])
-        ]
-    })
-    await network.ready()
-    for (const peer of network.peers.names()) if (peer !== options.name) online.add(peer)
-    for (const transport of network.transports) {
-        transport.on(TransportEvent.peerOnline, (peer: string) => void (peer !== options.name && online.add(peer)))
-        transport.on(TransportEvent.peerGone, (peer: string) => void online.delete(peer))
-    }
+    const connected = await connectNetwork(options)
+    const { network, online } = connected
 
     const describe = async (peer: string) => {
         const proxy = await network.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer)
@@ -175,7 +139,7 @@ export const startMcp = async (options: McpOptions) => {
                     protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
                     capabilities: { tools: {} },
                     // Bumped with the package. Clients show it when reporting which server said what.
-                    serverInfo: { name: 'msgrpc', version: '2.4.1' },
+                    serverInfo: { name: 'msgrpc', version: '2.5.0' },
                     instructions:
                         'This is a live msgrpc network. Start with list_peers, then describe_peer to learn a peer' +
                         ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.'
@@ -237,7 +201,7 @@ export const startMcp = async (options: McpOptions) => {
 
     const close = async () => {
         process.stdin.removeAllListeners('data')
-        await network.close()
+        await connected.close()
     }
     // Not stdout: see the note at the top. A client learns what is here from initialize.
     process.stderr.write(`msgrpc mcp: ${options.name} on ${options.broker ?? ''}${options.broker && options.hub ? ' and ' : ''}${options.hub ?? ''}\n`)

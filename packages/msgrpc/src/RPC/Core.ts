@@ -66,6 +66,11 @@ const findHeaderEnd = (at: (index: number) => number, length: number) => {
  * rejected is emitted when an inbound frame fails an authentication check. unroutable is emitted
  * when a frame cannot be delivered to its target. peerDisplaced is emitted when a new connection
  * announces a name another live connection already holds, and takes the route over.
+ *
+ * relayed is the one that is not about the link: it reports a frame this server is passing between
+ * two other peers, which is the only place traffic nobody here sent or received can be observed.
+ * It fires once per relayed frame, so it is emitted only when something is listening - see the
+ * guard at the call site.
  */
 export const TransportEvent = {
     connected: 'connected',
@@ -75,8 +80,16 @@ export const TransportEvent = {
     peerDisplaced: 'peerDisplaced',
     rejected: 'rejected',
     unroutable: 'unroutable',
-    transportError: 'transportError'
+    transportError: 'transportError',
+    relayed: 'relayed'
 } as const
+
+/** A frame passing through this server on its way between two other peers. */
+export interface RelayedFrame {
+    source: string
+    target: string
+    message: Message
+}
 
 export interface IGenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown> {
     readyFlag: boolean

@@ -1,0 +1,6 @@
+{
+    // Only the broker's tap. The main project also compiles the console's service and the tests, and
+    // a contract file describes one server - the broker serves this and nothing else.
+    "extends": "./tsconfig.json",
+    "include": ["src/bus.ts"]
+}

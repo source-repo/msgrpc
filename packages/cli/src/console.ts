@@ -3,18 +3,12 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'events'
-import {
-    MqttTransport,
-    SocketIoClientTransport,
-    RpcServer,
-    TransportEvent,
-    rpc,
-    rpcNamespace,
-    type MessageSigner,
-    type MessageVerifier,
-    type RpcSchema,
-    type ServerDescription
-} from '@source-repo/msgrpc'
+import { MqttTransport, RpcServer, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/msgrpc'
+import { networkTransports, type NetworkOptions } from './network.js'
+import { BusService, DEFAULT_TAP_TTL, type TapFilter, type TappedFrame } from './bus.js'
+// The tap's own contract, merged with the console's below: one server, and a schema has to describe
+// every namespace it serves or the ones it leaves out are refused their argument types.
+import busContract from './bus.types.json' with { type: 'json' }
 // Extracted from this file by `npm run contract`, and committed so it is reviewable and so
 // `msgrpc check` can catch a change to the service that would refuse a page built against the old
 // one. The console describing itself with the same machinery it shows other peers is the point:
@@ -40,30 +34,17 @@ import contract from './console.types.json' with { type: 'json' }
  */
 export const consoleIdentityPath = '/console.json'
 
-export interface ConsoleOptions {
-    /** Watch an MQTT network. Either this or `hub`, or both. */
-    broker?: string
-    /**
-     * Watch a socket.io network by connecting to a hub. Peers there announce themselves on connect,
-     * which is how a network with no broker - and a server hosted in a browser page, which cannot
-     * listen at all - becomes visible.
-     */
-    hub?: string
-    /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
-    hubCredentials?: unknown
-    prefix?: string
+/**
+ * The network flags every command shares, plus where the console listens.
+ *
+ * A hub is how a network with no broker - and a server hosted in a browser page, which cannot
+ * listen at all - becomes visible: peers there announce themselves on connect. Without `sign` the
+ * console cannot talk to a server configured with `verify`; it still discovers peers, because
+ * presence is unsigned retained state, and then every call times out with nothing to say why.
+ */
+export interface ConsoleOptions extends NetworkOptions {
     port: number
     host: string
-    name: string
-    callTimeout: number
-    /**
-     * Sign outgoing frames. Without this the console cannot talk to a server configured with
-     * `verify`: it still discovers peers, because presence is unsigned retained state, and then
-     * every call times out with nothing to say why.
-     */
-    sign?: MessageSigner
-    /** Require and check signatures on incoming frames. Optional even when signing. */
-    verify?: MessageVerifier
 }
 
 type Subscribable = {
@@ -71,9 +52,42 @@ type Subscribable = {
     off: (event: string, handler: (...args: unknown[]) => void) => void
 }
 
+/** An event the console forwarded from a peer it was asked to watch. */
+export interface StreamedEvent {
+    peer: string
+    namespace: string
+    event: string
+    args: unknown[]
+    at: number
+}
+
+/** A peer arriving or leaving, on any of the console's links. */
+export interface PeerChange {
+    peer: string
+    state: string
+}
+
+/** A tap the console holds, and where it holds it. */
+export interface ConsoleTap {
+    token: string
+    /** The peers doing the watching: a broker's `bus`, this console's own MQTT tap, or both. */
+    sources: string[]
+}
+
 /** What a browser may ask this console to do. Everything else on the class stays local. */
 @rpcNamespace('console')
 export class ConsoleService extends EventEmitter {
+    /**
+     * Declared rather than inferred from emit() calls, which cannot be read statically. Without
+     * this the console's own contract described its methods and none of its events, so a console
+     * pointed at another one saw an empty events list on a service that has three.
+     */
+    declare rpcEvents: {
+        event: [event: StreamedEvent]
+        peer: [change: PeerChange]
+        frame: [frame: TappedFrame]
+    }
+
     /**
      * Subscriptions this console holds on the network, keyed by peer/namespace/event. The handler
      * is kept because removing a listener needs the same function reference that was registered.
@@ -90,6 +104,23 @@ export class ConsoleService extends EventEmitter {
     useNetwork(network: RpcServer) {
         this.network = network
     }
+
+    /**
+     * This console's own tap, when it has an MQTT link. There is no broker of ours on an MQTT
+     * network to ask, so the console does the watching itself - see `startConsole`.
+     */
+    private localBus?: BusService
+
+    useLocalTap(bus: BusService) {
+        this.localBus = bus
+        bus.on('frame', (frame: TappedFrame) => this.emit('frame', frame))
+    }
+
+    /** Console-side token -> the taps it opened, here and on other peers, and when they lapse. */
+    private readonly held = new Map<string, { expires: number; opened: { peer: string; token: string }[] }>()
+    /** Peers whose `frame` event this console has already subscribed to, so it subscribes once. */
+    private readonly forwarding = new Map<string, (...args: unknown[]) => void>()
+    private tapCounter = 0
 
     constructor(
         /** Every peer the console can see, on any of its links. */
@@ -157,8 +188,145 @@ export class ConsoleService extends EventEmitter {
         return { watching: false, already: false }
     }
 
+    /**
+     * Peers that can watch traffic: any exposing a `bus`, which in practice is the broker.
+     *
+     * Found by describing rather than configured, because the broker is a peer like any other and
+     * the console has no idea which of them it is. Cached: the answer changes only when a broker
+     * joins or leaves, and describing every peer on each tap would be a round trip per peer.
+     */
+    private async busPeers() {
+        const asking = [...this.online].filter((peer) => !this.knownBuses.has(peer))
+        // Asked all at once, not one after another. A peer that is registered but no longer
+        // answering - a page whose tab was closed, most often - takes the whole call timeout to
+        // fail, and in sequence that is one timeout per stale peer before the tap starts at all.
+        await Promise.all(
+            asking.map(async (peer) => {
+                const described = await this.describe(peer)
+                this.knownBuses.set(peer, !('error' in described) && described.namespaces.some((namespace) => namespace.name === 'bus'))
+            })
+        )
+        return [...this.online].filter((peer) => this.knownBuses.get(peer))
+    }
+    private readonly knownBuses = new Map<string, boolean>()
+
+    /** A peer that has gone is worth asking about again if it comes back under new software. */
+    forgetBus(peer: string) {
+        this.knownBuses.delete(peer)
+    }
+
+    /**
+     * Start watching traffic, wherever this console can watch it.
+     *
+     * A socket.io network is watched at the broker, which is the only thing that sees frames it is
+     * not party to; an MQTT network is watched by this console's own subscription, since there is
+     * no broker of ours there to ask. A console holding both links turns on both, and the frames
+     * arrive on one event either way - which is what keeps the page from having to know any of this.
+     */
+    @rpc
+    async tap(filter?: TapFilter): Promise<ConsoleTap> {
+        const token = `console-tap-${++this.tapCounter}`
+        const opened: { peer: string; token: string }[] = []
+        // Asked before anything starts watching, since describing every peer is itself traffic and
+        // a tap that opened first would report the console looking for it as the first thing it saw.
+        const buses = await this.busPeers()
+
+        if (this.localBus) opened.push({ peer: 'this console', token: (await this.localBus.tap(filter)).token })
+
+        for (const peer of buses) {
+            try {
+                const proxy = await this.reach(peer).proxy<BusPeer>('bus', peer)
+                const answer = await proxy.remote!.tap(filter)
+                opened.push({ peer, token: answer.token })
+                if (!this.forwarding.has(peer)) {
+                    // Subscribed once per peer however many taps are open: the frames already say
+                    // which taps they matched, and a second subscription would duplicate them all.
+                    const handler = (frame: unknown) => this.emit('frame', frame as TappedFrame)
+                    await proxy.remote!.on('frame', handler)
+                    this.forwarding.set(peer, handler)
+                }
+            } catch {
+                // A peer that has gone, or one whose bus refused. The others still work, and a tap
+                // that turned nothing on is reported by its empty source list rather than by
+                // failing - which would lose the sources that did start.
+                this.knownBuses.delete(peer)
+            }
+        }
+
+        // Given the same life as the taps it stands for, so a page that closed without untapping -
+        // a reload is enough - takes its entry with it rather than leaving one here for the life of
+        // the console. The taps themselves expire on their own; this is the console's side of that.
+        this.held.set(token, { expires: Date.now() + (filter?.ttl ?? DEFAULT_TAP_TTL) * 1000, opened })
+        return { token, sources: opened.map((entry) => entry.peer) }
+    }
+
+    @rpc
+    async untap(token: string): Promise<{ tapping: boolean; already: boolean }> {
+        const entry_ = this.held.get(token)
+        if (!entry_) return { tapping: false, already: true }
+        this.held.delete(token)
+        for (const entry of entry_.opened) {
+            if (entry.peer === 'this console') {
+                await this.localBus?.untap(entry.token)
+                continue
+            }
+            try {
+                const proxy = await this.reach(entry.peer).proxy<BusPeer>('bus', entry.peer)
+                await proxy.remote!.untap(entry.token)
+            } catch {
+                // The tap expires on its own if the peer is unreachable, so there is nothing left
+                // to do about it here and nothing worth failing the call over.
+            }
+        }
+        await this.stopForwardingIfIdle()
+        return { tapping: false, already: false }
+    }
+
+    /** Everything this console is watching, and where. */
+    @rpc
+    async taps(): Promise<{ taps: ConsoleTap[]; sources: string[] }> {
+        await this.expireTaps()
+        return {
+            taps: [...this.held.entries()].map(([token, entry]) => ({ token, sources: entry.opened.map((source) => source.peer) })),
+            sources: [...(this.localBus ? ['this console'] : []), ...(await this.busPeers())]
+        }
+    }
+
+    /**
+     * Drops taps whose life has run out, and the subscriptions they were holding.
+     *
+     * The taps themselves have already lapsed at the far end by now; this is what stops the console
+     * forwarding frames for them, and what keeps `held` from growing by one on every page reload.
+     */
+    private async expireTaps() {
+        const now = Date.now()
+        for (const [token, entry] of this.held) if (entry.expires <= now) this.held.delete(token)
+        await this.stopForwardingIfIdle()
+    }
+
+    /**
+     * Drops the subscriptions on the peers doing the watching once nothing here wants them.
+     *
+     * Kept until then rather than per tap, since several taps share one subscription - and dropped
+     * when the last goes, so a broker is not left emitting frames into a console that stopped
+     * reading them.
+     */
+    private async stopForwardingIfIdle() {
+        if (this.held.size) return
+        for (const [peer, handler] of this.forwarding) {
+            try {
+                const proxy = await this.reach(peer).proxy<BusPeer>('bus', peer)
+                await proxy.remote!.off('frame', handler)
+            } catch {
+                // Gone, which drops its side anyway.
+            }
+        }
+        this.forwarding.clear()
+    }
+
     /** Drops every subscription this console holds, so servers that outlive it keep no listeners. */
     async releaseAll() {
+        for (const token of [...this.held.keys()]) await this.untap(token).catch(() => undefined)
         for (const key of [...this.watching.keys()]) {
             const [peer, namespace, event] = key.split('/')
             await this.unwatch(peer, namespace, event).catch(() => undefined)
@@ -166,9 +334,31 @@ export class ConsoleService extends EventEmitter {
     }
 }
 
+/** The part of a broker's `bus` this console calls. */
+type BusPeer = {
+    tap: (filter?: TapFilter) => Promise<{ token: string }>
+    untap: (token: string) => Promise<unknown>
+    on: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown>
+    off: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown>
+}
+
 const asFailure = (e: unknown) => {
     const error = e as { code?: string; message?: string }
     return { error: error.message ?? String(e), code: error.code }
+}
+
+/**
+ * One schema for the two namespaces this server exposes.
+ *
+ * They are extracted separately because each is a contract in its own right - the broker serves
+ * `bus` without `console` - and merged here because a schema describes a server rather than a
+ * class. Named types are merged too: the two files share none, and a collision would be a bug in
+ * whichever one added the duplicate rather than something to resolve at runtime.
+ */
+const consoleAndBus: RpcSchema = {
+    schema: 1,
+    namespaces: { ...(contract as RpcSchema).namespaces, ...(busContract as RpcSchema).namespaces },
+    types: { ...(contract as RpcSchema).types, ...(busContract as RpcSchema).types }
 }
 
 /** The built app, sitting next to this file once the CLI is compiled. */
@@ -222,6 +412,41 @@ export const startConsole = async (options: ConsoleOptions) => {
     const online = new Set<string>()
     const service = new ConsoleService(online, options.callTimeout)
 
+    /**
+     * The console's own tap on an MQTT network, opened when someone asks and closed when the last
+     * of them stops.
+     *
+     * A second connection rather than a wildcard added to the console's own: a client subscribed to
+     * both its own topic and the wildcard covering it has overlapping subscriptions, and a broker
+     * may deliver a matching message once per subscription - which for a request means the method
+     * runs twice. It also means nothing is subscribed until it is wanted, so an idle console costs
+     * a plant broker nothing.
+     */
+    let tapLink: MqttTransport | undefined
+    const localBus = options.broker ? new BusService(options.name) : undefined
+    if (localBus) {
+        localBus.onDemand = {
+            start: async () => {
+                if (tapLink) return
+                tapLink = new MqttTransport(`${options.name}-tap`, options.broker!, {
+                    ...(options.prefix ? { prefix: options.prefix } : {}),
+                    tap: true,
+                    // It watches; it is not a peer anyone should call or wait for.
+                    presence: false
+                })
+                tapLink.on(TransportEvent.relayed, (relayed: RelayedFrame) => localBus.observe(relayed))
+                await tapLink.open()
+                await tapLink.ready()
+            },
+            stop: async () => {
+                const closing = tapLink
+                tapLink = undefined
+                await closing?.close()
+            }
+        }
+        service.useLocalTap(localBus)
+    }
+
     const http = createServer((request, response) => {
         // serveAsset handles its own failures, so reaching this catch means the response itself
         // could not be written. Answering is still better than rejecting into nowhere.
@@ -240,32 +465,22 @@ export const startConsole = async (options: ConsoleOptions) => {
         callTimeout: options.callTimeout,
         readyTimeout: 15000,
         // So another console can describe this one and get argument fields rather than `call(…)`.
-        schema: contract as RpcSchema,
+        // Both namespaces, since one server serves both and a schema that named only `console`
+        // would leave `bus` to be described as `tap(…)` with no argument types at all.
+        schema: consoleAndBus,
         exposeIntrospection: true,
         transports: [
             // socket.io attaches to the same http server and answers /socket.io before the static
             // handler sees it, so the console is one port: page and RPC over the same origin.
             { server: http },
-            ...(options.broker
-                ? [
-                      new MqttTransport(options.name, options.broker, {
-                          ...(options.prefix ? { prefix: options.prefix } : {}),
-                          ...(options.sign ? { sign: options.sign } : {}),
-                          ...(options.verify ? { verify: options.verify } : {})
-                      })
-                  ]
-                : []),
-            ...(options.hub
-                ? [
-                      new SocketIoClientTransport(options.name, options.hub, [], {
-                          ...(options.hubCredentials ? { auth: options.hubCredentials as { [key: string]: unknown } } : {})
-                      })
-                  ]
-                : [])
+            ...networkTransports(options)
         ]
     })
     service.useNetwork(network)
     network.exposeClassInstance(service)
+    // The console's own tap, exposed like any other so `msgrpc call <console> bus.tap` works and
+    // another console can watch this one's MQTT link.
+    if (localBus) network.exposeClassInstance(localBus)
     // After ready(): transports are built asynchronously now, so before it there is nothing to
     // listen to. Whoever announced themselves during startup is already in the registry, so the
     // list is seeded from there rather than waiting for them to arrive twice.
@@ -278,6 +493,8 @@ export const startConsole = async (options: ConsoleOptions) => {
             service.emit('peer', { peer, state: 'online' })
         })
         transport.on(TransportEvent.peerGone, (peer: string) => {
+            // Asked again if it returns: a broker restarted with a tap is a different answer.
+            service.forgetBus(peer)
             if (!online.delete(peer)) return
             service.emit('peer', { peer, state: 'offline' })
         })
@@ -290,6 +507,10 @@ export const startConsole = async (options: ConsoleOptions) => {
         service,
         close: async () => {
             await service.releaseAll()
+            // After releaseAll, which is what drops the last tap and closes this with it. Closed
+            // again here in case a tap expired mid-flight and left the link behind.
+            await localBus?.releaseAll()
+            await tapLink?.close().catch(() => undefined)
             await network.close()
             await new Promise<void>((resolve) => http.close(() => resolve()))
         }

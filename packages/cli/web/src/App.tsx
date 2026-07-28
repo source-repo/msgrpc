@@ -8,7 +8,8 @@ import { ChatMessage, ChatService } from './ChatService'
 // `say(from: string, text: string)` instead of `say(…)`.
 import chatContract from './chat.types.json'
 import { MethodPanel } from './MethodPanel'
-import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, fetchConsoleName, typeText } from './types'
+import { Traffic, TRAFFIC_KEPT } from './Traffic'
+import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -29,6 +30,7 @@ const useConsole = () => {
     const events = useRef<((event: StreamedEvent) => void) | null>(null)
     const peerChange = useRef<((peer: string, state: string) => void) | null>(null)
     const said = useRef<((from: string, text: string) => void) | null>(null)
+    const frames = useRef<((frame: TappedFrame) => void) | null>(null)
     const peer = useRef<RpcServer | null>(null)
 
     useEffect(() => {
@@ -73,6 +75,10 @@ const useConsole = () => {
                     const { peer: name, state } = change as { peer: string; state: string }
                     peerChange.current?.(name, state)
                 })
+                // Subscribed once, whether or not anything is tapping: the console emits nothing
+                // here until a tap is started, and re-subscribing per tap would drop frames in the
+                // gap between the two calls.
+                await proxy.remote!.on('frame', (frame: unknown) => frames.current?.(frame as TappedFrame))
                 const remote = proxy.remote as ConsoleService
                 // The console does the waiting: it holds the broker link, enforces --timeout, and
                 // its answer says what went wrong. A browser giving up first would replace that
@@ -88,11 +94,14 @@ const useConsole = () => {
         return () => void server?.close()
     }, [])
 
-    return { service, status, me, events, peerChange, said, peer }
+    return { service, status, me, events, peerChange, said, frames, peer }
 }
 
+/** Which of the side panel's three views is showing. */
+type SideTab = 'chat' | 'events' | 'traffic'
+
 export const App = () => {
-    const { service, status, me, events, peerChange, said, peer } = useConsole()
+    const { service, status, me, events, peerChange, said, frames, peer } = useConsole()
     const [chats, setChats] = useState<{ [peer: string]: ChatMessage[] }>({})
     const [peers, setPeers] = useState<string[]>([])
     const [offline, setOffline] = useState<Set<string>>(new Set())
@@ -100,6 +109,9 @@ export const App = () => {
     const [described, setDescribed] = useState<ServerDescription | { error: string; code?: string } | null>(null)
     const [watching, setWatching] = useState<Set<string>>(new Set())
     const [stream, setStream] = useState<StreamedEvent[]>([])
+    const [tab, setTab] = useState<SideTab>('events')
+    const [traffic, setTraffic] = useState<TappedFrame[]>([])
+    const [trafficPaused, setTrafficPaused] = useState(false)
 
     const refreshPeers = useCallback(async () => {
         if (!service) return
@@ -146,6 +158,15 @@ export const App = () => {
             void refreshPeers()
         }
     }, [service, refreshPeers, events, peerChange])
+
+    useEffect(() => {
+        // Pausing stops the buffer filling rather than only the list rendering, so a paused tab on a
+        // busy plant is actually paused - and what was on screen when it was paused stays there.
+        frames.current = (frame) => {
+            if (trafficPaused) return
+            setTraffic((current) => [frame, ...current].slice(0, TRAFFIC_KEPT))
+        }
+    }, [frames, trafficPaused])
 
     const select = async (peer: string) => {
         setSelected(peer)
@@ -267,27 +288,55 @@ export const App = () => {
             </main>
 
             <section className="side">
-                <Chat peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />
-                <div className="stream">
-                <header>
-                    <h1>Events</h1>
-                    {stream.length > 0 && (
-                        <button className="toggle" onClick={() => setStream([])}>
-                            clear
+                {/*
+                 * Three views of one column rather than three stacked panes: traffic is a list that
+                 * fills, and giving it a third of the height would make it useless on the network
+                 * where it matters most.
+                 */}
+                <nav className="tabs">
+                    {(['events', 'traffic', 'chat'] as const).map((name) => (
+                        <button key={name} className={tab === name ? 'tab on' : 'tab'} onClick={() => setTab(name)}>
+                            {name}
+                            {name === 'traffic' && traffic.length > 0 && <span className="count">{traffic.length}</span>}
                         </button>
-                    )}
-                </header>
-                {stream.length === 0 && <p className="muted">Watch an event to see it here.</p>}
-                {stream.map((event, index) => (
-                    <div key={`${event.at}-${index}`} className="streamed">
-                        <time>{new Date(event.at).toLocaleTimeString()}</time>
-                        <code>
-                            {event.peer}/{event.namespace}.{event.event}
-                        </code>
-                        <pre>{JSON.stringify(event.args)}</pre>
+                    ))}
+                </nav>
+
+                {tab === 'chat' && <Chat peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />}
+
+                {/* Always mounted, so switching tabs does not drop the tap. See Traffic's `hidden`. */}
+                <Traffic
+                    service={service}
+                    selected={selected}
+                    frames={traffic}
+                    onClear={() => setTraffic([])}
+                    paused={trafficPaused}
+                    onPaused={setTrafficPaused}
+                    hidden={tab !== 'traffic'}
+                />
+
+                {tab === 'events' && (
+                    <div className="stream">
+                        <header>
+                            <h1>Events</h1>
+                            {stream.length > 0 && (
+                                <button className="toggle" onClick={() => setStream([])}>
+                                    clear
+                                </button>
+                            )}
+                        </header>
+                        {stream.length === 0 && <p className="muted">Watch an event to see it here.</p>}
+                        {stream.map((event, index) => (
+                            <div key={`${event.at}-${index}`} className="streamed">
+                                <time>{new Date(event.at).toLocaleTimeString()}</time>
+                                <code>
+                                    {event.peer}/{event.namespace}.{event.event}
+                                </code>
+                                <pre>{JSON.stringify(event.args)}</pre>
+                            </div>
+                        ))}
                     </div>
-                ))}
-                </div>
+                )}
             </section>
         </div>
     )

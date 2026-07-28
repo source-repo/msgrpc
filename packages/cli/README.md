@@ -15,8 +15,13 @@ ESM only, Node 18.17 or later.
 msgrpc extract   write the contract described by the source to a file
 msgrpc check     compare the source against a written contract, exit 1 on a breaking change
 msgrpc console   browse a live network: peers, what they expose, calls and events
-msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share
+msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 msgrpc mcp       serve the network to an MCP client over stdio
+
+msgrpc peers     who is on the network right now
+msgrpc describe  what one peer exposes
+msgrpc call      call a method, and exit 1 if the peer refuses
+msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 ```
 
 | flag | commands | default | meaning |
@@ -25,15 +30,19 @@ msgrpc mcp       serve the network to an MCP client over stdio
 | `--out <file>` | extract | `msgrpc.types.json` | where to write the contract |
 | `--against <file>` | check | `msgrpc.types.json` | the contract to compare against |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
-| `--broker <url>` | console, mcp | — | an MQTT network, e.g. `mqtt://localhost:1883` |
-| `--hub <url>` | console, mcp | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
-| `--prefix <topic>` | console, mcp | the transport's own | must match the network you are watching |
+| `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883` |
+| `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
+| `--prefix <topic>` | console, mcp, verbs | the transport's own | must match the network you are watching |
 | `--port <n>` | console | `7300` | |
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
-| `--timeout <ms>` | console, mcp | `10000` | call timeout |
+| `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
-| `--sign <keyfile>` | console, mcp | — | HMAC keys, so it can talk to a signed network |
+| `--sign <keyfile>` | console, mcp, verbs | — | HMAC keys, so it can talk to a signed network |
 | `--name <peer>` | mcp | `mcp-<three words>` | how it identifies itself to the network |
+| `--name <peer>` | verbs | `cli-<three words>` | how it identifies itself to the network |
+| `--wait <ms>` | verbs | `5000` | how long to wait for the peer to appear before giving up |
+| `--json` | verbs | off | machine-readable output |
+| `--args <json>` | call | — | the whole argument list as a JSON array, instead of words |
 | `--port <n>` | broker | `8080` | listens on every interface |
 | `--name <peer>` | broker | `broker-<three words>` | how the broker identifies itself |
 | `--upstream <url>` | broker | — | join another broker; repeatable |
@@ -177,6 +186,100 @@ join more than one. Loops are handled — a peer is never advertised back along 
 and frames carry a hop count and are dropped after 8 relays — so brokers dialling each other in a
 ring settle rather than storm.
 
+### The traffic tap
+
+A console sees its own calls and the events it subscribed to, which on a real network is a small
+fraction of what is happening. The broker sees everything, because it is the thing forwarding it.
+`bus` is the one namespace it exposes, and it is **turned on by a call rather than a flag** — a
+plant bus that has to be restarted before it can be watched will not be watched, since the run worth
+looking at is the one already going wrong.
+
+```
+$ msgrpc call plantBus bus.tap '{"peer":"plantServer","payloads":true}' --hub http://bus:8080
+{ "token": "tap-1", "expires": 1785272777436, "filter": { … } }
+
+$ msgrpc watch plantBus bus.frame --hub http://bus:8080
+→  hmi-3 -> plantServer  plant.writeSetpoint[1200,"auto"]
+⇒  plantServer -> hmi-3  plant.alarm["setpoint moved",1]
+←  plantServer -> hmi-3  plant.writeSetpoint  2ms
+→  hmi-3 -> plantServer  plant.read[]
+←  plantServer -> hmi-3  plant.read  1ms
+→  hmi-3 -> plantServer  plant.fault[]
+←  plantServer -> hmi-3  plant.fault  0ms  Exception: valve jammed
+```
+
+(The arrows are `jq` over the jsonl; `watch` writes one JSON object per line.)
+
+| method | |
+| --- | --- |
+| `tap(filter?)` | start watching; returns a token |
+| `untap(token)` | stop watching that one |
+| `taps()` | who is watching what, and how much each has seen |
+
+Frames arrive as the `frame` event, so anything that can subscribe to an msgrpc event can read
+them — the console, `msgrpc watch`, or a program of your own.
+
+**It knows what a frame is**, which is what a topic browser pointed at the same wire cannot do. A
+call and its reply share a correlation id, so the reply is reported with the method it answers and
+the time it took — neither of which is in the reply itself.
+
+| filter | |
+| --- | --- |
+| `peer` | only frames this peer sent or received — "mirror that device" |
+| `namespace` | only this namespace; applies to replies too, since a reply is paired with its call first |
+| `kinds` | any of `POST`, `SUCCESS`, `ERROR`, `EVENT` |
+| `payloads` | include arguments, results and event payloads. **Off by default** |
+| `ttl` | seconds before the tap drops itself. Default 300, maximum 3600 |
+
+Payloads are off by default because the metadata is what a debugging session usually needs, and a
+plant bus carries values nobody meant to hand to whoever happened to be tapping. Several taps can
+run at once with different filters; each frame names the taps it matched, and payloads are carried
+only if one of them asked.
+
+Taps expire on their own, because a console that closes without untapping would otherwise leave the
+broker building and emitting frames for a subscriber that is not there.
+
+Traffic addressed *to* the broker is not tapped — only what it relays — so turning the tap on and
+reading it back does not feed itself.
+
+### On MQTT, the console does the watching
+
+There is no broker of ours on an MQTT network to hook, so the observation happens at the
+subscription instead: `<prefix>/rpc/+` under the 3.1.1 layout, each of `<prefix>/{req,rsp,evt}/+`
+under MQTT 5. A console started with `--broker` exposes the same `bus` namespace and watches for
+itself.
+
+**The tap gets its own broker connection**, opened when the first tap starts and closed after the
+last one ends. A peer subscribed to both its own topic and the wildcard covering it has overlapping
+subscriptions, and a broker is permitted to deliver a matching message once per subscription — which
+for a request means the method runs twice. A separate connection is a separate client id and a
+separate session, so the two can never overlap. It also means an idle console costs a plant broker
+nothing.
+
+Frames are reported without checking signatures: a tap holds no key for a conversation it is not
+part of, and what is on the wire is what it exists to show.
+
+Either way the answer arrives the same: ask the console, and it turns on whatever it can reach.
+
+```
+$ msgrpc call myConsole console.tap '{"peer":"plantServer"}' --broker mqtt://localhost:1883
+{ "token": "console-tap-1", "sources": ["this console"] }
+$ msgrpc watch myConsole console.frame --broker mqtt://localhost:1883
+```
+
+`sources` says who is doing the watching — a broker's `bus` on socket.io, `this console` on MQTT,
+or both when it holds both links.
+
+### In the console
+
+The side panel has a **Traffic** tab next to Events and Chat. It is off until you press **tap**, and
+the setup above it decides what to ask for: arguments and results, only the selected peer, and which
+kinds. Once running it shows the source it found, a filter box, **pause**, and one row per frame —
+colour-coded by kind, with the reply carrying the method it answers and the time it took.
+
+The tab stays tapping while you look at another tab; the count on the tab label is what arrived
+while you were away.
+
 ### What it is not
 
 **Not a store-and-forward broker.** Nothing is queued for a peer that is not connected: a frame is
@@ -186,6 +289,100 @@ sent while it was down, that is what MQTT and `persistentSession` are for.
 **Not authenticated.** It listens on every interface and relays for whoever connects, without
 checking who they are, and it says so on startup. Put it behind a network you trust, or build one
 from the library with `authenticate` and a `relay` rule.
+
+**The tap is only as gated as the broker is.** Anyone who can reach an unauthenticated broker can
+call `bus.tap()` and mirror everything crossing it. They could always have read the same traffic by
+impersonating a peer; this is merely one call. `authenticate` and `relay` are what restrict it, and
+the broker says as much on startup.
+
+## peers, describe, call, watch
+
+The console's verbs for a shell rather than a browser. Same network flags as `console`, one answer
+each, and an exit code:
+
+```
+msgrpc peers --hub http://bus:8080
+msgrpc describe plantServer --hub http://bus:8080
+msgrpc call plantServer plant.writeSetpoint 1200 auto --hub http://bus:8080
+msgrpc watch plantServer plant.alarm --hub http://bus:8080
+```
+
+```
+$ msgrpc describe plantServer --hub http://bus:8080
+plantServer (contract 3) — arguments checked
+
+plant@3  Plant
+  writeSetpoint(value: number(0..2000), mode?: "auto" | "manual"): boolean
+  read(): { celsius: number, bar: number }
+  event alarm(string, number)  0 subscribers
+```
+
+**`call` exits 1 when the peer refuses**, which is the point: a smoke test is a line in a CI file
+rather than a program that parses output.
+
+```
+$ msgrpc call plantServer plant.writeSetpoint 3000 --hub http://bus:8080
+msgrpc: plantServer.plant.writeSetpoint failed: InvalidParams: argument 0 is above the maximum 2000
+$ echo $?
+1
+```
+
+### Arguments come from the contract
+
+A shell has only strings, so the peer is described first and **its own contract decides what each
+word means**. `1200` is a number where the schema says `number` and the text `1200` where it says
+`string`; `auto` matches a literal in a union; an object argument is JSON; `date` takes an ISO
+string and `bytes` takes hex. Where a peer publishes no contract the rule is JSON-if-it-parses and
+the literal text otherwise, so `42` is a number and `hello` is a string rather than a syntax error.
+
+A word that cannot be what the contract asks for is refused before anything is sent, and the
+argument is named rather than numbered:
+
+```
+$ msgrpc call plantServer plant.writeSetpoint warm
+msgrpc: argument 0 (value): expected a number, got 'warm'
+```
+
+`--args '[1200, "auto"]'` skips all of that and sends the array as it parses, for a call the
+contract cannot describe or a value the shell would mangle.
+
+### Output
+
+`--json` on every verb. Without it the output is for reading; with it, for `jq`. Which one is wanted
+is not guessed from whether stdout is a tty, because that guess is wrong exactly when it matters —
+in CI.
+
+`call` puts the result on stdout and the timing on stderr, so a pipe carries the value and nothing
+else while a person still sees what it cost:
+
+```
+$ msgrpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
+84
+```
+
+`watch` writes one event per line as JSON, since it is the verb most likely to be piped somewhere
+and a stream that is pleasant to read is a stream nothing can parse:
+
+```
+$ msgrpc watch plantServer plant.alarm --hub http://bus:8080
+msgrpc: watching plantServer.plant.alarm. Ctrl-C to stop.
+{"at":1749047112004,"peer":"plantServer","namespace":"plant","event":"alarm","args":["pressure high",2]}
+```
+
+Ctrl-C drops the server's subscription as well as stopping the stream, rather than only walking
+away from it — a debugging session should not leave listeners behind on a device that outlives it.
+
+### Waiting for a peer
+
+`ready()` means the links are up, not that presence has arrived, and over MQTT retained presence
+lands a moment after the subscription does. Each verb waits up to `--wait` (5 s) for the peer to
+become addressable and then says so plainly, rather than failing intermittently for reasons nobody
+can reproduce:
+
+```
+$ msgrpc call plantServr plant.read --hub http://bus:8080
+msgrpc: plantServr did not appear within 5000 ms. Run 'msgrpc peers' to see who is there.
+```
 
 ## mcp
 

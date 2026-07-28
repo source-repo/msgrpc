@@ -67,7 +67,8 @@ aside {
 }
 
 .stream {
-    flex: 1 1 50%;
+    /* One of three tabbed views now, so it fills the column rather than sharing it. */
+    flex: 1 1 auto;
     min-height: 0;
     overflow-y: auto;
     padding: 14px;
@@ -89,7 +90,7 @@ aside {
     display: flex;
     flex-direction: column;
     min-height: 0;
-    flex: 1 1 50%;
+    flex: 1 1 auto;
     padding: 14px;
     border-bottom: 1px solid var(--line);
 }
@@ -543,4 +544,179 @@ textarea.control {
         border-left: none;
         border-top: 1px solid var(--line);
     }
+}
+
+/*
+ * The side column's three views. Traffic is a list that fills on a busy network, so it gets the
+ * whole column when it is showing rather than a third of it.
+ */
+.tabs {
+    display: flex;
+    flex: 0 0 auto;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel-2);
+}
+
+.tab {
+    flex: 1 1 0;
+    padding: 9px 6px;
+    font-size: 11px;
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 2px solid transparent;
+}
+
+.tab:hover {
+    color: var(--text);
+}
+
+.tab.on {
+    color: #cfe6ff;
+    border-bottom-color: var(--accent);
+}
+
+.tab .count {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent-dim);
+    color: #cfe6ff;
+    font-size: 10px;
+}
+
+.traffic {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+}
+
+.traffic header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.traffic-actions {
+    display: flex;
+    gap: 6px;
+}
+
+.tap-setup {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    padding-bottom: 10px;
+}
+
+.kinds {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.tap-where {
+    margin: 0 0 10px;
+    font-size: 11px;
+}
+
+.traffic .control {
+    margin-bottom: 10px;
+}
+
+/*
+ * A frame per row, with the kind carried by the colour of its left edge: a wall of text is what a
+ * topic browser gives you, and telling a refused call from a reply at a glance is the whole point.
+ */
+.frame {
+    padding: 6px 0 6px 8px;
+    border-left: 2px solid var(--line);
+    border-bottom: 1px solid rgba(38, 46, 58, 0.6);
+    font-size: 12px;
+}
+
+.frame.post {
+    border-left-color: var(--accent);
+}
+
+.frame.success {
+    border-left-color: var(--ok);
+}
+
+.frame.error {
+    border-left-color: var(--bad);
+}
+
+.frame.event {
+    border-left-color: var(--warn);
+}
+
+.frame-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.frame-head time {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.frame .arrow {
+    color: var(--muted);
+}
+
+.frame .peers {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.frame code {
+    color: var(--accent);
+    font-size: 12px;
+}
+
+.frame .ms {
+    font-size: 11px;
+}
+
+.frame .code {
+    color: var(--bad);
+    font-family: var(--mono);
+    font-size: 11px;
+}
+
+.frame-error {
+    margin: 3px 0 0;
+    color: var(--bad);
+    font-size: 11px;
+}
+
+/* Folded to one line until clicked: a long argument list would otherwise push the next frame away. */
+.frame-payload {
+    margin: 3px 0 0;
+    color: var(--text);
+    font-size: 11px;
+    font-family: var(--mono);
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.frame-payload.open {
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+/* Kept mounted so the tap survives a glance at another tab; see Traffic's `hidden`. */
+.traffic.hidden {
+    display: none;
 }
