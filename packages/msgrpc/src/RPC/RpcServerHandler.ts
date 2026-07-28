@@ -63,6 +63,22 @@ const isRpcCallInstanceMethodPayload = (payload: RpcMessage): payload is RpcCall
     return payload.type === RpcMessageType.CallInstanceMethod
 }
 
+/**
+ * The codes a method may answer with by throwing an error that carries one.
+ *
+ * Everything a method threw used to come back as `Exception`, so a service that wanted to say
+ * "you may not do that" could say it only in the message - and a caller reading `code` to decide
+ * whether to retry, re-authenticate or give up learned nothing. Restricted to the codes the
+ * protocol already defines, so an error carrying an unrelated `code` - a Node `ENOENT`, say - is
+ * still reported as the exception it is.
+ */
+const CHOSEN_CODES = new Set<string>(['Unauthorized', 'Forbidden', 'InvalidParams', 'IncompatibleVersion', 'ClassNotFound', 'MethodNotFound', 'TransportError', 'Timeout'])
+
+const chosenCode = (e: unknown): RpcErrorCode => {
+    const code = (e as { code?: unknown } | null)?.code
+    return typeof code === 'string' && CHOSEN_CODES.has(code) ? (code as RpcErrorCode) : 'Exception'
+}
+
 export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMessage, Message<RpcMessage>, RpcMessage> {
     manageRpc = new ManageRpc()
     eventProxies = new Map<string, EventProxy>()
@@ -332,7 +348,7 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 await this.respond(
                     payload.id,
                     source,
-                    { type: RpcMessageType.error, id: payload.id, code: 'Exception', error: toRemoteError(e) } as RpcErrorPayload,
+                    { type: RpcMessageType.error, id: payload.id, code: chosenCode(e), error: toRemoteError(e) } as RpcErrorPayload,
                     MessageType.ErrorMessage
                 )
             }

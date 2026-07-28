@@ -17,6 +17,7 @@ msgrpc check     compare the source against a written contract, exit 1 on a brea
 msgrpc console   browse a live network: peers, what they expose, calls and events
 msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 msgrpc mcp       serve the network to an MCP client over stdio
+msgrpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
 
 msgrpc peers     who is on the network right now
 msgrpc describe  what one peer exposes
@@ -37,7 +38,10 @@ msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
-| `--sign <keyfile>` | console, mcp, verbs | — | HMAC keys, so it can talk to a signed network |
+| `--sign <keyfile>` | console, mcp, verbs, serve | — | HMAC keys, so it can talk to a signed network |
+| `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
+| `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
+| `--fail <ns.method=Code>` | serve | — | answer with that RPC error code; repeatable. `Timeout` never answers |
 | `--name <peer>` | mcp | `mcp-<three words>` | how it identifies itself to the network |
 | `--name <peer>` | verbs | `cli-<three words>` | how it identifies itself to the network |
 | `--wait <ms>` | verbs | `5000` | how long to wait for the peer to appear before giving up |
@@ -415,6 +419,84 @@ can reproduce:
 $ msgrpc call plantServr plant.read --hub http://bus:8080
 msgrpc: plantServr did not appear within 5000 ms. Run 'msgrpc peers' to see who is there.
 ```
+
+## serve
+
+A peer built from a contract rather than from code, so an HMI has something to talk to and a test
+has a device willing to fail on request — which a real one is not.
+
+```
+msgrpc serve --contract plant.types.json --hub http://bus:8080 --name fakePlant
+```
+
+```
+$ msgrpc describe fakePlant --hub http://bus:8080
+fakePlant — arguments checked
+
+plant@3  Fake
+  halt()
+  read(): { celsius: number(0..100), bar: number(0..10) }
+  writeSetpoint(value: number(0..2000), mode?: "auto" | "manual"): boolean
+  event alarm(string, number(1..3))  0 subscribers
+```
+
+It answers every method with a value of the declared shape, and **refuses what the real peer would
+refuse** — it is given the same schema, so the same validator runs:
+
+```
+$ msgrpc call fakePlant plant.writeSetpoint 3000 --hub http://bus:8080
+msgrpc: fakePlant.plant.writeSetpoint failed: InvalidParams: argument 0: 3000 is above the maximum 2000
+```
+
+The contract is the one already extracted and committed for the deployed peer, so the stand-in
+cannot drift from it: `msgrpc check` fails the build when it would.
+
+### What it generates
+
+Deterministic, and inside whatever the type language carries — a fake whose readings wander is
+pleasant to look at and impossible to assert on.
+
+| the schema says | you get |
+| --- | --- |
+| `number` with `min`/`max` | the midpoint, rounded if `integer` |
+| `string` with `minLength`/`maxLength` | `sample`, padded or trimmed to fit |
+| a union of literals | the first one that is not `null` |
+| an object | its **required** fields only |
+| an array | one element |
+| `bytes` | four bytes, or `maxBytes` of them |
+| `date` | now — a device reporting the epoch reads as a broken clock |
+
+`pattern` is the one it cannot honour; satisfying an arbitrary regular expression is a different
+problem, so a constrained string comes back as the placeholder. A recursive type stops rather than
+descending forever.
+
+### Scripting it
+
+```
+msgrpc serve --contract plant.types.json --script fake.json --fail plant.halt=Unauthorized --hub http://bus:8080
+```
+
+```json
+{
+  "returns": { "plant.read": { "celsius": 84, "bar": 3.2 } },
+  "fails":   { "plant.writeSetpoint": "Timeout" },
+  "emits":   [{ "event": "plant.alarm", "every": 2000 }]
+}
+```
+
+`returns` replaces the generated answer. `fails` answers with an RPC error code instead —
+`Unauthorized`, `Forbidden`, `InvalidParams` and so on — and **`Timeout` is the special one: the
+call is never answered at all**, so the caller's own timeout is what fires. That is the failure an
+HMI handles worst and the one you otherwise stage by pulling a cable. Only the named method is
+affected; the rest of the peer keeps working, so a test can break one thing rather than the device.
+
+`emits` sends a declared event on a timer, with parameters of the declared shape unless the script
+supplies them — the receiving half of an HMI otherwise has nothing to receive.
+
+`--fail <ns.method=Code>` is the same thing without a file, and is repeatable.
+
+**It says it is a fake** on startup and in the class name a console shows, because a stand-in
+mistaken for the device is worse than no stand-in at all.
 
 ## mcp
 

@@ -55,6 +55,32 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **`msgrpc serve`** stands a peer up from a contract, so an HMI has something to talk to and a test
+  has a device willing to fail on request — which a real one is not. It answers every method with a
+  value of the declared shape and **refuses what the real peer would refuse**, since it is handed the
+  same schema and runs the same validator. The contract is the one already extracted and committed
+  for the deployed peer, so the stand-in cannot drift from it: `msgrpc check` fails the build when it
+  would.
+  - Generated values are deterministic and inside whatever the type language carries — the midpoint
+    of a range, required fields only, the first non-null option of a union. A fake whose readings
+    wander is pleasant to look at and impossible to assert on. `pattern` is the one constraint it
+    cannot honour, and a recursive type stops rather than descending forever.
+  - `--script` supplies canned returns, deliberate failures and events on a timer; `--fail
+    ns.method=Code` is the same without a file. **`Timeout` is the special code: the call is never
+    answered at all**, so the caller's own timeout is what fires — the failure an HMI handles worst
+    and the one otherwise staged by pulling a cable. Only the named method is affected, so a test can
+    break one thing rather than the device.
+  - It says it is a fake on startup and in the class name a console shows, because a stand-in
+    mistaken for the device is worse than no stand-in at all.
+- **A method can choose its error code** by throwing an error carrying one. Everything a method threw
+  came back as `Exception`, so a service that wanted to say "you may not do that" could say it only
+  in the message, and a caller reading `code` to decide whether to retry, re-authenticate or give up
+  learned nothing from it. Restricted to the codes the protocol already defines — `Unauthorized`,
+  `Forbidden`, `InvalidParams`, `IncompatibleVersion`, `ClassNotFound`, `MethodNotFound`,
+  `TransportError`, `Timeout` — so an error carrying an unrelated `code`, a Node `ENOENT` say, is
+  still reported as the exception it is. **This changes what callers see** from a method that already
+  throws such an error: the code is now that one rather than `Exception`, and the message is
+  unchanged.
 - **A Problems tab**, and `console.problems` behind it. The transports have always emitted
   `rejected`, `unroutable`, `peerDisplaced` and `transportError`, and the console listened to none
   of them — it wired up `peerOnline`/`peerGone` and dropped the rest. Between them those four cover

@@ -87,3 +87,43 @@ test('a server forgets a peer route when the peer goes away', async (t) => {
     t.falsy(server.peers.get('departing-peer'), 'the route outlived the peer')
     await server.close()
 })
+
+class Gate {
+    /** A method saying "you may not do that", which used to reach the caller only as a message. */
+    async refuse() {
+        throw Object.assign(new Error('this account may not write setpoints'), { code: 'Unauthorized' })
+    }
+    /** A code the protocol does not define, on an error from somewhere else entirely. */
+    async trip() {
+        throw Object.assign(new Error('no such file'), { code: 'ENOENT' })
+    }
+    async burst() {
+        throw new Error('plain')
+    }
+}
+
+test('a method chooses its error code by throwing one the protocol defines', async (t) => {
+    const server = new RpcServer({ name: 'gate-server', transports: [{ port: 3994 }] })
+    server.exposeClassInstance(new Gate(), 'gate')
+    await server.ready()
+    const client = new RpcClient('http://localhost:3994', { name: 'gate-caller', callTimeout: 4000 })
+    await client.ready()
+    const gate = (await client.proxy<Gate>('gate', 'gate-server')).remote!
+
+    // The point: a caller reading `code` to decide whether to re-authenticate or give up now learns
+    // something, where every throw used to arrive as Exception with the reason buried in the text.
+    const refused = await t.throwsAsync(gate.refuse())
+    t.is((refused as unknown as { code?: string }).code, 'Unauthorized')
+    t.regex(String(refused?.message), /may not write setpoints/)
+
+    // A code the protocol does not define is still the exception it is, so an ENOENT from some
+    // unrelated library cannot dress itself up as an RPC verdict.
+    const tripped = await t.throwsAsync(gate.trip())
+    t.is((tripped as unknown as { code?: string }).code, 'Exception')
+
+    const plain = await t.throwsAsync(gate.burst())
+    t.is((plain as unknown as { code?: string }).code, 'Exception')
+
+    await client.close()
+    await server.close()
+})

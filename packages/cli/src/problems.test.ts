@@ -26,9 +26,9 @@ interface ConsolePeer {
     on(event: string, handler: (...args: unknown[]) => void): Promise<unknown>
 }
 
-const pageOn = async (url: string) => {
+const pageOn = async (url: string, as?: string) => {
     const { name } = (await (await fetch(`${url}${consoleIdentityPath}`)).json()) as { name: string }
-    const client = new RpcClient(url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000 })
+    const client = new RpcClient(url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000, ...(as ? { name: as } : {}) })
     return { client, remote: (await client.proxy<ConsolePeer>('console')).remote! }
 }
 
@@ -74,7 +74,10 @@ test('the console reports which link each peer arrived on', async (t) => {
     await server.ready()
 
     const running = await startConsole({ hub: 'http://localhost:3972', port: 7399, host: '127.0.0.1', name: peer('console-links'), callTimeout: 2000 })
-    const { client, remote } = await pageOn(running.url)
+    // Named, so the assertion below is about the page and not about whichever other peer - the hub
+    // is one too - happened to sort first.
+    const page = peer('page-links')
+    const { client, remote } = await pageOn(running.url, page)
 
     const state = await (async () => {
         const deadline = Date.now() + 8000
@@ -88,8 +91,7 @@ test('the console reports which link each peer arrived on', async (t) => {
     t.true(state.peers.includes(device), `peers: ${JSON.stringify(state.peers)}`)
     // The device came over the hub; the page came over the link the console serves itself.
     t.is(state.links[device], 'http://localhost:3972')
-    const page = state.peers.find((name) => name !== device)
-    if (page) t.is(state.links[page], 'this console')
+    t.is(state.links[page], 'this console', `links: ${JSON.stringify(state.links)}`)
 
     await client.close()
     await running.close()

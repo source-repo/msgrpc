@@ -7,6 +7,7 @@ import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
 import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs.js'
+import { startFake, type FakeScript } from './fake.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -24,6 +25,8 @@ const usage = `msgrpc <command> [options]
   console   browse a live network in a browser: peers, what they expose, calls and events
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
+
+  serve     stand a peer up from a contract: answers every method, refuses what it would refuse
 
   peers                             who is on the network right now
   describe  <peer>                  what one peer exposes
@@ -68,6 +71,13 @@ const usage = `msgrpc <command> [options]
     --name <peer>               how it identifies itself, default mcp-<three words>
     --sign <keyfile>            HMAC keys, for a signed network
                                 stdio carries the protocol, so it is not for interactive use
+
+  serve
+    --contract <file>           the contract to serve; every namespace in it is exposed
+    --script <file>             canned returns, deliberate failures and events on a timer
+    --fail <ns.method=Code>     answer with that RPC error code, repeatable
+                                Timeout is the special one: the call is never answered at all
+    --broker / --hub / --prefix / --timeout / --name / --sign as above
 
   broker
     --port <n>                  default 8080, on every interface
@@ -189,7 +199,25 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
  * `msgrpc call plant plant.setpoint 1200 --hub http://bus --json` has to yield exactly
  * ['plant', 'plant.setpoint', '1200'], which means knowing which flags consume the word after them.
  */
-const VALUE_FLAGS = new Set(['--broker', '--hub', '--prefix', '--timeout', '--wait', '--name', '--sign', '--args', '--project', '--out', '--against', '--port', '--host', '--upstream'])
+const VALUE_FLAGS = new Set([
+    '--broker',
+    '--hub',
+    '--prefix',
+    '--timeout',
+    '--wait',
+    '--name',
+    '--sign',
+    '--args',
+    '--project',
+    '--out',
+    '--against',
+    '--port',
+    '--host',
+    '--upstream',
+    '--contract',
+    '--script',
+    '--fail'
+])
 
 const positionals = (argv: string[]) => {
     const words: string[] = []
@@ -244,6 +272,62 @@ const runVerb = async (command: string, argv: string[]) => {
 
     const rawArgs = argv.includes('--args') ? argument(argv, '--args', '[]') : undefined
     return await runCall(peer, target, positionals(argv).slice(3), { ...options, ...(rawArgs !== undefined ? { rawArgs } : {}) })
+}
+
+/**
+ * A stand-in built from a contract, so an HMI has something to talk to and a test has a device
+ * willing to fail on request - which a real one is not.
+ */
+const runFake = async (argv: string[]) => {
+    const contractPath = argument(argv, '--contract', '')
+    if (!contractPath) {
+        process.stderr.write('msgrpc serve: give it --contract <file>\n')
+        process.exit(1)
+    }
+    let schema: RpcSchema
+    try {
+        schema = readSchema(resolve(contractPath))
+    } catch (e) {
+        process.stderr.write(`msgrpc serve: cannot read ${contractPath}: ${(e as Error).message}\n`)
+        process.exit(1)
+    }
+
+    const scriptPath = argument(argv, '--script', '')
+    let script: FakeScript = {}
+    if (scriptPath) {
+        try {
+            script = JSON.parse(readFileSync(resolve(scriptPath), 'utf8')) as FakeScript
+        } catch (e) {
+            process.stderr.write(`msgrpc serve: cannot read ${scriptPath}: ${(e as Error).message}\n`)
+            process.exit(1)
+        }
+    }
+    // The shorthand for the same thing, since staging one failure is the common case and does not
+    // deserve a file.
+    for (const pair of argumentList(argv, '--fail')) {
+        const equals = pair.indexOf('=')
+        if (equals <= 0) {
+            process.stderr.write(`msgrpc serve: --fail wants <namespace>.<method>=<Code>, got '${pair}'\n`)
+            process.exit(1)
+        }
+        script = { ...script, fails: { ...script.fails, [pair.slice(0, equals)]: pair.slice(equals + 1) } }
+    }
+
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'serve', 'fake')
+    const running = await startFake({ ...network, schema, ...(Object.keys(script).length ? { script } : {}) })
+    process.stdout.write(`msgrpc serve: ${network.name} answering ${running.namespaces.join(', ')} from ${contractPath}\n`)
+    // Anything calling this is talking to a stand-in. Worth one line, since a fake that is mistaken
+    // for the device is worse than no fake at all.
+    process.stderr.write('msgrpc serve: this is a fake. It answers from the contract, not from a device.\n')
+
+    const stop = () =>
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch(() => process.exit(1))
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+    await new Promise(() => {})
 }
 
 const runBroker = async (argv: string[]) => {
@@ -350,6 +434,10 @@ const main = () => {
     }
     if (command === 'mcp') {
         void runMcp(argv).catch(fail)
+        return
+    }
+    if (command === 'serve') {
+        void runFake(argv).catch(fail)
         return
     }
     if (command === 'peers' || command === 'describe' || command === 'call' || command === 'watch') {

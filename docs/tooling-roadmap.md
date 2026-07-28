@@ -124,19 +124,18 @@ It did **not** explain item 9 below: the flakiness did not reproduce while the p
 and six healthy loads produced no reports at all. Worth retrying the next time it happens, which is
 the whole point of the history being there.
 
-## 4. A fake peer from a contract
+## 4. A fake peer from a contract — done in msgrpc-cli 2.5.0
 
-```
-msgrpc serve --contract plant.types.json --name fakePlant
-```
+`msgrpc serve --contract plant.types.json`, with `--script` for canned returns, deliberate failures
+and timed events, and `--fail ns.method=Code` as the shorthand. `Timeout` never answers at all.
 
-Answers every method in a contract with a schema-valid value. The type language and the validator
-already exist, so generating a conforming value from a `TypeNode` reuses `Schema.ts`. Lets an HMI be
-developed with no plant attached, and gives the console a target that is not a real valve.
+Building it turned up a gap in the library: a method had no way to choose its error code, so every
+throw reached the caller as `Exception` and fault injection could not stage `Unauthorized`. Errors
+carrying a code the protocol defines are now honoured.
 
-With `--script responses.json` for controlled returns and `--fail plant.writeSetpoint=Timeout` for
-fault injection, it also stages "what does the HMI do when the device stops answering", which is
-otherwise close to impossible to arrange.
+Still open: a mode that varies its answers over time. Deterministic was the right default - a fake
+you cannot assert on is not a test fixture - but an HMI being demonstrated wants a reading that
+moves, and `--script` cannot express that.
 
 ## 5. Record and replay
 
