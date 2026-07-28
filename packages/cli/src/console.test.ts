@@ -1,8 +1,8 @@
 import anyTest, { TestFn } from 'ava'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
-import { rpc, rpcNamespace, RpcSchema, RpcServer } from '@source-repo/msgrpc'
-import { startConsole } from './console.js'
+import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer } from '@source-repo/msgrpc'
+import { consolePeer, startConsole, type ConsoleService } from './console.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
@@ -33,7 +33,7 @@ const waitFor = async (condition: () => boolean, timeout = 8000) => {
     }
 }
 
-/** Polls an endpoint until it answers what the test is waiting for, then returns whatever it last saw. */
+/** Polls a call until it answers what the test is waiting for, then returns whatever it last saw. */
 const pollUntil = async <T>(fetcher: () => Promise<T>, satisfied: (value: T) => boolean, timeout = 8000) => {
     const deadline = Date.now() + timeout
     for (;;) {
@@ -59,7 +59,14 @@ const schema: RpcSchema = {
     }
 }
 
-test('the console discovers a peer, describes it, calls it and streams its events', async (t) => {
+/** Connects the way the app does: an ordinary msgrpc client over the origin that served the page. */
+const browserClient = async (url: string) => {
+    const client = new RpcClient(url, { defaultTarget: consolePeer, callTimeout: 8000, readyTimeout: 8000 })
+    const proxy = await client.proxy<ConsoleService & { on: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown> }>('console')
+    return { client, remote: proxy.remote! }
+}
+
+test('the console discovers a peer, describes it, calls it and streams its events over msgrpc', async (t) => {
     if (t.context.skipped) {
         t.pass(`no MQTT broker at ${BROKER_URL} - skipped`)
         return
@@ -75,20 +82,18 @@ test('the console discovers a peer, describes it, calls it and streams its event
     await server.ready()
 
     const running = await startConsole({ broker: BROKER_URL, prefix, port: 7391, host: '127.0.0.1', name: 'console-test', callTimeout: 5000 })
-    const get = async (path: string) => (await fetch(`${running.url}${path}`)).json() as Promise<Record<string, unknown>>
-    const post = async (path: string, body: unknown) =>
-        (await fetch(`${running.url}${path}`, { method: 'POST', body: JSON.stringify(body) })).json() as Promise<Record<string, unknown>>
+    const { client, remote } = await browserClient(running.url)
 
     // Discovery comes from retained presence, so nothing probes and nothing is configured.
     const peers = await pollUntil(
-        async () => ((await get('/api/peers')).peers as string[]) ?? [],
+        async () => (await remote.peers()).peers,
         (found) => found.includes('boilerServer')
     )
     t.true(peers.includes('boilerServer'), `discovered peers: ${JSON.stringify(peers)}`)
 
     // Describe reports what the server exposes, with types from the schema.
-    const described = (await get('/api/describe?peer=boilerServer')) as unknown as {
-        namespaces: { name: string; methods: { name: string; params?: unknown[] }[]; events: { name: string }[] }[]
+    const described = (await remote.describe('boilerServer')) as {
+        namespaces: { name: string; methods: { name: string; params?: unknown[]; paramNames?: string[] }[] }[]
     }
     const boiler = described.namespaces.find((namespace) => namespace.name === 'boiler')
     t.truthy(boiler, `namespaces: ${JSON.stringify(described.namespaces?.map((n) => n.name))}`)
@@ -98,58 +103,49 @@ test('the console discovers a peer, describes it, calls it and streams its event
     )
     t.deepEqual(boiler!.methods[0].params, [{ kind: 'number', max: 120 }])
 
-    // Subscribe before calling, so the event the call emits is streamed.
-    const streamed: unknown[] = []
-    const stream = await fetch(`${running.url}/api/events`)
-    const reader = stream.body!.getReader()
-    void (async () => {
-        const decoder = new TextDecoder()
-        for (;;) {
-            const { done, value } = await reader.read()
-            if (done) return
-            const text = decoder.decode(value)
-            if (text.includes('event: event')) streamed.push(text)
-        }
-    })()
-    t.deepEqual(await post('/api/watch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: true, already: false })
+    // Subscribe before calling, so the event the call emits reaches the browser.
+    const streamed: { peer: string; namespace: string; event: string; args: unknown[] }[] = []
+    await remote.on('event', (event: unknown) => void streamed.push(event as (typeof streamed)[number]))
+    t.deepEqual(await remote.watch('boilerServer', 'boiler', 'changed'), { watching: true, already: false })
 
-    const called = await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [90] })
+    const called = await remote.call('boilerServer', 'boiler', 'setTemperature', [90])
     t.is(called.result, 90)
     t.is(typeof called.ms, 'number')
 
     await waitFor(() => streamed.length > 0)
-    t.regex(String(streamed[0]), /"event":"changed"/)
-    t.regex(String(streamed[0]), /\[90\]/)
+    t.is(streamed[0].event, 'changed')
+    t.deepEqual(streamed[0].args, [90])
+    t.is(streamed[0].peer, 'boilerServer')
 
     // A refused call comes back with its code rather than as a transport failure.
-    const refused = await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [500] })
+    const refused = await remote.call('boilerServer', 'boiler', 'setTemperature', [500])
     t.is(refused.code, 'InvalidParams')
     t.regex(String(refused.error), /above the maximum 120/)
 
     // Unwatching has to stop the events, not merely change a label.
-    t.deepEqual(await post('/api/unwatch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: false, already: false })
-    t.deepEqual(((await get('/api/peers')).watching as string[]) ?? [], [])
+    t.deepEqual(await remote.unwatch('boilerServer', 'boiler', 'changed'), { watching: false, already: false })
+    t.deepEqual((await remote.peers()).watching, [])
     // The server drops its side too, rather than emitting into a listener nobody reads.
     t.is(server.rpc.eventProxies.size, 0, 'the server kept a subscription after unwatch')
 
     const before = streamed.length
-    await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [70] })
+    await remote.call('boilerServer', 'boiler', 'setTemperature', [70])
     await new Promise((resolve) => setTimeout(resolve, 500))
     t.is(streamed.length, before, 'an event arrived after unwatching')
 
     // Unwatching twice is not an error, and watching again works.
-    t.deepEqual(await post('/api/unwatch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: false, already: true })
-    t.deepEqual(await post('/api/watch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: true, already: false })
-    await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [80] })
+    t.deepEqual(await remote.unwatch('boilerServer', 'boiler', 'changed'), { watching: false, already: true })
+    t.deepEqual(await remote.watch('boilerServer', 'boiler', 'changed'), { watching: true, already: false })
+    await remote.call('boilerServer', 'boiler', 'setTemperature', [80])
     await waitFor(() => streamed.length > before)
-    t.regex(String(streamed[streamed.length - 1]), /\[80\]/)
+    t.deepEqual(streamed[streamed.length - 1].args, [80])
 
-    await reader.cancel().catch(() => {})
+    await client.close()
     await running.close()
     await server.close()
 })
 
-test('the console page is served and needs no network to render', async (t) => {
+test('the console app is served and needs no network to render', async (t) => {
     if (t.context.skipped) {
         t.pass('no broker - skipped')
         return
@@ -159,8 +155,18 @@ test('the console page is served and needs no network to render', async (t) => {
 
     t.regex(html, /<title>msgrpc console<\/title>/)
     // Self-contained: nothing to fetch from a CDN on a plant network with no route to the internet.
-    t.false(/src="http/.test(html), 'the page should not load anything remote')
-    t.false(/href="http/.test(html), 'the page should not load anything remote')
+    t.false(/(src|href)="(https?:)?\/\//.test(html), 'the page should not load anything remote')
+
+    // The script and stylesheet it names are served from the same place, so the page actually runs.
+    for (const asset of [...html.matchAll(/(?:src|href)="\.\/([^"]+)"/g)].map((match) => match[1])) {
+        const response = await fetch(`${running.url}/${asset}`)
+        t.is(response.status, 200, `${asset} was not served`)
+    }
+
+    // An unknown path is a client-side route, not a 404, and it must not escape the asset directory.
+    t.is((await fetch(`${running.url}/peers/boilerServer`)).status, 200)
+    const traversal = await fetch(`${running.url}/..%2f..%2fpackage.json`)
+    t.regex(await traversal.text(), /<title>msgrpc console<\/title>/, 'a traversal served a file from outside the app')
 
     await running.close()
 })

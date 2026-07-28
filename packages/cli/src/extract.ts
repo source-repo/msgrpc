@@ -150,6 +150,7 @@ const namespaceDeclaration = (declaration: ClassDeclaration) => {
 
 const methodToSchema = (method: MethodDeclaration, context: Context): MethodSchema => {
     const params: TypeNode[] = []
+    const paramNames: string[] = []
     let rest: TypeNode | undefined
     for (const parameter of method.getParameters()) {
         const at = { ...context, where: `${context.where} argument ${params.length}`, node: parameter }
@@ -162,13 +163,14 @@ const methodToSchema = (method: MethodDeclaration, context: Context): MethodSche
         // An optional parameter is expressed as a union admitting null, which is what the
         // validator reads to decide how few arguments a caller may send.
         params.push(parameter.isOptional() ? { kind: 'union', options: [node, { kind: 'literal', value: null }] } : node)
+        paramNames.push(parameter.getName())
     }
 
     let returnType = method.getReturnType()
     if (isPromise(returnType)) returnType = returnType.getTypeArguments()[0] ?? returnType
     const returns = returnType.isVoid() || returnType.isUndefined() ? undefined : typeToNode(returnType, { ...context, where: `${context.where} return` })
 
-    return { params, ...(rest ? { rest } : {}), ...(returns ? { returns } : {}) }
+    return { params, ...(paramNames.length ? { paramNames } : {}), ...(rest ? { rest } : {}), ...(returns ? { returns } : {}) }
 }
 
 /**

@@ -134,14 +134,50 @@ no scan, no probe and no configured list of hosts.
 A peer only appears in detail if its server was started with `exposeIntrospection`; otherwise the
 console says so rather than guessing.
 
+### Calling a method
+
+Each method folds open into a form with **one field per argument**, built from the argument's own
+type rather than asking for the whole call as a JSON array:
+
+| the schema says | you get |
+| --- | --- |
+| `number`, with `min`/`max` | a number input carrying those bounds |
+| a union of literals | a dropdown of exactly those values |
+| `boolean` | a checkbox |
+| `date` | a date and time picker |
+| `bytes` | a hex field |
+| an object or a named type | a JSON box **pre-filled with the shape's required fields** |
+
+Optional arguments have a checkbox that decides whether they are sent at all, so
+`writeSetpoint(1200)` and `writeSetpoint(1200, 'auto')` are both reachable. Argument names come
+from `paramNames` in the contract, which `extract` writes — without a contract the form falls back
+to positions, since nothing else knows what argument 0 is called.
+
+JSON has no date and no byte string, so what is typed into a JSON box is walked against the type
+before it is sent: an ISO string where the schema says `date` becomes a `Date`. Otherwise every
+object with a timestamp in it would be rejected by the server that asked for one.
+
+### Watching events
+
 The watch button toggles, and unwatching drops the server's subscription too rather than only
 silencing the browser — the subscriber count next to the event moves with it. Closing the console
 unsubscribes everything it held, so a debugging session does not leave listeners behind on servers
 that outlive it.
 
-The page is served from the CLI with no CDN, no bundler and no framework — one HTTP handler, an
-inlined page, and server-sent events for the live half. A plant network usually has no route to the
-internet, and a tool for looking at one should be something you can read in a sitting.
+### How it is built
+
+The browser half is a React app talking to the CLI **over msgrpc itself**. The CLI runs an
+`RpcServer` on the same HTTP server that serves the page and exposes a `console` namespace
+(`peers`, `describe`, `call`, `watch`, `unwatch`) plus `event` and `peer` events; the page is an
+ordinary `RpcClient`. There is no REST API and no server-sent events, and the console is the
+library's own first client — a bug in event routing shows up here before it reaches a plant.
+
+Everything is bundled into the CLI's `dist`: no CDN, no runtime download. A plant network usually
+has no route to the internet, and a page that fetches from one renders blank exactly where it is
+needed.
+
+`npm run dev:web` in the package serves the app with hot reload against a console started
+separately on port 7300.
 
 ### Signed networks
 

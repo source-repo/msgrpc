@@ -37,6 +37,12 @@ export interface FieldNode {
 export interface MethodSchema {
     /** One entry per positional parameter. */
     params: TypeNode[]
+    /**
+     * Parameter names, positionally matching `params`. Carried for tooling that has to present a
+     * call to a person - a form needs a label, and "argument 0" is not one. Never used for
+     * checking, so a schema written by hand can leave it out.
+     */
+    paramNames?: string[]
     /** Type of any further arguments, for a rest parameter. Absent means no extra arguments. */
     rest?: TypeNode
     /** Checked only when result validation is on. */

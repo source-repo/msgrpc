@@ -61,6 +61,10 @@
               ]
             }
           ],
+          "paramNames": [
+            "value",
+            "mode"
+          ],
           "returns": {
             "kind": "number"
           }
@@ -71,6 +75,9 @@
               "kind": "ref",
               "name": "Limits"
             }
+          ],
+          "paramNames": [
+            "limits"
           ],
           "returns": {
             "kind": "ref",
@@ -106,6 +113,9 @@
             {
               "kind": "number"
             }
+          ],
+          "paramNames": [
+            "count"
           ],
           "returns": {
             "kind": "array",

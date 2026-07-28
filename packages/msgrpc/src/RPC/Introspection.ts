@@ -16,6 +16,8 @@ export interface DescribedMethod {
     name: string
     /** Present when a schema describes this method; absent when nothing does. */
     params?: TypeNode[]
+    /** Positionally matching `params`, when the schema carries them. */
+    paramNames?: string[]
     rest?: TypeNode
     returns?: TypeNode
 }
@@ -74,7 +76,7 @@ export class Introspection {
             const methodNames = [...(manage.findNameSpaceMethodMap(name)?.keys() ?? [])].sort()
             const methods: DescribedMethod[] = methodNames.map((method) => {
                 const signature = described?.methods[method]
-                return { name: method, ...(signature ? { params: signature.params, rest: signature.rest, returns: signature.returns } : {}) }
+                return { name: method, ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}) }
             })
 
             // Declared events plus any a peer is currently subscribed to, since a server without a

@@ -1,5 +1,32 @@
 # Changelog
 
+## msgrpc-cli 2.2.0
+
+- **`msgrpc console` is now a React app, and it reaches the CLI over msgrpc itself.** The CLI runs
+  an `RpcServer` on the same HTTP server that serves the page and exposes a `console` namespace
+  (`peers`, `describe`, `call`, `watch`, `unwatch`) plus `event` and `peer` events; the browser is
+  an ordinary `RpcClient`. The REST endpoints and the server-sent event stream are gone. The
+  console is now the library's own first client, so a fault in event routing surfaces here before
+  it reaches a plant.
+- **A method folds open into a form with one field per argument**, built from that argument's type:
+  a number input carrying the schema's bounds, a dropdown for a union of literals, a checkbox for a
+  boolean, a picker for a date, a hex field for bytes, and for an object a JSON box pre-filled with
+  the shape's required fields. Optional arguments have a checkbox deciding whether they are sent at
+  all. Previously the whole call had to be written as one JSON array.
+- JSON typed into a field is walked against the type before it is sent, so an ISO string where the
+  schema says `date` becomes a `Date`. Without this any object carrying a timestamp was rejected by
+  the server that asked for one.
+- The browser waits longer than the console's own `--timeout`, which the console reports. Both
+  defaulted to 10 s, so a call into an unreachable peer used to time out in the browser at the same
+  moment the console was forming the answer that said why.
+- Everything is bundled into `dist/web`; nothing is fetched at runtime.
+
+## msgrpc 2.1.0
+
+- `MethodSchema.paramNames` carries parameter names, and `msgrpc.describe()` reports them. Tooling
+  that has to present a call to a person needs a label, and "argument 0" is not one. Optional and
+  never used for checking, so a hand-written schema can leave it out. `msgrpc extract` writes it.
+
 ## msgrpc-cli 2.1.0
 
 - `msgrpc console --sign <keyfile>` lets the console take part in a signed network. Without it the
