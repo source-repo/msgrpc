@@ -245,6 +245,18 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         for (const route of this.openRoutes) if (route.startsWith(mark) || route.endsWith(`\u0000${peer}`)) this.openRoutes.delete(route)
     }
 
+    /** Named once each, so a peer that reconnects in a loop does not bury the first report. */
+    private warnedAboutDisplacing = new Set<string>()
+    private warnAboutDisplacement(name: string) {
+        this.emit(TransportEvent.peerDisplaced, name)
+        if (this.warnedAboutDisplacing.has(name)) return
+        this.warnedAboutDisplacing.add(name)
+        console.warn(
+            `msgrpc: '${name}' announced itself on '${this.name}' while another live connection already held that name. ` +
+                'The newcomer takes the address, so if both are really running, replies will reach the wrong one. Give them distinct names.'
+        )
+    }
+
     private warnedAboutRelay = false
     /**
      * Said once, and only when this server actually forwards something. Without an authenticator
@@ -274,6 +286,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         const known = this.peerSockets.get(name)
         if (known === socket) return
         if (known && carried) return
+        // A live connection already answers to this name, and the newcomer is about to take the
+        // address off it. The takeover is deliberate - a peer reconnecting after a blip announces
+        // itself while the server may still hold the dead socket, and refusing it would lock a peer
+        // out of its own name - but it must not be silent. Two peers genuinely sharing a name send
+        // each other's replies into the wrong socket, which reads as calls timing out for no reason.
+        if (known && known.connected) this.warnAboutDisplacement(name)
         this.peerSockets.set(name, socket)
         // Registered as well as recorded: the shared registry is what the switch routes on, and
         // what a server reads to work out which peers it can advertise onwards.

@@ -64,13 +64,15 @@ const findHeaderEnd = (at: (index: number) => number, length: number) => {
  * reconnects. peerGone is emitted by server-side transports when an identified peer's connection
  * drops, and peerOnline when one announces itself, which is how a peer is discovered at all.
  * rejected is emitted when an inbound frame fails an authentication check. unroutable is emitted
- * when a frame cannot be delivered to its target.
+ * when a frame cannot be delivered to its target. peerDisplaced is emitted when a new connection
+ * announces a name another live connection already holds, and takes the route over.
  */
 export const TransportEvent = {
     connected: 'connected',
     disconnected: 'disconnected',
     peerOnline: 'peerOnline',
     peerGone: 'peerGone',
+    peerDisplaced: 'peerDisplaced',
     rejected: 'rejected',
     unroutable: 'unroutable',
     transportError: 'transportError'

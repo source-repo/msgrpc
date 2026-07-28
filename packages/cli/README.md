@@ -270,6 +270,14 @@ The browser half is a React app talking to the CLI **over msgrpc itself**. The C
 API and no server-sent events, and the console is the library's own first client — a bug in event
 routing shows up here before it reaches a plant.
 
+Each page takes a random readable name — `page-drink-love-spy` — kept in `sessionStorage`, so a
+reload comes back as the same peer and a second tab is simply a different one. It is not derived
+from the URL, because a name is an address: every browser pointed at one console would derive the
+same one, and then two pages answer to it and each other's replies go to whichever the console
+registered last. A page cannot detect that, since `localStorage` is per browser profile and cannot
+see the other browser. Add `?name=lab-browser` to give a page a name of its own — the page's version
+of the CLI's `--name` — for when it should be recognisable in a peer list rather than merely unique.
+
 The page is an `RpcServer` too, not a client. It serves over the connection it opens to the console,
 which is the only thing a browser can do since it cannot listen, and that is what lets its `chat`
 namespace be called by another peer. The same object calls outwards with `proxy()`, so browsing the

@@ -354,3 +354,29 @@ test.serial('a socket.io peer discovers and calls a peer that only exists on the
     await plant.close()
 })
 
+
+test('a second peer announcing a live name takes the address, and says so', async (t) => {
+    // Deliberate rather than refused: a peer reconnecting after a blip announces itself while the
+    // server may still hold the dead socket, and refusing it would lock a peer out of its own name.
+    // Silent is the part that hurts - two peers really sharing a name send each other's replies
+    // into the wrong socket, which reads as calls timing out for no reason at all.
+    const hub = new RpcServer({ name: peer('hub9'), transports: [{ port: 3983 }] })
+    await hub.ready()
+    const displaced: string[] = []
+    hub.transports[0].on(TransportEvent.peerDisplaced, (name: string) => displaced.push(name))
+
+    const first = new RpcClient('http://localhost:3983', { name: peer('twin'), defaultTarget: peer('hub9'), callTimeout: 4000 })
+    await first.ready()
+    await waitFor(() => hub.peers.names().includes(peer('twin')))
+    t.deepEqual(displaced, [], 'the first arrival displaces nobody')
+
+    const second = new RpcClient('http://localhost:3983', { name: peer('twin'), defaultTarget: peer('hub9'), callTimeout: 4000 })
+    await second.ready()
+    await waitFor(() => displaced.length > 0)
+    t.deepEqual(displaced, [peer('twin')], 'the collision should be reported, not swallowed')
+    t.true(hub.peers.names().includes(peer('twin')), 'the name stays routable, now to the newcomer')
+
+    await second.close()
+    await first.close()
+    await hub.close()
+})

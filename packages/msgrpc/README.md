@@ -196,6 +196,14 @@ Over MQTT this is retained presence: subscribing to `<prefix>/presence/+` hands 
 already online, and a last will covers a peer that dies rather than leaves. Over socket.io the
 server keeps the list and sends it to each peer that announces itself.
 
+**A name is an address, so two peers must not share one.** When a connection announces a name
+another live connection already holds, the newcomer takes the address and the server emits
+`TransportEvent.peerDisplaced` and warns once. The takeover is deliberate: a peer reconnecting after
+a blip announces itself while the server may still hold the dead socket, and refusing it would lock
+a peer out of its own name. What the event is for is the other case — two peers genuinely running
+under one name send each other's replies into the wrong socket, which reads as calls timing out for
+no reason, and is close to undiagnosable if nothing says so.
+
 **A server relays for the peers connected to it.** A frame addressed to another peer it can see is
 forwarded rather than executed locally, which is what makes a peer that can only dial out reachable
 at all. A server holding both a socket.io listener and a broker connection therefore bridges them:

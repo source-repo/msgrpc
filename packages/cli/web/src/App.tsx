@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RpcServer, TransportEvent, type RpcSchema } from '@source-repo/msgrpc'
-import { claimPeerName } from './peerName'
+import { pageName } from './peerName'
 import { Chat } from './Chat'
 import { ChatMessage, ChatService } from './ChatService'
 // Extracted from ChatService by `npm run contract` and committed. A page is the one peer nobody can
@@ -33,18 +33,14 @@ const useConsole = () => {
 
     useEffect(() => {
         let server: RpcServer | undefined
-        let release: (() => void) | undefined
         void (async () => {
             try {
                 // Ask who is serving this page before addressing it: the console's name is its own
                 // name on the network, so it differs between instances.
                 const consoleName = await fetchConsoleName()
-                // Derived from the console rather than drawn at random, so a reload comes back as
-                // the same peer. A second tab on the same console takes a suffix instead, since two
-                // pages announcing one name is two pages sharing an address.
-                const claimed = await claimPeerName(window.location.host)
-                release = claimed.release
-                const name = claimed.name
+                // Random per tab, kept across its reloads. See peerName: anything derived from the
+                // URL gives every browser on this console the same name, and a name is an address.
+                const name = pageName()
                 setMe(name)
 
                 server = new RpcServer({
@@ -89,10 +85,7 @@ const useConsole = () => {
                 setStatus(`cannot reach the console: ${(e as Error).message}`)
             }
         })()
-        return () => {
-            release?.()
-            void server?.close()
-        }
+        return () => void server?.close()
     }, [])
 
     return { service, status, me, events, peerChange, said, peer }
