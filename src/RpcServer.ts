@@ -1,6 +1,7 @@
 import { Server } from 'http'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
+import { RpcSchema } from './RPC/Schema.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
@@ -52,6 +53,17 @@ export interface RpcServerOptions {
     exposeManagement?: boolean
     /** How long ready() waits for every transport to connect before throwing. 0 waits forever. */
     readyTimeout: number
+    /** Describes what exposed methods accept, so arguments off the wire can be checked. */
+    schema?: RpcSchema
+    /**
+     * 'described' (the default when a schema is given) checks the namespaces the schema covers.
+     * 'required' refuses anything undescribed. 'off' disables checking without removing the schema.
+     */
+    validation?: 'off' | 'described' | 'required'
+    /** Check what handlers return against the schema too. Off by default: it is a self-check. */
+    validateResults?: boolean
+    /** Refuse to expose a class that marks no @rpc methods, rather than publishing all of them. */
+    requireExplicitExposure?: boolean
 }
 
 export class RpcServer implements IManageRpc {
@@ -134,6 +146,10 @@ export class RpcServer implements IManageRpc {
             }
             return undefined
         }
+        this.rpc.schema = this.options.schema
+        this.rpc.validation = this.options.validation ?? (this.options.schema ? 'described' : 'off')
+        this.rpc.validateResults = this.options.validateResults ?? false
+        this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         this.readyFlag = true
         this.init()

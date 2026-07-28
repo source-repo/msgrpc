@@ -25,7 +25,7 @@ export interface RpcCallInstanceMethodPayload extends RpcMessage {
     params: unknown[]
 }
 
-export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden'
+export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden' | 'InvalidParams'
 
 /**
  * A remote error flattened into something that survives MsgPack/JSON encoding.

@@ -122,6 +122,79 @@ readyTimeout: how long `ready()` waits for the transport to connect before throw
 failCallsOnDisconnect: reject in-flight calls as soon as the link drops rather than letting each
 wait out its own timeout. Default `true`.
 
+# Exposing methods
+
+`exposeClassInstance` walks the prototype chain and publishes every function it finds, so a helper
+a class never meant to offer becomes callable by anyone who can reach the transport. Marking the
+intended methods turns that into an allow-list.
+
+```typescript
+import { rpc } from '@source-repo/msgrpc'
+
+class Plant {
+    @rpc async writeSetpoint(value: number) { ... }
+    @rpc async readSetpoint() { ... }
+    async wipeConfiguration() { ... }        // unmarked, so unreachable
+}
+```
+
+A standard ECMAScript decorator, so no `experimentalDecorators` is needed. Marks are inherited, so
+a subclass keeps its parent's. Without decorators, `exposeMethods(Plant, ['writeSetpoint'])` does
+the same and rejects names that are not methods.
+
+A class that marks nothing keeps the old behaviour and exposes everything. Set
+`requireExplicitExposure` on `RpcServer` to refuse such a class instead, which makes the discipline
+enforceable across a project.
+
+# Checking arguments
+
+Types are a compile-time promise between a client and a server that share a class. Nothing about
+MQTT or a browser page guarantees the caller is one of those - a Python historian or a Node-RED
+flow calling in over MQTT 5 shares none of your types - so a schema lets the server check what it
+was actually sent.
+
+```typescript
+const schema: RpcSchema = {
+    schema: 1,
+    namespaces: {
+        plant: {
+            version: '3',
+            methods: {
+                writeSetpoint: { params: [{ kind: 'number', min: 0, max: 2000 }], returns: { kind: 'number' } }
+            }
+        }
+    }
+}
+
+const server = new RpcServer({ transports: [{ brokerurl }], schema })
+```
+
+A call that does not match is refused with `InvalidParams` before it reaches the method, and the
+message names the offending position: `argument 0: expected number, got string (this server serves
+plant@3)`.
+
+The type language is small on purpose. It describes what MsgPack actually carries, so `bytes`
+(`Uint8Array`) and `date` are values rather than string encodings, and it is checkable without
+pulling a validation engine into a package that ships to browsers and embedded targets. `ref` names
+a shared or recursive type; nesting beyond 32 levels is refused rather than exhausting the stack.
+
+| option | effect |
+| --- | --- |
+| `validation: 'described'` | check the namespaces the schema covers, let the rest through (default when a schema is given) |
+| `validation: 'required'` | refuse anything the schema does not describe |
+| `validation: 'off'` | disable checking without removing the schema |
+| `validateResults` | check what handlers return too; off by default, since it is a self-check |
+
+Set `validate: false` on a namespace to skip a hot path where the cost is not worth paying.
+Validating `writeSetpoint(number)` is not the same proposition as validating a ten-thousand element
+telemetry array on every publish.
+
+`version` on a namespace is a diagnostic, not a gate. The receiver always checks against its own
+schema, and that check *is* the compatibility test; the version exists so a caller built against an
+older contract is recognisable as one instead of looking like a caller sending rubbish. The
+`history` field is reserved for a future extraction tool, which can compare a regenerated schema
+against the versions stored there and refuse a breaking change before it ships.
+
 # Errors
 
 A call rejects with an `RpcError` carrying a `code`, the remote `message`, and the remote stack in
@@ -146,6 +219,7 @@ try {
 | `TransportError` | the link dropped, or the message could not be encoded or sent |
 | `Unauthorized` | the caller is not authenticated and the server requires it |
 | `Forbidden` | the caller is authenticated but not permitted this call |
+| `InvalidParams` | the arguments do not match the schema for that method |
 
 # Connection lifecycle
 
