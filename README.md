@@ -8,6 +8,7 @@ TypeScript RPC over WebSocket and MQTT, using classes as contracts shared by cli
 | [`packages/cli`](packages/cli) | extracts a contract from TypeScript source and checks it for breaking changes |
 
 [`docs/mqtt5-frame-spec.md`](docs/mqtt5-frame-spec.md) describes the MQTT 5 wire format.
+[`CHANGELOG.md`](CHANGELOG.md) covers the 2.0.0 rework and what breaks.
 
 ```
 npm install          # installs both workspaces
