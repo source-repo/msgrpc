@@ -9,7 +9,8 @@ import { ChatMessage, ChatService } from './ChatService'
 import chatContract from './chat.types.json'
 import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
-import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
+import { Problems } from './Problems'
+import { ConsoleService, DescribedEvent, NetworkProblem, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -31,6 +32,7 @@ const useConsole = () => {
     const peerChange = useRef<((peer: string, state: string) => void) | null>(null)
     const said = useRef<((from: string, text: string) => void) | null>(null)
     const frames = useRef<((frame: TappedFrame) => void) | null>(null)
+    const problems = useRef<((problem: NetworkProblem) => void) | null>(null)
     const peer = useRef<RpcServer | null>(null)
 
     useEffect(() => {
@@ -79,6 +81,7 @@ const useConsole = () => {
                 // here until a tap is started, and re-subscribing per tap would drop frames in the
                 // gap between the two calls.
                 await proxy.remote!.on('frame', (frame: unknown) => frames.current?.(frame as TappedFrame))
+                await proxy.remote!.on('problem', (problem: unknown) => problems.current?.(problem as NetworkProblem))
                 const remote = proxy.remote as ConsoleService
                 // The console does the waiting: it holds the broker link, enforces --timeout, and
                 // its answer says what went wrong. A browser giving up first would replace that
@@ -94,14 +97,14 @@ const useConsole = () => {
         return () => void server?.close()
     }, [])
 
-    return { service, status, me, events, peerChange, said, frames, peer }
+    return { service, status, me, events, peerChange, said, frames, problems, peer }
 }
 
 /** Which of the side panel's three views is showing. */
-type SideTab = 'chat' | 'events' | 'traffic'
+type SideTab = 'chat' | 'events' | 'traffic' | 'problems'
 
 export const App = () => {
-    const { service, status, me, events, peerChange, said, frames, peer } = useConsole()
+    const { service, status, me, events, peerChange, said, frames, problems, peer } = useConsole()
     const [chats, setChats] = useState<{ [peer: string]: ChatMessage[] }>({})
     const [peers, setPeers] = useState<string[]>([])
     const [offline, setOffline] = useState<Set<string>>(new Set())
@@ -112,12 +115,15 @@ export const App = () => {
     const [tab, setTab] = useState<SideTab>('events')
     const [traffic, setTraffic] = useState<TappedFrame[]>([])
     const [trafficPaused, setTrafficPaused] = useState(false)
+    const [trouble, setTrouble] = useState<NetworkProblem[]>([])
+    const [links, setLinks] = useState<{ [peer: string]: string }>({})
 
     const refreshPeers = useCallback(async () => {
         if (!service) return
         const state = await service.peers()
         setPeers(state.peers)
         setWatching(new Set(state.watching))
+        setLinks(state.links ?? {})
     }, [service])
 
     // The tab is where two consoles are told apart when both are open, so it carries the peer name
@@ -168,6 +174,13 @@ export const App = () => {
         }
     }, [frames, trafficPaused])
 
+    useEffect(() => {
+        problems.current = (problem) => setTrouble((current) => [problem, ...current].slice(0, 200))
+        // Fetched as well as streamed: the console keeps what happened before this page was opened,
+        // and on a network that is already misbehaving that is the part worth reading.
+        if (service) void service.problems().then(({ problems: history }) => setTrouble(history)).catch(() => undefined)
+    }, [service, problems])
+
     const select = async (peer: string) => {
         setSelected(peer)
         setDescribed(null)
@@ -217,6 +230,9 @@ export const App = () => {
                         <span className={`dot${offline.has(peer) ? ' off' : ''}`} />
                         {peer}
                         {peer === me && <span className="you">you</span>}
+                        {/* Which link it was found on. On a plant with the devices on a broker and
+                            the HMIs on a hub, that is the first thing worth knowing about a peer. */}
+                        {links[peer] && links[peer] !== 'this console' && <span className="link">{links[peer]}</span>}
                     </button>
                 ))}
             </aside>
@@ -294,15 +310,18 @@ export const App = () => {
                  * where it matters most.
                  */}
                 <nav className="tabs">
-                    {(['events', 'traffic', 'chat'] as const).map((name) => (
+                    {(['events', 'traffic', 'problems', 'chat'] as const).map((name) => (
                         <button key={name} className={tab === name ? 'tab on' : 'tab'} onClick={() => setTab(name)}>
                             {name}
                             {name === 'traffic' && traffic.length > 0 && <span className="count">{traffic.length}</span>}
+                            {name === 'problems' && trouble.length > 0 && <span className="count bad">{trouble.length}</span>}
                         </button>
                     ))}
                 </nav>
 
                 {tab === 'chat' && <Chat peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />}
+
+                {tab === 'problems' && <Problems problems={trouble} onClear={() => setTrouble([])} />}
 
                 {/* Always mounted, so switching tabs does not drop the tap. See Traffic's `hidden`. */}
                 <Traffic

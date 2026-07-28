@@ -720,3 +720,97 @@ textarea.control {
 .traffic.hidden {
     display: none;
 }
+
+/*
+ * What has gone wrong on the links. Colour-coded like the traffic rows, since the kind is the
+ * first thing you need: refused, undeliverable, displaced, or the link itself.
+ */
+.problems {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+}
+
+.problems header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.problem {
+    padding: 7px 0 7px 8px;
+    border-left: 2px solid var(--line);
+    border-bottom: 1px solid rgba(38, 46, 58, 0.6);
+    font-size: 12px;
+}
+
+.problem.rejected {
+    border-left-color: var(--bad);
+}
+
+.problem.unroutable {
+    border-left-color: var(--warn);
+}
+
+.problem.peerDisplaced {
+    border-left-color: var(--accent);
+}
+
+.problem.transportError {
+    border-left-color: var(--bad);
+}
+
+.problem-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.problem-head time {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.problem .kind {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+}
+
+.problem .link {
+    font-size: 11px;
+}
+
+.problem-body code {
+    color: var(--accent);
+    font-size: 11px;
+}
+
+.problem-body p {
+    margin: 2px 0 0;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.tab .count.bad {
+    background: rgba(255, 107, 107, 0.18);
+    color: #ffb3b3;
+}
+
+/* The link a peer was found on, next to its name in the list. */
+.peer .link {
+    margin-left: auto;
+    padding-left: 8px;
+    color: var(--muted);
+    font-size: 10px;
+    font-family: var(--mono);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 45%;
+}

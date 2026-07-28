@@ -87,9 +87,24 @@ export interface TappedFrame {
     taps: string[]
 }
 
+/**
+ * A frame a transport refused or could not deliver, a name two peers claimed, or a link that
+ * failed. Mirrored from the CLI's console.ts, like the rest of this file.
+ */
+export interface NetworkProblem {
+    at: number
+    kind: string
+    link: string
+    peer?: string
+    target?: string
+    reason?: string
+}
+
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {
-    peers(): Promise<{ peers: string[]; watching: string[]; callTimeout: number }>
+    peers(): Promise<{ peers: string[]; watching: string[]; callTimeout: number; links: { [peer: string]: string } }>
+    /** What has gone wrong on the links, newest first — including before this page was opened. */
+    problems(): Promise<{ problems: NetworkProblem[] }>
     describe(peer: string): Promise<ServerDescription | { error: string; code?: string }>
     call(peer: string, namespace: string, method: string, args: unknown[]): Promise<{ result?: unknown; error?: string; code?: string; ms: number }>
     watch(peer: string, namespace: string, event: string): Promise<{ watching: boolean; already: boolean }>

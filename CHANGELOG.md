@@ -55,6 +55,20 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **A Problems tab**, and `console.problems` behind it. The transports have always emitted
+  `rejected`, `unroutable`, `peerDisplaced` and `transportError`, and the console listened to none
+  of them — it wired up `peerOnline`/`peerGone` and dropped the rest. Between them those four cover
+  every way a call disappears without an answer: refused before the RPC layer, nowhere to deliver
+  it, a name two peers are both answering to, or a link that failed underneath. Until now all of it
+  arrived as an unexplained timeout, which is the hardest kind of problem to diagnose and the one
+  this tooling exists to make visible.
+  - **Kept as well as streamed.** Nothing to switch on, a bounded history, and the page is handed
+    what happened before it was opened — because nobody opens the console until something is already
+    wrong.
+- **Each peer says which link it was found on.** `console.ts` looped over `network.transports` to
+  build the online set and threw the transport away, so a console holding a browser link, a broker
+  and a hub at once could not say which one a peer was on. Peers already connected when the console
+  starts get theirs from the registry, which is how they were discovered in the first place.
 - The console's own contract now **declares its events**. It described five methods and none of its
   three events, so a console pointed at another one showed an empty event list on a service that
   emits `event`, `peer` and now `frame`.

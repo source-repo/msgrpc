@@ -74,6 +74,30 @@ export interface ConsoleTap {
     sources: string[]
 }
 
+/**
+ * A frame a transport refused or could not deliver, a name two peers claimed, or a link that
+ * failed - the four things that otherwise reach a caller only as an unexplained timeout.
+ *
+ * The transports have always emitted these. Nothing listened, so the console showed a call that
+ * never came back and no reason anywhere, which is the hardest kind of problem to diagnose and the
+ * one this tooling exists to make visible.
+ */
+export interface NetworkProblem {
+    at: number
+    /** `rejected`, `unroutable`, `peerDisplaced` or `transportError`. */
+    kind: string
+    /** The link it happened on: the page's own, the broker, or the hub. */
+    link: string
+    /** Who the frame claimed to come from, or the name that was taken over. */
+    peer?: string
+    /** Who an undeliverable frame was addressed to. */
+    target?: string
+    reason?: string
+}
+
+/** How much history the console keeps. These arrive unasked, so the buffer is bounded. */
+const PROBLEM_HISTORY = 200
+
 /** What a browser may ask this console to do. Everything else on the class stays local. */
 @rpcNamespace('console')
 export class ConsoleService extends EventEmitter {
@@ -86,6 +110,7 @@ export class ConsoleService extends EventEmitter {
         event: [event: StreamedEvent]
         peer: [change: PeerChange]
         frame: [frame: TappedFrame]
+        problem: [problem: NetworkProblem]
     }
 
     /**
@@ -116,6 +141,19 @@ export class ConsoleService extends EventEmitter {
         bus.on('frame', (frame: TappedFrame) => this.emit('frame', frame))
     }
 
+    /** Which link each peer was last seen on, written by startConsole as they arrive. */
+    readonly links = new Map<string, string>()
+
+    /** What has gone wrong on the links, newest first and bounded. */
+    private readonly seen: NetworkProblem[] = []
+
+    /** Records a problem and passes it on, so a page open now sees it and one opened later still can. */
+    noteProblem(problem: NetworkProblem) {
+        this.seen.unshift(problem)
+        if (this.seen.length > PROBLEM_HISTORY) this.seen.length = PROBLEM_HISTORY
+        this.emit('problem', problem)
+    }
+
     /** Console-side token -> the taps it opened, here and on other peers, and when they lapse. */
     private readonly held = new Map<string, { expires: number; opened: { peer: string; token: string }[] }>()
     /** Peers whose `frame` event this console has already subscribed to, so it subscribes once. */
@@ -139,7 +177,26 @@ export class ConsoleService extends EventEmitter {
 
     @rpc
     async peers() {
-        return { peers: [...this.online].sort(), watching: [...this.watching.keys()], callTimeout: this.callTimeout }
+        return {
+            peers: [...this.online].sort(),
+            watching: [...this.watching.keys()],
+            callTimeout: this.callTimeout,
+            // Which link each peer was found on. The console holds the browser's, the broker's and
+            // the hub's at once, and on a plant where the devices are on one and the HMIs on
+            // another that is the first thing worth knowing about a peer.
+            links: Object.fromEntries(this.links)
+        }
+    }
+
+    /**
+     * What has gone wrong on the links, newest first.
+     *
+     * Fetched as well as streamed, because these arrive whether or not anyone is watching and the
+     * interesting ones are usually the ones from before you went looking.
+     */
+    @rpc
+    async problems(): Promise<{ problems: NetworkProblem[] }> {
+        return { problems: [...this.seen] }
     }
 
     @rpc
@@ -485,20 +542,65 @@ export const startConsole = async (options: ConsoleOptions) => {
     // listen to. Whoever announced themselves during startup is already in the registry, so the
     // list is seeded from there rather than waiting for them to arrive twice.
     await network.ready()
-    for (const peer of network.peers.names()) if (peer !== options.name) online.add(peer)
-    for (const transport of network.transports) {
+    // In the order the transports were built above, so index 0 is the link the browser arrives on.
+    // A peer's link is worth naming by where it is rather than what the transport calls itself,
+    // which for the MQTT one is this console's own name.
+    const linkNames = ['this console', ...(options.broker ? [options.broker] : []), ...(options.hub ? [options.hub] : [])]
+    const linkOf = (peer: string) => {
+        // The registry knows which module carries a peer, which is how a peer already present at
+        // startup gets a link at all: it announced itself before there was a listener to hear it.
+        const carrier = network.peers.get(peer)
+        const index = network.transports.findIndex((transport) => transport === carrier)
+        return index === -1 ? undefined : linkNames[index]
+    }
+    for (const peer of network.peers.names()) {
+        if (peer === options.name) continue
+        online.add(peer)
+        const link = linkOf(peer)
+        if (link) service.links.set(peer, link)
+    }
+    network.transports.forEach((transport, index) => {
+        const link = linkNames[index] ?? transport.getName()
         transport.on(TransportEvent.peerOnline, (peer: string) => {
-            if (peer === options.name || online.has(peer)) return
+            if (peer === options.name) return
+            service.links.set(peer, link)
+            if (online.has(peer)) return
             online.add(peer)
             service.emit('peer', { peer, state: 'online' })
         })
         transport.on(TransportEvent.peerGone, (peer: string) => {
             // Asked again if it returns: a broker restarted with a tap is a different answer.
             service.forgetBus(peer)
+            service.links.delete(peer)
             if (!online.delete(peer)) return
             service.emit('peer', { peer, state: 'offline' })
         })
-    }
+        // The four the transports have always emitted and nothing ever listened to. Between them
+        // they cover every way a call disappears without an answer: refused before the RPC layer,
+        // undeliverable, answered to whichever connection claimed the name last, or a link that
+        // failed underneath.
+        transport.on(TransportEvent.rejected, (report: { source?: string; reason?: string }) =>
+            service.noteProblem({ at: Date.now(), kind: 'rejected', link, ...(report?.source ? { peer: report.source } : {}), ...(report?.reason ? { reason: report.reason } : {}) })
+        )
+        transport.on(TransportEvent.unroutable, (report: { source?: string; target?: string; reason?: string }) =>
+            service.noteProblem({
+                at: Date.now(),
+                kind: 'unroutable',
+                link,
+                ...(report?.source ? { peer: report.source } : {}),
+                ...(report?.target ? { target: report.target } : {}),
+                reason: report?.reason ?? 'no route to the target'
+            })
+        )
+        // A bare name rather than a report: two peers are answering to it, and calls to either
+        // reach whichever connection arrived last.
+        transport.on(TransportEvent.peerDisplaced, (peer: unknown) =>
+            service.noteProblem({ at: Date.now(), kind: 'peerDisplaced', link, peer: String(peer), reason: 'another connection claimed this name' })
+        )
+        transport.on(TransportEvent.transportError, (e: unknown) =>
+            service.noteProblem({ at: Date.now(), kind: 'transportError', link, reason: e instanceof Error ? e.message : String(e) })
+        )
+    })
 
     await new Promise<void>((resolve) => http.listen(options.port, options.host, resolve))
 

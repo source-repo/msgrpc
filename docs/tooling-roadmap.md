@@ -114,19 +114,15 @@ with `SUCCESS`/`ERROR` by correlation id:
 On a signed network the tap still sees everything: signing wraps frames, it does not encrypt them.
 Worth saying in the docs before someone assumes otherwise.
 
-## 3. A problems panel
+## 3. A problems panel — done in msgrpc-cli 2.5.0
 
-The transports already emit `rejected`, `unroutable`, `peerDisplaced` and `transportError`. **The
-console listens to none of them** — it wires up `peerOnline`/`peerGone` and drops the rest.
+All four transport reports — `rejected`, `unroutable`, `peerDisplaced`, `transportError` — now reach
+a Problems tab and `console.problems`, kept in a bounded history so a page opened after the trouble
+still sees it. Each peer also carries the link it was found on.
 
-Those four are the failure modes the code comments keep worrying about: "the calls just time out
-with nothing to say why", and the name collision 2.4.0 went to such trouble to detect. A panel of
-refused frames, undeliverable frames and name collisions with timestamps is cheap and turns the
-hardest class of bug into a visible line.
-
-Related, same file: `console.ts` loops over `network.transports` to build the `online` set and
-throws away **which transport a peer arrived on**. On a mixed plant/browser network that is the
-first thing you want to know, and it is right there at the listener.
+It did **not** explain item 9 below: the flakiness did not reproduce while the panel was watching,
+and six healthy loads produced no reports at all. Worth retrying the next time it happens, which is
+the whole point of the history being there.
 
 ## 4. A fake peer from a contract
 

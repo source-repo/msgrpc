@@ -280,6 +280,38 @@ colour-coded by kind, with the reply carrying the method it answers and the time
 The tab stays tapping while you look at another tab; the count on the tab label is what arrived
 while you were away.
 
+## Problems
+
+The **Problems** tab is where a call that never comes back says why. Four things the transports have
+always reported and nothing used to listen to:
+
+| kind | what it means |
+| --- | --- |
+| `rejected` | the frame was refused before it reached the RPC layer — a bad signature, an unsafe name, something undecodable |
+| `unroutable` | there was nowhere to deliver it: no such peer, a relay refused, or too many hops |
+| `peerDisplaced` | two peers are answering to one name, so replies reach whichever connected last |
+| `transportError` | the link itself failed |
+
+```
+1:26:44 AM  peerDisplaced  on this console
+            twin-hmi
+            another connection claimed this name
+1:26:42 AM  unroutable     on this console
+            lost-caller → no-such-device
+            no route to the target
+```
+
+There is nothing to switch on: these cost nothing when nothing is wrong, and the ones worth reading
+are usually from before anyone thought to look. The console keeps a bounded history and hands it
+over when a page connects, so **opening the console after the trouble still shows it** — which is
+the usual way round.
+
+`msgrpc watch <console> console.problem` streams the same thing to a shell, and
+`msgrpc call <console> console.problems` fetches the history.
+
+Each peer in the list also now carries **the link it was found on**, which on a plant with the
+devices on a broker and the HMIs on a hub is the first thing worth knowing about one.
+
 ### What it is not
 
 **Not a store-and-forward broker.** Nothing is queued for a peer that is not connected: a frame is

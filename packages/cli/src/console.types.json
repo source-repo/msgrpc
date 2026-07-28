@@ -1,6 +1,44 @@
 {
   "schema": 1,
   "types": {
+    "NetworkProblem": {
+      "kind": "object",
+      "fields": {
+        "at": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "kind": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "link": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "peer": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "target": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "reason": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
     "ServerDescription": {
       "kind": "object",
       "fields": {
@@ -1273,6 +1311,31 @@
                 "type": {
                   "kind": "number"
                 }
+              },
+              "links": {
+                "type": {
+                  "kind": "record",
+                  "values": {
+                    "kind": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "problems": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "problems": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "ref",
+                    "name": "NetworkProblem"
+                  }
+                }
               }
             }
           }
@@ -1537,6 +1600,14 @@
             {
               "kind": "ref",
               "name": "TappedFrame"
+            }
+          ]
+        },
+        "problem": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "NetworkProblem"
             }
           ]
         }
