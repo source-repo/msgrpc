@@ -12,8 +12,14 @@ import {
     rpcNamespace,
     type MessageSigner,
     type MessageVerifier,
+    type RpcSchema,
     type ServerDescription
 } from '@source-repo/msgrpc'
+// Extracted from this file by `npm run contract`, and committed so it is reviewable and so
+// `msgrpc check` can catch a change to the service that would refuse a page built against the old
+// one. The console describing itself with the same machinery it shows other peers is the point:
+// what it cannot describe here, nobody else can describe either.
+import contract from './console.types.json' with { type: 'json' }
 
 /**
  * A browser console for a live msgrpc network: which peers are up, what each one exposes, and a
@@ -233,6 +239,9 @@ export const startConsole = async (options: ConsoleOptions) => {
         name: options.name,
         callTimeout: options.callTimeout,
         readyTimeout: 15000,
+        // So another console can describe this one and get argument fields rather than `call(…)`.
+        schema: contract as RpcSchema,
+        exposeIntrospection: true,
         transports: [
             // socket.io attaches to the same http server and answers /socket.io before the static
             // handler sees it, so the console is one port: page and RPC over the same origin.

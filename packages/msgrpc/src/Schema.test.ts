@@ -127,6 +127,32 @@ test('unions, arrays and named references', (t) => {
     t.regex(validateValue([1], { kind: 'tuple', items: [num, str] }) ?? '', /expected 2 elements/)
 })
 
+test('dictionaries are checked by value type, key and size', (t) => {
+    const readings: TypeNode = { kind: 'record', values: num }
+    t.is(validateValue({ a: 1, b: 2 }, readings), undefined)
+    t.is(validateValue({}, readings), undefined, 'an empty dictionary is a valid one')
+    t.is(validateValue({ a: 1, b: 'x' }, readings), 'value.b: expected number, got string')
+    t.regex(validateValue([1, 2], readings) ?? '', /expected an object, got array/)
+    t.regex(validateValue(new Date(), readings) ?? '', /expected an object, got date/)
+
+    // Bounded like an array: a dictionary is the other shape a caller can grow without limit.
+    t.regex(validateValue({ a: 1, b: 2 }, { kind: 'record', values: num, maxEntries: 1 }) ?? '', /more than 1 entries/)
+
+    // What a numeric index signature becomes, since a JS object key is always a string.
+    const byId: TypeNode = { kind: 'record', values: str, keyPattern: '^-?\\d+$' }
+    t.is(validateValue({ 12: 'a' }, byId), undefined)
+    t.regex(validateValue({ tag: 'a' }, byId) ?? '', /key does not match/)
+
+    const nested: TypeNode = { kind: 'record', values: { kind: 'object', fields: { at: { type: { kind: 'date' } } } } }
+    t.is(validateValue({ 'tank/level': { at: new Date() } }, nested), undefined)
+    t.is(validateValue({ 'tank/level': { at: 1 } }, nested), 'value.tank/level.at: expected a date, got number')
+})
+
+test('a kind the validator does not know is refused rather than passed', (t) => {
+    // Fail-open is the expensive direction: an unchecked value would otherwise wear a checked type.
+    t.regex(validateValue(1, { kind: 'recrod' } as unknown as TypeNode) ?? '', /unknown type kind 'recrod'/)
+})
+
 test('deeply nested values are refused rather than exhausting the stack', (t) => {
     const types = { Node: { kind: 'object', fields: { child: { type: { kind: 'ref', name: 'Node' }, optional: true } } } as TypeNode }
     let deep: Record<string, unknown> = {}
@@ -256,6 +282,19 @@ test('assignability widens for inputs and narrows for outputs', (t) => {
     t.false(assignable(v1, { kind: 'object', fields: { a: { type: num }, b: { type: str } } }))
     t.false(assignable({ kind: 'object', fields: { a: { type: num }, extra: { type: num } } }, v1))
     t.true(assignable({ kind: 'object', fields: { a: { type: num }, extra: { type: num } } }, { kind: 'object', fields: { a: { type: num } }, additional: true }))
+})
+
+test('a dictionary follows its value type, and is not an object with no properties', (t) => {
+    const numbers: TypeNode = { kind: 'record', values: num }
+    t.true(assignable({ kind: 'record', values: { kind: 'number', min: 0, max: 10 } }, numbers))
+    t.false(assignable(numbers, { kind: 'record', values: { kind: 'number', max: 10 } }))
+    t.true(assignable({ kind: 'record', values: num, maxEntries: 4 }, { kind: 'record', values: num, maxEntries: 8 }))
+    t.false(assignable(numbers, { kind: 'record', values: num, maxEntries: 8 }), 'unbounded is not assignable to bounded')
+    t.false(assignable(numbers, { kind: 'record', values: num, keyPattern: '^\\d+$' }))
+
+    // Any key at all against no key at all: the two are not interchangeable in either direction.
+    t.false(assignable(numbers, { kind: 'object', fields: {} }))
+    t.false(assignable({ kind: 'object', fields: {} }, numbers))
 })
 
 const v1: NamespaceSchema = {

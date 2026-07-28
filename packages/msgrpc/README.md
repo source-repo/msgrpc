@@ -419,6 +419,15 @@ The type language is small on purpose. It describes what MsgPack actually carrie
 pulling a validation engine into a package that ships to browsers and embedded targets. `ref` names
 a shared or recursive type; nesting beyond 32 levels is refused rather than exhausting the stack.
 
+`object` describes a known shape and `record` an open one — `{ [tag: string]: Reading }`, which is
+how plant data usually arrives. A record checks every value against one type and leaves the keys
+open, or constrains them with `keyPattern`; `maxEntries` bounds it the way `maxItems` bounds an
+array, since a dictionary is the other shape a caller can grow without limit.
+
+```typescript
+readings: { params: [], returns: { kind: 'record', values: { kind: 'ref', name: 'Reading' } } }
+```
+
 | option | effect |
 | --- | --- |
 | `validation: 'described'` | check the namespaces the schema covers, let the rest through (default when a schema is given) |

@@ -16,7 +16,7 @@ test('a marked class becomes a namespace, and unmarked methods stay out of it', 
     const plant = schema.namespaces.plant
     t.truthy(plant)
     t.is(plant.version, '2')
-    t.deepEqual(Object.keys(plant.methods).sort(), ['blob', 'configure', 'tree', 'writeSetpoint'])
+    t.deepEqual(Object.keys(plant.methods).sort(), ['blob', 'byId', 'configure', 'counts', 'labels', 'readings', 'tree', 'writeSetpoint'])
     t.false('internalOnly' in plant.methods, 'an unmarked method reached the contract')
 })
 
@@ -51,6 +51,27 @@ test('interfaces become named types and a recursive one becomes a reference', (t
     t.deepEqual(node.fields.child.type, { kind: 'ref', name: 'Node' })
 })
 
+test('index signatures become dictionaries rather than being refused', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('tsconfig.json'))
+    t.deepEqual(diagnostics, [])
+
+    // The value type is described, so a wrong reading is still caught; only the keys are open.
+    t.deepEqual(schema.namespaces.plant.methods.readings.returns, { kind: 'record', values: { kind: 'ref', name: 'Reading' } })
+    t.deepEqual(schema.types?.Reading, { kind: 'object', fields: { value: { type: { kind: 'number' } }, at: { type: { kind: 'date' } } } })
+
+    // A numeric index is a string key that has to read as a number.
+    t.deepEqual(schema.namespaces.plant.methods.byId.returns, { kind: 'record', values: { kind: 'string' }, keyPattern: '^-?\\d+$' })
+})
+
+test('two instantiations of one generic alias stay distinct', (t) => {
+    // Both are Record, so keying them by alias name would make the second a reference to the
+    // first - a contract that says string where the method returns number, and looks checked.
+    const { schema } = extractSchema(fixture('tsconfig.json'))
+    t.deepEqual(schema.namespaces.plant.methods.counts.returns, { kind: 'record', values: { kind: 'number' } })
+    t.deepEqual(schema.namespaces.plant.methods.labels.returns, { kind: 'record', values: { kind: 'string' } })
+    t.false('Record' in (schema.types ?? {}), 'a generic instantiation is not a name to share')
+})
+
 test('Promise is unwrapped and Date survives as a value', (t) => {
     const { schema } = extractSchema(fixture('tsconfig.json'))
     const returns = schema.namespaces.plant.methods.blob.returns as { kind: 'object'; fields: Record<string, { type: TypeNode }> }
@@ -70,6 +91,7 @@ test('types that cannot be described are reported, never emitted as any', (t) =>
     t.regex(reasons, /fetch return is generic/, 'a generic should be refused')
     t.regex(reasons, /subscribe argument 0 is a function/, 'a callback should be refused')
     t.regex(reasons, /lookup return is a Map/, 'a Map should be refused')
+    t.regex(reasons, /mixed return has both declared properties and an index signature/, 'a part-dictionary should be refused')
     t.true(
         diagnostics.every((diagnostic) => diagnostic.file && diagnostic.line),
         'each diagnostic should point at a place in the source'

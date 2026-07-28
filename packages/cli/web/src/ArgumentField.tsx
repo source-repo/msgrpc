@@ -52,6 +52,9 @@ const sample = (type: TypeNode | undefined, types: ServerDescription['types'], d
             return target.value
         case 'array':
             return []
+        case 'record':
+            // No key is known in advance, so there is no skeleton to offer beyond the shape itself.
+            return {}
         case 'tuple':
             return target.items.map((item) => sample(item, types, depth + 1))
         case 'union':
@@ -87,6 +90,9 @@ const coerce = (value: unknown, type: TypeNode | undefined, types: ServerDescrip
         case 'object':
             if (typeof value !== 'object' || Array.isArray(value)) return value
             return Object.fromEntries(Object.entries(value as { [name: string]: unknown }).map(([name, field]) => [name, coerce(field, target.fields[name]?.type, types, depth + 1)]))
+        case 'record':
+            if (typeof value !== 'object' || Array.isArray(value)) return value
+            return Object.fromEntries(Object.entries(value as { [name: string]: unknown }).map(([name, entry]) => [name, coerce(entry, target.values, types, depth + 1)]))
         case 'union': {
             // Only when the union leaves one real choice. Guessing which branch was meant would be
             // worse than sending what was typed and letting the server say why it is wrong.
@@ -154,6 +160,8 @@ export const initialText = (type: TypeNode | undefined, types: ServerDescription
             return new Date().toISOString().slice(0, 16)
         case 'array':
             return '[]'
+        case 'record':
+            return '{}'
         case 'tuple':
         case 'object':
             return JSON.stringify(sample(target, types), null, 2)

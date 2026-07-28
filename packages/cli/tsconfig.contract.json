@@ -1,0 +1,6 @@
+{
+    // Only the console's own service. The main project also compiles the tests, and a fixture class
+    // marked @rpcNamespace for a test is not part of what this package serves.
+    "extends": "./tsconfig.json",
+    "include": ["src/console.ts"]
+}

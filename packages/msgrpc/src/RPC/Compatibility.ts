@@ -95,6 +95,14 @@ export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types
             if (source.items.length !== tupleTarget.items.length) return false
             return source.items.every((item, index) => assignable(item, tupleTarget.items[index], types, depth + 1, assumed))
         }
+        case 'record': {
+            const recordTarget = target as typeof source
+            if (recordTarget.maxEntries !== undefined && (source.maxEntries === undefined || source.maxEntries > recordTarget.maxEntries)) return false
+            // As with a string pattern: deciding whether one regex admits everything another does
+            // is undecidable in general, so only an identical constraint counts.
+            if (recordTarget.keyPattern !== undefined && recordTarget.keyPattern !== source.keyPattern) return false
+            return assignable(source.values, recordTarget.values, types, depth + 1, assumed)
+        }
         case 'object': {
             const objectTarget = target as typeof source
             for (const [name, field] of Object.entries(objectTarget.fields)) {

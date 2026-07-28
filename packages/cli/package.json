@@ -23,6 +23,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run clean && npm run build && ava",
     "prepack": "npm run clean && npm run build",
+    "contract": "node dist/index.js extract --project tsconfig.contract.json --out src/console.types.json",
+    "check:contract": "node dist/index.js check --project tsconfig.contract.json --against src/console.types.json",
     "build:web": "vite build --config web/vite.config.ts",
     "dev:web": "vite --config web/vite.config.ts"
   },

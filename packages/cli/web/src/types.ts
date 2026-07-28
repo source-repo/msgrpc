@@ -12,6 +12,7 @@ export type TypeNode =
     | { kind: 'array'; items: TypeNode; maxItems?: number }
     | { kind: 'tuple'; items: TypeNode[] }
     | { kind: 'object'; fields: { [name: string]: { type: TypeNode; optional?: boolean } }; additional?: boolean }
+    | { kind: 'record'; values: TypeNode; keyPattern?: string; maxEntries?: number }
     | { kind: 'union'; options: TypeNode[] }
     | { kind: 'ref'; name: string }
 
@@ -98,6 +99,8 @@ export const typeText = (type: TypeNode | undefined): string => {
             return `{ ${Object.entries(type.fields)
                 .map(([name, field]) => `${name}${field.optional ? '?' : ''}: ${typeText(field.type)}`)
                 .join(', ')} }`
+        case 'record':
+            return `{ [key: string]: ${typeText(type.values)} }`
         case 'number':
             return type.min !== undefined || type.max !== undefined ? `number(${type.min ?? ''}..${type.max ?? ''})` : 'number'
         default:

@@ -2,7 +2,7 @@ import anyTest, { TestFn } from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
-import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer, type ServerDescription, type TypeNode } from '@source-repo/msgrpc'
 import { consoleIdentityPath, startConsole, type ConsoleService } from './console.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
@@ -194,6 +194,40 @@ test('the console watches a socket.io network, with no broker anywhere', async (
     await client.close()
     await running.close()
     await panel.close()
+    await hub.close()
+})
+
+test('the console describes its own service with argument types', async (t) => {
+    // The console's contract is the one the type language could not describe until `record` existed:
+    // describe() returns a ServerDescription, which is built out of dictionaries of TypeNode. This
+    // is the whole chain - extract wrote the file, the server loaded it, a peer reads it back.
+    const hub = new RpcServer({ name: peer('hub-self'), transports: [{ port: 3991 }] })
+    await hub.ready()
+    const running = await startConsole({ hub: 'http://localhost:3991', port: 7395, host: '127.0.0.1', name: peer('console-self'), callTimeout: 5000 })
+
+    const onlooker = new RpcServer({ name: peer('onlooker'), transports: [{ connect: 'http://localhost:3991' }] })
+    await onlooker.ready()
+    const introspection = await onlooker.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer('console-self'))
+    const description = await introspection.remote!.describe()
+
+    const service = description.namespaces.find((namespace) => namespace.name === 'console')
+    t.true(description.validating, 'the console should be checking its own arguments')
+    const call = service?.methods.find((method) => method.name === 'call')
+    t.deepEqual(call?.paramNames, ['peer', 'namespace', 'method', 'args'], 'a form needs labels, not "argument 0"')
+    t.deepEqual(call?.params?.[0], { kind: 'string' })
+
+    // The dictionary that blocked all of this: ServerDescription.types is { [name]: TypeNode }.
+    const describe = service?.methods.find((method) => method.name === 'describe')
+    const returned = describe?.returns
+    const described = returned?.kind === 'union' ? returned.options.find((option) => option.kind === 'ref') : returned
+    t.is(described?.kind === 'ref' ? described.name : undefined, 'ServerDescription')
+    t.deepEqual((description.types?.ServerDescription as { kind: 'object'; fields: { [name: string]: { type: TypeNode } } }).fields.types.type, {
+        kind: 'record',
+        values: { kind: 'ref', name: 'TypeNode' }
+    })
+
+    await onlooker.close()
+    await running.close()
     await hub.close()
 })
 

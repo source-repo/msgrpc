@@ -49,6 +49,10 @@ const fail = (context: Context, reason: string): TypeNode => {
 
 /** The name to key a shared or recursive type under, or undefined for an anonymous shape. */
 const nameOf = (type: Type) => {
+    // An instantiated generic has a symbol but not a usable name: Record<string, number> and
+    // Record<string, string> share the symbol `Record`, so keying both under it would silently make
+    // the second a reference to the first's value type. Inline them instead.
+    if (type.getAliasTypeArguments().length || type.getTypeArguments().length) return undefined
     const alias = type.getAliasSymbol()?.getName()
     if (alias && alias !== '__type') return alias
     const symbol = type.getSymbol()?.getName()
@@ -114,10 +118,18 @@ const unionToNode = (type: Type, context: Context, depth: number): TypeNode => {
 }
 
 const objectToNode = (type: Type, context: Context, depth: number): TypeNode => {
-    // getProperties() cannot see an index signature, so without this a dictionary would be
-    // described as an object permitting no properties at all, and every value would be refused.
-    if (type.getStringIndexType() || type.getNumberIndexType())
-        return fail(context, 'has an index signature, which the schema type language cannot describe yet')
+    // getProperties() cannot see an index signature, so a dictionary has to be recognised here or
+    // it would be described as an object permitting no properties at all, refusing every value.
+    const indexed = type.getStringIndexType() ?? type.getNumberIndexType()
+    if (indexed) {
+        // Both at once would need a type that is part record and part object. Refused rather than
+        // guessed: dropping either half produces a contract that looks checked and is not.
+        if (type.getProperties().length)
+            return fail(context, 'has both declared properties and an index signature, which the schema type language cannot describe yet')
+        // A numeric index is still a string key on the wire, since JS object keys always are.
+        const numeric = !type.getStringIndexType()
+        return { kind: 'record', values: typeToNode(indexed, context, depth + 1), ...(numeric ? { keyPattern: '^-?\\d+$' } : {}) }
+    }
     const fields: { [name: string]: { type: TypeNode; optional?: boolean } } = {}
     for (const property of type.getProperties()) {
         const propertyType = property.getTypeAtLocation(context.node)

@@ -80,12 +80,12 @@ looks like protection while checking nothing.
 msgrpc: 3 types could not be described
   plant.fetch return is generic (T), which has no runtime type to check (src/plant.ts:6)
   plant.subscribe argument 0 is a function, which cannot be checked on the wire (src/plant.ts:12)
-  plant.readings return has an index signature, which the schema type language cannot describe yet (src/plant.ts:18)
+  plant.lookup return is a Map, which MsgPack does not carry; use an object or an array (src/plant.ts:18)
 ```
 
-So far: generics, function parameters, `Map` and `Set`, and index signatures. The last is the one to
-know about — `{ [id: string]: Reading }` has no named properties, so describing it as an ordinary
-object would produce a type that refuses every value.
+So far: generics, function parameters, `Map` and `Set`, and a type that is part dictionary and part
+declared shape — `{ name: string; [tag: string]: unknown }` — which would need describing both
+halves at once. Dropping either one produces a contract that looks checked and is not.
 
 At most 25 diagnostics are printed, followed by a count of the rest.
 
@@ -93,6 +93,14 @@ At most 25 diagnostics are printed, followed by a count of the rest.
 
 `Date` and `Uint8Array` come through as values rather than encodings of them, because MsgPack
 carries both. Recursive types become named references. `Promise<T>` is unwrapped.
+
+An index signature becomes a `record`, so `{ [tag: string]: Reading }` is described by its value
+type with the keys left open, and a wrong reading is still caught. `{ [id: number]: string }` gets a
+key pattern instead of a numeric key type, because a JS object key is always a string on the wire.
+
+A generic instantiation is inlined rather than named: `Record<string, number>` and
+`Record<string, string>` share the symbol `Record`, so keying both under it would quietly make the
+second a reference to the first's value type.
 
 What it cannot see is anything the type system does not carry. `value: number` becomes
 `{ kind: 'number' }` — a range like `0..2000` is a runtime invariant, invisible to TypeScript.
@@ -222,6 +230,21 @@ to positions, since nothing else knows what argument 0 is called.
 JSON has no date and no byte string, so what is typed into a JSON box is walked against the type
 before it is sent: an ISO string where the schema says `date` becomes a `Date`. Otherwise every
 object with a timestamp in it would be rejected by the server that asked for one.
+
+### The console describes itself
+
+The console ships its own contract, extracted from its own source, so pointing one console at
+another gives argument fields rather than `call(…)`:
+
+```
+npm run contract        # extract --project tsconfig.contract.json --out src/console.types.json
+npm run check:contract  # the same comparison the server applies to an older caller
+```
+
+The file is committed, which is what makes it reviewable and lets `check:contract` fail a build that
+would refuse a page built against the old one. This was also the first thing to need `record`:
+`describe()` returns a `ServerDescription`, which is built out of `{ [name: string]: TypeNode }` —
+so until the type language could describe a dictionary, it could not describe its own output.
 
 ### Watching events
 

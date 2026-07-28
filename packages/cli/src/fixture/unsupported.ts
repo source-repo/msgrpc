@@ -17,4 +17,9 @@ export class Bad {
     async lookup(): Promise<Map<string, number>> {
         return new Map()
     }
+    /** Part dictionary, part declared shape: describing either half alone would check neither. */
+    @rpc
+    async mixed(): Promise<{ name: string; [tag: string]: unknown }> {
+        return { name: '' }
+    }
 }

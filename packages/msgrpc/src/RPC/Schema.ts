@@ -25,6 +25,16 @@ export type TypeNode =
     | { kind: 'array'; items: TypeNode; maxItems?: number }
     | { kind: 'tuple'; items: TypeNode[] }
     | { kind: 'object'; fields: { [name: string]: FieldNode }; additional?: boolean }
+    /**
+     * A dictionary: keys not known in advance, values all of one type. `{ [tag: string]: Reading }`
+     * is how plant data usually arrives, and describing it as an `object` would produce a type that
+     * refuses every value, since it has no named properties to declare.
+     *
+     * `keyPattern` constrains the keys, which is what a numeric index signature becomes - a JS
+     * object key is always a string, so `{ [id: number]: X }` is a string key that must read as a
+     * number rather than a separate key type.
+     */
+    | { kind: 'record'; values: TypeNode; keyPattern?: string; maxEntries?: number }
     | { kind: 'union'; options: TypeNode[] }
     /** Reference to a named type, which is how recursive and shared shapes are expressed. */
     | { kind: 'ref'; name: string }
@@ -102,10 +112,16 @@ const describe = (type: TypeNode): string => {
             return type.name
         case 'object':
             return 'object'
+        case 'record':
+            return `{ [key: string]: ${describe(type.values)} }`
         default:
             return type.kind
     }
 }
+
+/** Rejects the things that are `typeof 'object'` but are values in their own right here. */
+const isPlainObject = (value: unknown): value is { [key: string]: unknown } =>
+    typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Uint8Array) && !(value instanceof Date)
 
 /**
  * Returns a human-readable reason the value does not match, or undefined when it does. The path
@@ -164,9 +180,8 @@ export const validateValue = (value: unknown, type: TypeNode, types: RpcSchema['
             return undefined
         }
         case 'object': {
-            if (typeof value !== 'object' || value === null || Array.isArray(value) || value instanceof Uint8Array || value instanceof Date)
-                return `${at}: expected an object, got ${typeName(value)}`
-            const record = value as { [key: string]: unknown }
+            if (!isPlainObject(value)) return `${at}: expected an object, got ${typeName(value)}`
+            const record = value
             for (const [name, field] of Object.entries(type.fields)) {
                 const present = record[name] !== undefined
                 if (!present) {
@@ -184,6 +199,20 @@ export const validateValue = (value: unknown, type: TypeNode, types: RpcSchema['
             }
             return undefined
         }
+        case 'record': {
+            if (!isPlainObject(value)) return `${at}: expected an object, got ${typeName(value)}`
+            const keys = Object.keys(value)
+            // Bounded like an array, and for the same reason: a dictionary is the other shape a
+            // caller can grow without limit.
+            if (type.maxEntries !== undefined && keys.length > type.maxEntries) return `${at}: more than ${type.maxEntries} entries`
+            const pattern = type.keyPattern === undefined ? undefined : new RegExp(type.keyPattern)
+            for (const key of keys) {
+                if (pattern && !pattern.test(key)) return `${at}.${key}: key does not match ${type.keyPattern}`
+                const failure = validateValue(value[key], type.values, types, `${at}.${key}`, depth + 1)
+                if (failure) return failure
+            }
+            return undefined
+        }
         case 'union': {
             for (const option of type.options) if (!validateValue(value, option, types, at, depth + 1)) return undefined
             return `${at}: expected ${describe(type)}, got ${typeName(value)}`
@@ -194,6 +223,10 @@ export const validateValue = (value: unknown, type: TypeNode, types: RpcSchema['
             return validateValue(value, target, types, at, depth + 1)
         }
     }
+    // Unreachable for a well-formed node, and deliberately not a silent pass: a kind this validator
+    // does not know - a typo, or a document written for a later version of the language - would
+    // otherwise fall through as valid, which is an unchecked value wearing a checked type.
+    return `${at}: unknown type kind '${(type as TypeNode).kind}'`
 }
 
 /** Returns a reason the arguments do not match the method's parameters, or undefined. */
