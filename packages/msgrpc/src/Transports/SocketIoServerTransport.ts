@@ -321,11 +321,15 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         }
         this.learnPeer(name, socket)
         this.updateCarried(socket, name, announcement.carrying)
-        // Split horizon applies to the snapshot too. Handing a link back the peers it just told
-        // this one about makes it believe they are reachable the way it came, so it stops
-        // advertising them - and they disappear from everyone a hop further out.
+        // This peer's own name goes first: a newcomer has to know what to call the thing it just
+        // connected to, and a client that routes on its registry - which RpcServer.proxy does -
+        // cannot address the hub at all until something puts it there.
+        //
+        // Split horizon applies to the rest. Handing a link back the peers it just told this one
+        // about makes it believe they are reachable the way it came, so it stops advertising them,
+        // and they disappear from everyone a hop further out.
         socket.emit(PRESENCE_EVENT, {
-            peers: this.reachablePeers().filter((peer) => peer !== name && this.peerSockets.get(peer) !== socket)
+            peers: [this.name, ...this.reachablePeers().filter((peer) => peer !== name && this.peerSockets.get(peer) !== socket)]
         } as PresenceUpdate)
     }
 

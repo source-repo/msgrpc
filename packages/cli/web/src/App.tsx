@@ -1,57 +1,90 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RpcClient, TransportEvent } from '@source-repo/msgrpc'
+import { RpcServer, TransportEvent, readableNameFrom } from '@source-repo/msgrpc'
+import { Chat, ChatMessage, ChatService } from './Chat'
 import { MethodPanel } from './MethodPanel'
 import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, fetchConsoleName, typeText } from './types'
 
 /**
- * The console talks to the CLI over msgrpc itself: the CLI runs an RpcServer on the same HTTP
- * server that served this page, and this is an ordinary browser client of it. Calls and the event
- * stream both ride the library rather than a bespoke REST and SSE pair.
+ * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
+ *
+ * One RpcServer does both. It serves over the connection it opens to the console - the only thing
+ * a browser can do, since it cannot listen - which is what lets another peer call the chat service
+ * exposed here. The same object calls outwards with proxy(), so browsing the network and hosting a
+ * service on it share one link and one name.
+ *
+ * The name is derived from the console this page is attached to, so it is the same on every reload
+ * and two pages on different consoles are plainly different peers.
  */
 
 const useConsole = () => {
     const [service, setService] = useState<ConsoleService | null>(null)
+    const [me, setMe] = useState('')
     const [status, setStatus] = useState('connecting')
     const events = useRef<((event: StreamedEvent) => void) | null>(null)
     const peerChange = useRef<((peer: string, state: string) => void) | null>(null)
+    const said = useRef<((from: string, text: string) => void) | null>(null)
+    const peer = useRef<RpcServer | null>(null)
 
     useEffect(() => {
-        let client: RpcClient | undefined
+        let server: RpcServer | undefined
         void (async () => {
             try {
                 // Ask who is serving this page before addressing it: the console's name is its own
                 // name on the network, so it differs between instances.
                 const consoleName = await fetchConsoleName()
-                client = new RpcClient(window.location.origin, { defaultTarget: consoleName, readyTimeout: 10000 })
-                client.on(TransportEvent.disconnected, () => setStatus('reconnecting'))
-                client.on(TransportEvent.connected, () => setStatus('connected'))
-                await client.ready()
-                const proxy = await client.proxy<ConsoleService & { on: (e: string, h: (...a: unknown[]) => void) => void }>('console')
+                // Derived from the console rather than drawn at random, so a reload comes back as
+                // the same peer instead of leaving a stranger in everyone's list. A second tab on
+                // the same console adds a suffix, which sessionStorage keeps across its reloads.
+                let tab = sessionStorage.getItem('msgrpc-tab')
+                if (!tab) {
+                    tab = Math.random().toString(36).slice(2, 5)
+                    sessionStorage.setItem('msgrpc-tab', tab)
+                }
+                const first = !sessionStorage.getItem('msgrpc-second-tab')
+                const name = readableNameFrom(window.location.host) + (first ? '' : `-${tab}`)
+                setMe(name)
+
+                server = new RpcServer({ name, transports: [{ connect: window.location.origin }], readyTimeout: 10000 })
+                server.exposeClassInstance(new ChatService((from, text) => said.current?.(from, text)), 'chat')
+                const link = server.transports[0]
+                link?.on(TransportEvent.disconnected, () => setStatus('reconnecting'))
+                link?.on(TransportEvent.connected, () => setStatus('connected'))
+                await server.ready()
+                // Attached after ready(): transports are built asynchronously, so before it there
+                // is nothing to listen to.
+                for (const transport of server.transports) {
+                    transport.on(TransportEvent.disconnected, () => setStatus('reconnecting'))
+                    transport.on(TransportEvent.connected, () => setStatus('connected'))
+                }
+                peer.current = server
+
+                const proxy = await server.proxy<ConsoleService & { on: (e: string, h: (...a: unknown[]) => void) => Promise<unknown> }>('console', consoleName)
                 await proxy.remote!.on('event', (event: unknown) => events.current?.(event as StreamedEvent))
                 await proxy.remote!.on('peer', (change: unknown) => {
-                    const { peer, state } = change as { peer: string; state: string }
-                    peerChange.current?.(peer, state)
+                    const { peer: name, state } = change as { peer: string; state: string }
+                    peerChange.current?.(name, state)
                 })
                 const remote = proxy.remote as ConsoleService
                 // The console does the waiting: it holds the broker link, enforces --timeout, and
                 // its answer says what went wrong. A browser giving up first would replace that
                 // diagnosis with a bare 'Timeout' at almost exactly the same moment.
                 const { callTimeout } = await remote.peers()
-                if (client.rpcClient && callTimeout) client.rpcClient.callTimeout = callTimeout + 5000
+                if (callTimeout) server.caller.callTimeout = callTimeout + 5000
                 setService(remote)
                 setStatus('connected')
             } catch (e) {
                 setStatus(`cannot reach the console: ${(e as Error).message}`)
             }
         })()
-        return () => void client?.close()
+        return () => void server?.close()
     }, [])
 
-    return { service, status, events, peerChange }
+    return { service, status, me, events, peerChange, said, peer }
 }
 
 export const App = () => {
-    const { service, status, events, peerChange } = useConsole()
+    const { service, status, me, events, peerChange, said, peer } = useConsole()
+    const [chats, setChats] = useState<{ [peer: string]: ChatMessage[] }>({})
     const [peers, setPeers] = useState<string[]>([])
     const [offline, setOffline] = useState<Set<string>>(new Set())
     const [selected, setSelected] = useState<string | null>(null)
@@ -65,6 +98,25 @@ export const App = () => {
         setPeers(state.peers)
         setWatching(new Set(state.watching))
     }, [service])
+
+    useEffect(() => {
+        said.current = (from, text) =>
+            setChats((current) => ({ ...current, [from]: [...(current[from] ?? []), { from, text, at: Date.now(), mine: false }] }))
+    }, [said])
+
+    /** Calls the peer's own chat service - the page at the other end, not the console. */
+    const sendChat = async (text: string) => {
+        if (!peer.current || !selected) return 'not connected'
+        setChats((current) => ({ ...current, [selected]: [...(current[selected] ?? []), { from: me, text, at: Date.now(), mine: true }] }))
+        try {
+            const proxy = await peer.current.proxy<{ say: (from: string, text: string) => Promise<string> }>('chat', selected)
+            await proxy.remote!.say(me, text)
+            return undefined
+        } catch (e) {
+            // Most often the peer is not running this console, so it exposes no chat namespace.
+            return `${selected} did not take it: ${(e as { code?: string; message?: string }).message ?? String(e)}`
+        }
+    }
 
     useEffect(() => {
         void refreshPeers()
@@ -186,7 +238,9 @@ export const App = () => {
                 )}
             </main>
 
-            <section className="stream">
+            <section className="side">
+                <Chat me={me} peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />
+                <div className="stream">
                 <header>
                     <h1>Events</h1>
                     {stream.length > 0 && (
@@ -205,6 +259,7 @@ export const App = () => {
                         <pre>{JSON.stringify(event.args)}</pre>
                     </div>
                 ))}
+                </div>
             </section>
         </div>
     )
