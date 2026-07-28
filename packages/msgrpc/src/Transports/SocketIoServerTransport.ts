@@ -54,6 +54,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         if (!server) this.server = https ? createHttpsServer() : createHttpServer()
         if (this.server instanceof SocketIo.Server) this.io = this.server
         else {
+            const configuredAllowRequest = socketIoOptions?.allowRequest
             this.io = new SocketIo.Server(this.server, {
                 cors: {
                     origin: '*',
@@ -61,7 +62,21 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                     credentials: true
                 },
                 serveClient: false,
-                ...socketIoOptions
+                ...socketIoOptions,
+                /**
+                 * Refused at the handshake, which is before engine.io builds a Socket for it.
+                 *
+                 * close() disconnects the sockets it can see and then waits for the server to shut
+                 * down. A handshake that completes inside that window is created *after* the sweep
+                 * has passed, so nothing ever disconnects it - and its ping timer keeps the process
+                 * alive with no way to reach the peer it belongs to. Clients reconnect on their own,
+                 * which is what drives connections into the window in the first place.
+                 */
+                allowRequest: (request, callback) => {
+                    if (this.closed) return callback('server closing', false)
+                    if (configuredAllowRequest) return configuredAllowRequest(request, callback)
+                    callback(null, true)
+                }
             })
         }
         // Runs before 'connection', so an unauthenticated peer never reaches the RPC layer.
@@ -78,6 +93,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             })
         }
         this.io.on('connection', (socket) => {
+            // A handshake already in flight when close() began still arrives here. allowRequest
+            // catches the ones that had not started; this catches the rest.
+            if (this.closed) {
+                socket.disconnect(true)
+                return
+            }
             this.emit('connection', socket)
             socket.on(PRESENCE_EVENT, (announcement: PresenceAnnouncement) => {
                 // Guarded because socket.io emits this synchronously from its parser: a listener
