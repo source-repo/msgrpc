@@ -1,0 +1,223 @@
+import { ClassDeclaration, MethodDeclaration, Node, Project, Type } from 'ts-morph'
+import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from '@source-repo/msgrpc'
+
+/**
+ * Reads a contract out of TypeScript source.
+ *
+ * The rule that keeps this honest: anything the type language cannot represent is reported, never
+ * emitted as `any`. A schema that quietly degrades on the hard cases is worse than no schema,
+ * because it still looks like protection while checking nothing.
+ *
+ * Static analysis only - no user code is executed - so the namespace has to be declared in the
+ * source with @rpcNamespace rather than inferred from an exposeClassInstance call somewhere else.
+ */
+
+export interface Diagnostic {
+    /** Where the problem is, e.g. "Plant.writeSetpoint argument 0". */
+    where: string
+    reason: string
+    file?: string
+    line?: number
+}
+
+export interface ExtractResult {
+    schema: RpcSchema
+    diagnostics: Diagnostic[]
+}
+
+interface Context {
+    types: { [name: string]: TypeNode }
+    diagnostics: Diagnostic[]
+    /** Named types currently being converted, so a recursive one becomes a ref instead of looping. */
+    inProgress: Set<string>
+    where: string
+    node: Node
+}
+
+const fail = (context: Context, reason: string): TypeNode => {
+    context.diagnostics.push({
+        where: context.where,
+        reason,
+        file: context.node.getSourceFile().getFilePath(),
+        line: context.node.getStartLineNumber()
+    })
+    // Returned so extraction can continue and report everything at once. The caller refuses the
+    // whole run when any diagnostic was raised, so this never reaches a schema file.
+    return { kind: 'any' }
+}
+
+/** The name to key a shared or recursive type under, or undefined for an anonymous shape. */
+const nameOf = (type: Type) => {
+    const alias = type.getAliasSymbol()?.getName()
+    if (alias && alias !== '__type') return alias
+    const symbol = type.getSymbol()?.getName()
+    return symbol && symbol !== '__type' && symbol !== '__object' ? symbol : undefined
+}
+
+const isPromise = (type: Type) => type.getSymbol()?.getName() === 'Promise'
+
+export const typeToNode = (type: Type, context: Context, depth = 0): TypeNode => {
+    if (depth > 24) return fail(context, 'nests deeper than the extractor follows')
+
+    if (type.isAny() || type.isUnknown()) return { kind: 'any' }
+    if (type.isTypeParameter()) return fail(context, `is generic (${type.getText()}), which has no runtime type to check`)
+    if (type.getCallSignatures().length) return fail(context, 'is a function, which cannot be checked on the wire')
+
+    if (type.isString()) return { kind: 'string' }
+    if (type.isNumber()) return { kind: 'number' }
+    if (type.isBoolean()) return { kind: 'boolean' }
+    if (type.isNull()) return { kind: 'null' }
+    if (type.isStringLiteral()) return { kind: 'literal', value: type.getLiteralValue() as string }
+    if (type.isNumberLiteral()) return { kind: 'literal', value: type.getLiteralValue() as number }
+    if (type.isBooleanLiteral()) return { kind: 'literal', value: type.getText() === 'true' }
+
+    const symbolName = type.getSymbol()?.getName()
+    // Both are values under MsgPack rather than encodings of them.
+    if (symbolName === 'Date') return { kind: 'date' }
+    if (symbolName === 'Uint8Array') return { kind: 'bytes' }
+    if (symbolName === 'Map' || symbolName === 'Set')
+        return fail(context, `is a ${symbolName}, which MsgPack does not carry; use an object or an array`)
+
+    if (type.isUnion()) {
+        // undefined in a union means optional, which the parameter and field layers handle.
+        const options = type.getUnionTypes().filter((option) => !option.isUndefined())
+        if (!options.length) return fail(context, 'is undefined only')
+        if (options.length === 1) return typeToNode(options[0], context, depth + 1)
+        // A boolean surfaces as true | false; collapse it back.
+        if (options.length === 2 && options.every((option) => option.isBooleanLiteral())) return { kind: 'boolean' }
+        return { kind: 'union', options: options.map((option) => typeToNode(option, context, depth + 1)) }
+    }
+
+    if (type.isTuple()) return { kind: 'tuple', items: type.getTupleElements().map((element) => typeToNode(element, context, depth + 1)) }
+    if (type.isArray()) {
+        const element = type.getArrayElementType()
+        return element ? { kind: 'array', items: typeToNode(element, context, depth + 1) } : fail(context, 'is an array of an unknown element type')
+    }
+
+    if (type.isObject()) {
+        const name = nameOf(type)
+        if (name) {
+            if (context.inProgress.has(name) || context.types[name]) return { kind: 'ref', name }
+            context.inProgress.add(name)
+            context.types[name] = { kind: 'any' } // placeholder so a recursive member resolves to a ref
+            context.types[name] = objectToNode(type, context, depth)
+            context.inProgress.delete(name)
+            return { kind: 'ref', name }
+        }
+        return objectToNode(type, context, depth)
+    }
+
+    return fail(context, `has no representation in the schema type language (${type.getText()})`)
+}
+
+const objectToNode = (type: Type, context: Context, depth: number): TypeNode => {
+    const fields: { [name: string]: { type: TypeNode; optional?: boolean } } = {}
+    for (const property of type.getProperties()) {
+        const propertyType = property.getTypeAtLocation(context.node)
+        const optional = property.isOptional() || propertyType.isNullable()
+        const nested = { ...context, where: `${context.where}.${property.getName()}` }
+        fields[property.getName()] = { type: typeToNode(propertyType, nested, depth + 1), ...(optional ? { optional: true } : {}) }
+    }
+    return { kind: 'object', fields }
+}
+
+const hasDecorator = (node: MethodDeclaration | ClassDeclaration, name: string) =>
+    node.getDecorators().some((decorator) => decorator.getName() === name)
+
+const namespaceDeclaration = (declaration: ClassDeclaration) => {
+    const decorator = declaration.getDecorators().find((candidate) => candidate.getName() === 'rpcNamespace')
+    if (!decorator) return undefined
+    const [nameArgument, optionsArgument] = decorator.getArguments()
+    const name = Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralValue() : undefined
+    if (!name) return undefined
+    let version: string | undefined
+    if (Node.isObjectLiteralExpression(optionsArgument)) {
+        const property = optionsArgument.getProperty('version')
+        if (Node.isPropertyAssignment(property)) {
+            const initializer = property.getInitializer()
+            if (Node.isStringLiteral(initializer)) version = initializer.getLiteralValue()
+        }
+    }
+    return { name, version }
+}
+
+const methodToSchema = (method: MethodDeclaration, context: Context): MethodSchema => {
+    const params: TypeNode[] = []
+    let rest: TypeNode | undefined
+    for (const parameter of method.getParameters()) {
+        const at = { ...context, where: `${context.where} argument ${params.length}`, node: parameter }
+        if (parameter.isRestParameter()) {
+            const element = parameter.getType().getArrayElementType()
+            rest = element ? typeToNode(element, at) : fail(at, 'is a rest parameter of an unknown element type')
+            continue
+        }
+        const node = typeToNode(parameter.getType(), at)
+        // An optional parameter is expressed as a union admitting null, which is what the
+        // validator reads to decide how few arguments a caller may send.
+        params.push(parameter.isOptional() ? { kind: 'union', options: [node, { kind: 'literal', value: null }] } : node)
+    }
+
+    let returnType = method.getReturnType()
+    if (isPromise(returnType)) returnType = returnType.getTypeArguments()[0] ?? returnType
+    const returns = returnType.isVoid() || returnType.isUndefined() ? undefined : typeToNode(returnType, { ...context, where: `${context.where} return` })
+
+    return { params, ...(rest ? { rest } : {}), ...(returns ? { returns } : {}) }
+}
+
+/**
+ * Events are declared as a property type rather than inferred from emit() calls, which cannot be
+ * read statically with any confidence:
+ *
+ * ```typescript
+ * declare rpcEvents: { alarm: [message: string] }
+ * ```
+ */
+const eventsFromDeclaration = (declaration: ClassDeclaration, context: Context) => {
+    const property = declaration.getProperty('rpcEvents')
+    if (!property) return undefined
+    const events: { [event: string]: { params: TypeNode[] } } = {}
+    for (const event of property.getType().getProperties()) {
+        const at = { ...context, where: `${context.where} event ${event.getName()}`, node: property }
+        const tuple = event.getTypeAtLocation(property)
+        if (!tuple.isTuple()) {
+            fail(at, 'must be declared as a tuple of its arguments, e.g. [message: string]')
+            continue
+        }
+        events[event.getName()] = { params: tuple.getTupleElements().map((element) => typeToNode(element, at)) }
+    }
+    return Object.keys(events).length ? events : undefined
+}
+
+export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
+    const project = new Project({ tsConfigFilePath })
+    const diagnostics: Diagnostic[] = []
+    const types: { [name: string]: TypeNode } = {}
+    const namespaces: { [namespace: string]: NamespaceSchema } = {}
+
+    for (const sourceFile of project.getSourceFiles()) {
+        for (const declaration of sourceFile.getClasses()) {
+            const declared = namespaceDeclaration(declaration)
+            if (!declared) continue
+
+            const methods: { [method: string]: MethodSchema } = {}
+            const context: Context = { types, diagnostics, inProgress: new Set(), where: declaration.getName() ?? 'class', node: declaration }
+            for (const method of declaration.getMethods()) {
+                if (!hasDecorator(method, 'rpc')) continue
+                methods[method.getName()] = methodToSchema(method, { ...context, where: `${declared.name}.${method.getName()}`, node: method })
+            }
+            if (!Object.keys(methods).length) {
+                diagnostics.push({
+                    where: declared.name,
+                    reason: 'declares @rpcNamespace but marks no @rpc methods, so it would expose nothing',
+                    file: sourceFile.getFilePath(),
+                    line: declaration.getStartLineNumber()
+                })
+                continue
+            }
+            const events = eventsFromDeclaration(declaration, { ...context, where: declared.name })
+            namespaces[declared.name] = { ...(declared.version ? { version: declared.version } : {}), methods, ...(events ? { events } : {}) }
+        }
+    }
+
+    return { schema: { schema: 1, ...(Object.keys(types).length ? { types } : {}), namespaces }, diagnostics }
+}

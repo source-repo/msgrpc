@@ -1,7 +1,7 @@
 export const defaultWebSocketPort = 3000
 
 export interface IManageRpc {
-    exposeClassInstance(instance: object, name: string, prototypeSteps?: number): void
+    exposeClassInstance(instance: object, name?: string, prototypeSteps?: number): void
     exposeClass<T>(constructor: new (...args: unknown[]) => T, aliasName?: string): void
     exposeObject(obj: object, name: string): void
     expose(methodName: string, method: () => void): void

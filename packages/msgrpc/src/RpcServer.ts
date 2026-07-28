@@ -164,7 +164,7 @@ export class RpcServer implements IManageRpc {
         this.transports = []
         this.peers.clear()
     }
-    exposeClassInstance(instance: object, name: string, prototypeSteps?: number): void {
+    exposeClassInstance(instance: object, name?: string, prototypeSteps?: number): void {
         this.rpc.manageRpc.exposeClassInstance(instance, name, prototypeSteps)
     }
     exposeClass<T>(constructor: new (...args: unknown[]) => T, aliasName?: string): void {

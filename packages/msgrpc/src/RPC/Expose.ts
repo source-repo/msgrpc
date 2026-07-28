@@ -56,6 +56,37 @@ export const exposeMethods = <T>(constructor: new (...args: never[]) => T, metho
     return constructor
 }
 
+/** Namespace declared by a class, so the name is written once and read by both ends. */
+const namespaces = new WeakMap<object, { name: string; version?: string }>()
+
+/**
+ * Declares the name a class is exposed under, and optionally the version of its contract.
+ *
+ * The exposure name only existed at the call site - `exposeClassInstance(instance, 'plant')` - so
+ * nothing reading the source could tell which namespace a class belongs to. Declaring it here lets
+ * the extraction CLI key a schema correctly, and lets exposeClassInstance take the name as read.
+ *
+ * ```typescript
+ * @rpcNamespace('plant', { version: '3' })
+ * class Plant { @rpc async writeSetpoint(value: number) { ... } }
+ * ```
+ */
+export const rpcNamespace =
+    (name: string, options: { version?: string } = {}) =>
+    <T extends abstract new (...args: never[]) => unknown>(target: T, _context: ClassDecoratorContext) => {
+        namespaces.set(target, { name, version: options.version })
+        return target
+    }
+
+/** The namespace an instance's class declares, walking up so a subclass inherits it. */
+export const declaredNamespace = (instance: object) => {
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        const declared = namespaces.get(ctor)
+        if (declared) return declared
+    }
+    return undefined
+}
+
 /** The marked method names for an instance, or undefined when the class marks nothing. */
 export const markedMethods = (instance: object): Set<string> | undefined => {
     const names = new Set<string>()

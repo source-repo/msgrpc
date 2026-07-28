@@ -35,11 +35,18 @@ const widerOrEqualNumber = (from: { min?: number; max?: number; integer?: boolea
 /**
  * True when every value valid under `from` is also valid under `to`.
  *
- * Depth-limited for the same reason the validator is: a recursive pair of types must not be able
- * to spin this forever.
+ * Recursive types are handled coinductively: a pair of named types already being compared is
+ * assumed to hold while the rest is proved. Without that, comparing a recursive type with itself
+ * descends forever and the depth guard reports it as incompatible - which would mark every
+ * recursive shape as a breaking change, including against an identical contract.
  */
-export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types'] = {}, depth = 0): boolean => {
-    if (depth > 32) return false
+export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types'] = {}, depth = 0, assumed: Set<string> = new Set()): boolean => {
+    if (depth > 64) return false
+    if (from.kind === 'ref' && to.kind === 'ref') {
+        const pair = `${from.name} <: ${to.name}`
+        if (assumed.has(pair)) return true
+        assumed.add(pair)
+    }
     const source = resolve(from, types)
     const target = resolve(to, types)
 
@@ -47,8 +54,8 @@ export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types
     // An 'any' source can hold anything, so only an 'any' target can accept it.
     if (source.kind === 'any') return false
 
-    if (source.kind === 'union') return source.options.every((option) => assignable(option, target, types, depth + 1))
-    if (target.kind === 'union') return target.options.some((option) => assignable(source, option, types, depth + 1))
+    if (source.kind === 'union') return source.options.every((option) => assignable(option, target, types, depth + 1, assumed))
+    if (target.kind === 'union') return target.options.some((option) => assignable(source, option, types, depth + 1, assumed))
 
     if (source.kind === 'literal') {
         if (target.kind === 'literal') return source.value === target.value
@@ -81,12 +88,12 @@ export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types
         case 'array': {
             const arrayTarget = target as typeof source
             if (arrayTarget.maxItems !== undefined && (source.maxItems === undefined || source.maxItems > arrayTarget.maxItems)) return false
-            return assignable(source.items, arrayTarget.items, types, depth + 1)
+            return assignable(source.items, arrayTarget.items, types, depth + 1, assumed)
         }
         case 'tuple': {
             const tupleTarget = target as typeof source
             if (source.items.length !== tupleTarget.items.length) return false
-            return source.items.every((item, index) => assignable(item, tupleTarget.items[index], types, depth + 1))
+            return source.items.every((item, index) => assignable(item, tupleTarget.items[index], types, depth + 1, assumed))
         }
         case 'object': {
             const objectTarget = target as typeof source
@@ -99,7 +106,7 @@ export const assignable = (from: TypeNode, to: TypeNode, types: RpcSchema['types
                     return false
                 }
                 if (!field.optional && sourceField.optional) return false
-                if (!assignable(sourceField.type, field.type, types, depth + 1)) return false
+                if (!assignable(sourceField.type, field.type, types, depth + 1, assumed)) return false
             }
             if (!objectTarget.additional) {
                 // The source could produce a property the target refuses.
