@@ -1,6 +1,6 @@
 # @source-repo/msgrpc-cli
 
-Tooling for [msgrpc](../msgrpc): read a contract out of TypeScript source, fail a build when it
+Tooling for [msgrpc](https://www.npmjs.com/package/@source-repo/msgrpc): read a contract out of TypeScript source, fail a build when it
 changes in a way that would break a deployed peer, and browse a live network in a browser.
 
 ```
@@ -29,6 +29,7 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
 | `--timeout <ms>` | console | `10000` | call timeout |
 | `--name <peer>` | console | `msgrpc-console-<pid>` | how the console identifies itself to the network |
+| `--sign <keyfile>` | console | — | HMAC keys, so the console can talk to a signed network |
 
 ## Declaring the contract
 
@@ -142,19 +143,46 @@ The page is served from the CLI with no CDN, no bundler and no framework — one
 inlined page, and server-sent events for the live half. A plant network usually has no route to the
 internet, and a tool for looking at one should be something you can read in a sitting.
 
-### What it needs, and what it cannot do yet
+### Signed networks
+
+A server configured with `verify` drops unsigned frames before the RPC layer. Without keys the
+console still lists peers — presence is unsigned retained state — and then every call times out with
+nothing to say why. Give it keys with `--sign`:
+
+```
+msgrpc console --broker mqtt://broker:1883 --sign console-keys.json
+```
+
+```json
+{
+  "name": "console-1",
+  "secret": "the console's own HMAC secret",
+  "peers": { "plantServer": "that server's secret" }
+}
+```
+
+A file rather than a flag, because a secret on the command line is visible to anyone who can run
+`ps`. The console warns if the file is readable by other users.
+
+`peers` is optional. Supplying it makes the console check signatures on what it receives as well,
+which means frames from an unsigned peer are then dropped.
+
+The server checks a signature against the key it holds for the name the frame claims, so the
+console's name has to be the one its key belongs to. `name` in the file supplies it; passing a
+`--name` that contradicts the file is refused rather than left to surface as a timeout.
+
+HMAC only. For Ed25519 or an HSM, build the console with the library's `startConsole` and pass your
+own `MessageSigner`.
+
+### Other limits
 
 **It binds to `127.0.0.1` by default.** The console can invoke any method it is allowed to, so
 exposing it has to be a deliberate act: `--host 0.0.0.0` works and prints a warning saying what you
 have just done.
 
 **MQTT only.** It connects as an ordinary MQTT peer, so a network served purely over WebSocket
-cannot be browsed with it.
-
-**It does not sign its frames.** A server configured with `verify` drops unsigned frames before the
-RPC layer, so the console cannot talk to a signed network — calls simply time out. Broker
-credentials work if they fit in the url (`mqtt://user:pass@host`), but client certificates and
-signing keys have nowhere to go yet.
+cannot be browsed with it. Broker credentials work if they fit in the url
+(`mqtt://user:pass@host`); TLS client certificates have nowhere to go yet.
 
 **Give it its own name on a busy network.** The default is unique per process, but a peer name maps
 to an MQTT client id and a broker allows one connection per id, so two consoles sharing a `--name`

@@ -1,5 +1,22 @@
 # Changelog
 
+## msgrpc-cli 2.1.0
+
+- `msgrpc console --sign <keyfile>` lets the console take part in a signed network. Without it the
+  console lists peers, because presence is unsigned retained state, and then every call times out
+  with nothing to say why. Keys come from a file rather than a flag, since a secret on a command
+  line is visible to anyone who can run `ps`, and a `--name` contradicting the key file is refused
+  rather than left to surface as that same timeout.
+- README corrected: it claimed broker credentials and signing already applied to the console, which
+  they did not, and documented none of the console's flags.
+
+## msgrpc 2.0.1
+
+- README rewritten. It documented 3 of 14 server options, described the MQTT v1 topic layout as
+  current when MQTT 5 has been the default since 2.0.0, and its low-level examples wired converters
+  that 2.0.0 removed. No code change.
+- `repository.directory` and `homepage` added, so npm and GitHub can find each package in the tree.
+
 ## 2.0.0
 
 A near-complete rework of everything below the API. The class-as-contract surface is unchanged —

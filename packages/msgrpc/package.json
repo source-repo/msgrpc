@@ -1,6 +1,6 @@
 {
   "name": "@source-repo/msgrpc",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "TypeScript RPC over WebSocket and MQTT, using classes as contracts shared by client and server",
   "keywords": [
     "rpc",
@@ -15,7 +15,8 @@
   "author": "anderswestberg",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/source-repo/msgrpc.git"
+    "url": "git+https://github.com/source-repo/msgrpc.git",
+    "directory": "packages/msgrpc"
   },
   "engines": {
     "node": ">=18.17"
@@ -67,5 +68,9 @@
     ],
     "workerThreads": false,
     "concurrency": 1
+  },
+  "homepage": "https://github.com/source-repo/msgrpc/tree/main/packages/msgrpc#readme",
+  "bugs": {
+    "url": "https://github.com/source-repo/msgrpc/issues"
   }
 }

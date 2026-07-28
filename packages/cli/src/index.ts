@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { namespaceProblems, type RpcSchema } from '@source-repo/msgrpc'
+import { createHmacSigner, createHmacVerifier, namespaceProblems, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/msgrpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 
@@ -32,6 +32,8 @@ const usage = `msgrpc <command> [options]
     --port <n>                  default 7300
     --host <address>            default 127.0.0.1 - see the warning it prints before widening this
     --timeout <ms>              call timeout, default 10000
+    --name <peer>               how the console identifies itself, default msgrpc-console-<pid>
+    --sign <keyfile>            HMAC keys, so the console can talk to a signed network
 `
 
 const argument = (argv: string[], flag: string, fallback: string) => {
@@ -64,6 +66,44 @@ const withHistory = (next: RpcSchema, previous: RpcSchema | undefined): RpcSchem
     return next
 }
 
+/**
+ * HMAC keys for the console, read from a file rather than a flag: a secret on the command line is
+ * visible to anyone who can run ps.
+ *
+ *   { "name": "console-1", "secret": "…", "peers": { "plantServer": "…" } }
+ *
+ * `peers` is optional. Supplying it makes the console check signatures on what it receives too,
+ * which means an unsigned peer's frames are then dropped.
+ */
+interface SigningKeys {
+    name?: string
+    secret: string
+    peers?: { [peer: string]: string }
+}
+
+const readSigningKeys = (path: string) => {
+    let keys: SigningKeys
+    try {
+        keys = JSON.parse(readFileSync(path, 'utf8')) as SigningKeys
+    } catch (e) {
+        process.stderr.write(`msgrpc console: cannot read keys from ${path}: ${(e as Error).message}\n`)
+        process.exit(1)
+    }
+    if (typeof keys.secret !== 'string' || !keys.secret) {
+        process.stderr.write(`msgrpc console: ${path} has no "secret"\n`)
+        process.exit(1)
+    }
+    try {
+        // Worth saying out loud: this file is the console's identity on the network.
+        if (statSync(path).mode & 0o077) process.stderr.write(`msgrpc console: ${path} is readable by other users\n`)
+    } catch {
+        // Not worth failing over if the mode cannot be read.
+    }
+    const sign: MessageSigner = createHmacSigner(keys.secret)
+    const verify: MessageVerifier | undefined = keys.peers ? createHmacVerifier((peer) => keys.peers?.[peer]) : undefined
+    return { keys, sign, verify }
+}
+
 const runConsole = async (argv: string[]) => {
     const broker = argument(argv, '--broker', '')
     if (!broker) {
@@ -72,15 +112,29 @@ const runConsole = async (argv: string[]) => {
     }
     const host = argument(argv, '--host', '127.0.0.1')
     const prefix = argument(argv, '--prefix', '')
+    const keyFile = argument(argv, '--sign', '')
+    const signing = keyFile ? readSigningKeys(keyFile) : undefined
+
+    const requestedName = argument(argv, '--name', '')
+    // A signed frame is checked against the key held for the name it claims, so a console signing
+    // with one peer's key while calling itself another is refused - and refused as a timeout, with
+    // nothing to say why. Better to stop here than to let that happen on a plant network.
+    if (signing?.keys.name && requestedName && signing.keys.name !== requestedName) {
+        process.stderr.write(`msgrpc console: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
+        process.exit(1)
+    }
+    const name = requestedName || signing?.keys.name || `msgrpc-console-${process.pid}`
+
     const running = await startConsole({
         broker,
         ...(prefix ? { prefix } : {}),
         port: Number(argument(argv, '--port', '7300')),
         host,
-        name: argument(argv, '--name', `msgrpc-console-${process.pid}`),
-        callTimeout: Number(argument(argv, '--timeout', '10000'))
+        name,
+        callTimeout: Number(argument(argv, '--timeout', '10000')),
+        ...(signing ? { sign: signing.sign, ...(signing.verify ? { verify: signing.verify } : {}) } : {})
     })
-    process.stdout.write(`msgrpc console on ${running.url}, watching ${broker}\n`)
+    process.stdout.write(`msgrpc console on ${running.url}, watching ${broker} as ${name}${signing ? ', signing frames' : ''}\n`)
     if (host !== '127.0.0.1' && host !== 'localhost')
         // Anyone who can reach it can invoke anything the console's own credentials permit.
         process.stderr.write(`msgrpc console: bound to ${host}, so it is reachable from the network. It can call any method it is allowed to.\n`)

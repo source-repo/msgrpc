@@ -1,5 +1,5 @@
 import { createServer, IncomingMessage, ServerResponse } from 'node:http'
-import { MqttTransport, RpcClient, TransportEvent, type ServerDescription } from '@source-repo/msgrpc'
+import { MqttTransport, RpcClient, TransportEvent, type MessageSigner, type MessageVerifier, type ServerDescription } from '@source-repo/msgrpc'
 import { page } from './page.js'
 
 /**
@@ -21,6 +21,14 @@ export interface ConsoleOptions {
     host: string
     name: string
     callTimeout: number
+    /**
+     * Sign outgoing frames. Without this the console cannot talk to a server configured with
+     * `verify`: it still discovers peers, because presence is unsigned retained state, and then
+     * every call times out with nothing to say why.
+     */
+    sign?: MessageSigner
+    /** Require and check signatures on incoming frames. Optional even when signing. */
+    verify?: MessageVerifier
 }
 
 interface Live {
@@ -55,7 +63,11 @@ const json = (response: ServerResponse, status: number, body: unknown) => {
 export const startConsole = async (options: ConsoleOptions) => {
     const live: Live = { peers: new Set(), listeners: new Set() }
 
-    const transport = new MqttTransport(options.name, options.broker, options.prefix ? { prefix: options.prefix } : {})
+    const transport = new MqttTransport(options.name, options.broker, {
+        ...(options.prefix ? { prefix: options.prefix } : {}),
+        ...(options.sign ? { sign: options.sign } : {}),
+        ...(options.verify ? { verify: options.verify } : {})
+    })
     const client = new RpcClient(undefined, { name: options.name, transport, callTimeout: options.callTimeout })
 
     transport.on(TransportEvent.peerOnline, (peer: string) => {

@@ -9,10 +9,10 @@ npm install @source-repo/msgrpc
 ```
 
 ESM only, Node 18.17 or later, and it runs in the browser. Contracts can be extracted from your
-source and checked for breaking changes with [`@source-repo/msgrpc-cli`](../cli), which also serves
+source and checked for breaking changes with [`@source-repo/msgrpc-cli`](https://www.npmjs.com/package/@source-repo/msgrpc-cli), which also serves
 a browser console for a live network.
 
-Upgrading from 1.x? [`CHANGELOG.md`](../../CHANGELOG.md) lists what breaks.
+Upgrading from 1.x? [`CHANGELOG.md`](https://github.com/source-repo/msgrpc/blob/main/CHANGELOG.md) lists what breaks.
 
 ## Quick start
 
@@ -315,7 +315,7 @@ const client = new RpcClient('mqtt://broker:1883', {
 
 MQTT 5 is the default. Reply address, correlation and method travel as packet properties, so a peer
 with no msgrpc code can take part and standard tooling can read the traffic.
-[`docs/mqtt5-frame-spec.md`](../../docs/mqtt5-frame-spec.md) describes the layout in full.
+[`docs/mqtt5-frame-spec.md`](https://github.com/source-repo/msgrpc/blob/main/docs/mqtt5-frame-spec.md) describes the layout in full.
 
 ```
 <prefix>/req/<peer>        calls and subscribe requests            default prefix msgrpc/v2
@@ -616,5 +616,5 @@ docker compose -f docker-compose/docker-compose.yml up -d
 
 Point them at a different broker with `MSGRPC_TEST_BROKER=mqtt://host:1883`.
 
-[`examples/`](examples) is a small plant service showing the 2.0 idioms: `@rpcNamespace` and `@rpc`,
+[`examples/`](https://github.com/source-repo/msgrpc/tree/main/packages/msgrpc/examples) is a small plant service showing the 2.0 idioms: `@rpcNamespace` and `@rpc`,
 an extracted contract, and a server that validates against it and exposes introspection.
