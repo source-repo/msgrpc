@@ -64,6 +64,8 @@ export interface RpcServerOptions {
     validateResults?: boolean
     /** Refuse to expose a class that marks no @rpc methods, rather than publishing all of them. */
     requireExplicitExposure?: boolean
+    /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
+    unknownVersion?: 'allow' | 'reject'
 }
 
 export class RpcServer implements IManageRpc {
@@ -149,6 +151,7 @@ export class RpcServer implements IManageRpc {
         this.rpc.schema = this.options.schema
         this.rpc.validation = this.options.validation ?? (this.options.schema ? 'described' : 'off')
         this.rpc.validateResults = this.options.validateResults ?? false
+        this.rpc.unknownVersion = this.options.unknownVersion ?? 'allow'
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         this.readyFlag = true

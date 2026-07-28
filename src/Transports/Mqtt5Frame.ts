@@ -32,7 +32,8 @@ export const MR = {
     code: 'mr-code',
     nonce: 'mr-nonce',
     timestamp: 'mr-ts',
-    signature: 'mr-sig'
+    signature: 'mr-sig',
+    contractVersion: 'mr-ver'
 } as const
 
 export const FRAME_VERSION = '1'
@@ -51,6 +52,8 @@ export interface OutboundFrame {
     method?: string
     event?: string
     code?: string
+    /** Contract version the caller declares, when it has one. */
+    version?: string
     /** Encoded as the packet payload: arguments for a request, the value for a result. */
     body: unknown
 }
@@ -65,7 +68,15 @@ export const toOutboundFrame = (message: Message): OutboundFrame | undefined => 
     switch (payload.type) {
         case RpcMessageType.CallInstanceMethod: {
             const call = payload as RpcCallInstanceMethodPayload
-            return { kind: requestKind(call.method), channel: 'req', correlation: call.id, path: call.path, method: call.method, body: call.params }
+            return {
+                kind: requestKind(call.method),
+                channel: 'req',
+                correlation: call.id,
+                path: call.path,
+                method: call.method,
+                version: call.version,
+                body: call.params
+            }
         }
         case RpcMessageType.success: {
             const success = payload as RpcSuccessPayload
@@ -91,6 +102,7 @@ export interface InboundFrame {
     method?: string
     event?: string
     code?: string
+    version?: string
     body: unknown
 }
 
@@ -106,6 +118,7 @@ export const fromInboundFrame = (frame: InboundFrame): Message | undefined => {
                 id: frame.correlation,
                 path: frame.path,
                 method: frame.method,
+                version: frame.version,
                 // A caller that sends no payload means no arguments.
                 params: Array.isArray(frame.body) ? frame.body : frame.body === undefined || frame.body === null ? [] : [frame.body]
             }

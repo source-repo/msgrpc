@@ -189,11 +189,42 @@ Set `validate: false` on a namespace to skip a hot path where the cost is not wo
 Validating `writeSetpoint(number)` is not the same proposition as validating a ten-thousand element
 telemetry array on every publish.
 
-`version` on a namespace is a diagnostic, not a gate. The receiver always checks against its own
-schema, and that check *is* the compatibility test; the version exists so a caller built against an
-older contract is recognisable as one instead of looking like a caller sending rubbish. The
-`history` field is reserved for a future extraction tool, which can compare a regenerated schema
-against the versions stored there and refuse a breaking change before it ships.
+## Serving older callers
+
+Give a client the contract it was built against and it declares the version on every call:
+
+```typescript
+const client = new RpcClient(url, { schema: contractTheClientWasBuiltAgainst })
+```
+
+The server keeps earlier versions of a namespace under `history`, and compares the caller's
+contract with the one it now serves. It is a structural comparison, not an equality check, so a
+caller whose contract still holds keeps working and only a genuine incompatibility is refused —
+with `IncompatibleVersion` and the reason:
+
+```
+plant@1 is not compatible with plant@2: writeSetpoint argument 0 narrowed, so a value the
+caller may send is no longer accepted
+```
+
+The rule is ordinary function subtyping. **Parameters are contravariant**: the current contract has
+to accept everything the old one allowed, so widening a parameter is safe and narrowing it is not.
+**Returns are covariant**: everything the current contract can return has to fit what the old caller
+expects, so narrowing a return is safe and widening it is not. Adding an optional field or an
+optional argument is safe; adding a required one is not. Events run the other way, since the server
+emits and the caller receives.
+
+The comparison happens once per peer and version, not per call, and the check is conservative:
+where it cannot prove compatibility it reports incompatibility, since a false "safe" is the
+expensive direction.
+
+A caller that declares nothing is simply not version-checked — only its arguments are. A caller
+declaring a version the server has no history for is allowed by default, since truncating history
+is a legitimate operational choice; `unknownVersion: 'reject'` refuses it instead.
+
+The same comparison is what a future extraction tool wants at build time: regenerate the schema,
+compare it against the stored history, and refuse a breaking change before it ships rather than
+discovering it when an old peer calls.
 
 # Errors
 

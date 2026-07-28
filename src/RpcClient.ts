@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { MessageSigner } from './RPC/Auth.js'
+import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
@@ -32,6 +33,11 @@ export interface RpcClientOptions {
      * authenticate and the source field would otherwise be an unverifiable claim.
      */
     sign?: MessageSigner
+    /**
+     * The contract this client was built against. Its per-namespace versions are declared on each
+     * call so a server can tell a genuinely stale caller from one sending rubbish.
+     */
+    schema?: RpcSchema
 }
 
 export interface RpcProxy<T> {
@@ -99,6 +105,10 @@ export class RpcClient extends EventEmitter {
         // wire format such as MQTT 5 needs to see the message, not bytes a converter already flattened.
         transport.codec = codecFor(this.options.useMsgPack)
         this.rpcClient = new RpcClientHandler(this.options.name, [transport], this.options.callTimeout)
+        if (this.options.schema)
+            this.rpcClient.schemaVersions = Object.fromEntries(
+                Object.entries(this.options.schema.namespaces).map(([namespace, described]) => [namespace, described.version])
+            )
         this.rpcClient.pipe(transport)
         for (const module of [transport, this.rpcClient]) module.usePeerRegistry(this.peers)
         this.wireTransportLifecycle(transport)

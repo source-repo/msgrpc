@@ -23,9 +23,14 @@ export interface RpcCallInstanceMethodPayload extends RpcMessage {
     path: string
     method: string
     params: unknown[]
+    /**
+     * Contract version the caller was built against, when it has a schema. The server compares it
+     * with the version it serves and refuses only when the two are structurally incompatible.
+     */
+    version?: string
 }
 
-export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden' | 'InvalidParams'
+export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden' | 'InvalidParams' | 'IncompatibleVersion'
 
 /**
  * A remote error flattened into something that survives MsgPack/JSON encoding.

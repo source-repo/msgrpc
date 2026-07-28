@@ -350,6 +350,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             method: values[MR.method],
             event: values[MR.event],
             code: values[MR.code],
+            version: values[MR.contractVersion],
             body: decoded
         })
         if (!message) {
@@ -495,6 +496,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (frame.method) userProperties[MR.method] = frame.method
         if (frame.event) userProperties[MR.event] = frame.event
         if (frame.code) userProperties[MR.code] = frame.code
+        if (frame.version) userProperties[MR.contractVersion] = frame.version
 
         if (this.sign) {
             const nonce = createNonce()

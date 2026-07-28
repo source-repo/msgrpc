@@ -49,6 +49,8 @@ export type PromiseResolver<T> = { resolve: (result: T) => void; reject: (reason
 export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMessage, Message<RpcMessage>, RpcMessage> implements RpcClientEmitter {
     responsePromiseMap = new Map<string, PromiseResolver<unknown>>()
     responseTimeoutMap = new Map<string, NodeJS.Timeout>()
+    /** Contract versions this client was built against, by namespace, declared on each call. */
+    schemaVersions?: { [namespace: string]: string | undefined }
     /** Remote subscriptions held by this client, replayed by resubscribe() after a reconnect. */
     subscriptions = new Map<string, { remote?: string; instanceName: string; event: string }>()
     eventEmitter: { [index: string]: unknown } = new EventEmitter() as unknown as { [index: string]: unknown }
@@ -128,7 +130,8 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             type: RpcMessageType.CallInstanceMethod,
             path: instanceName,
             method,
-            params
+            params,
+            version: this.schemaVersions?.[instanceName]
         }
         return new Promise((resolve, reject) => {
             // Registered before sending: a response can arrive before sendPayload's promise settles.

@@ -230,3 +230,124 @@ test('result validation catches a server breaking its own contract', async (t) =
     await client.close()
     await server.close()
 })
+
+// ------------------------------------------------------------------ version compatibility
+
+import { assignable, namespaceProblems } from './RPC/Compatibility.js'
+import { NamespaceSchema } from './RPC/Schema.js'
+
+test('assignability widens for inputs and narrows for outputs', (t) => {
+    // A narrower type is assignable to a wider one, never the reverse.
+    t.true(assignable({ kind: 'number', min: 0, max: 10 }, num))
+    t.false(assignable(num, { kind: 'number', min: 0, max: 10 }))
+    t.true(assignable({ kind: 'literal', value: 'auto' }, str))
+    t.true(assignable(str, { kind: 'union', options: [str, num] }))
+    t.false(assignable({ kind: 'union', options: [str, num] }, str))
+    t.true(assignable({ kind: 'number', integer: true }, num))
+    t.false(assignable(num, { kind: 'number', integer: true }))
+
+    // 'any' absorbs anything but cannot be absorbed.
+    t.true(assignable(num, { kind: 'any' }))
+    t.false(assignable({ kind: 'any' }, num))
+
+    // An object may gain optional fields, not required ones, and may not carry extras.
+    const v1: TypeNode = { kind: 'object', fields: { a: { type: num } } }
+    t.true(assignable(v1, { kind: 'object', fields: { a: { type: num }, b: { type: str, optional: true } } }))
+    t.false(assignable(v1, { kind: 'object', fields: { a: { type: num }, b: { type: str } } }))
+    t.false(assignable({ kind: 'object', fields: { a: { type: num }, extra: { type: num } } }, v1))
+    t.true(assignable({ kind: 'object', fields: { a: { type: num }, extra: { type: num } } }, { kind: 'object', fields: { a: { type: num } }, additional: true }))
+})
+
+const v1: NamespaceSchema = {
+    version: '1',
+    methods: { writeSetpoint: { params: [num], returns: num }, readSetpoint: { params: [], returns: num } }
+}
+
+test('a widened parameter stays compatible, a narrowed one does not', (t) => {
+    const widened: NamespaceSchema = { version: '2', methods: { ...v1.methods, writeSetpoint: { params: [{ kind: 'union', options: [num, str] }], returns: num } } }
+    t.deepEqual(namespaceProblems(v1, widened), [], 'widening a parameter should stay compatible')
+
+    const narrowed: NamespaceSchema = { version: '2', methods: { ...v1.methods, writeSetpoint: { params: [{ kind: 'number', max: 100 }], returns: num } } }
+    const problems = namespaceProblems(v1, narrowed)
+    t.is(problems.length, 1)
+    t.is(problems[0].where, 'writeSetpoint argument 0')
+    t.regex(problems[0].reason, /narrowed/)
+})
+
+test('a narrowed return stays compatible, a widened one does not', (t) => {
+    const narrowedReturn: NamespaceSchema = { version: '2', methods: { ...v1.methods, readSetpoint: { params: [], returns: { kind: 'number', min: 0 } } } }
+    t.deepEqual(namespaceProblems(v1, narrowedReturn), [], 'narrowing a return should stay compatible')
+
+    const widenedReturn: NamespaceSchema = { version: '2', methods: { ...v1.methods, readSetpoint: { params: [], returns: { kind: 'union', options: [num, str] } } } }
+    t.regex(namespaceProblems(v1, widenedReturn)[0]?.reason ?? '', /widened/)
+})
+
+test('removed methods, added required arguments and dropped events are reported', (t) => {
+    t.regex(namespaceProblems(v1, { version: '2', methods: { readSetpoint: v1.methods.readSetpoint } })[0]?.reason ?? '', /no longer exists/)
+
+    const extraRequired: NamespaceSchema = { version: '2', methods: { ...v1.methods, writeSetpoint: { params: [num, str], returns: num } } }
+    t.regex(namespaceProblems(v1, extraRequired).map((p) => p.reason).join(' '), /requires 2 arguments/)
+
+    const withEvent: NamespaceSchema = { ...v1, events: { alarm: { params: [str] } } }
+    t.regex(namespaceProblems(withEvent, v1)[0]?.reason ?? '', /no longer emitted/)
+})
+
+test('a caller declaring an incompatible version is refused with the reason', async (t) => {
+    // v2 narrows writeSetpoint, so a v1 caller can no longer be served safely.
+    const served: RpcSchema = {
+        schema: 1,
+        namespaces: {
+            plant: {
+                version: '2',
+                methods: { writeSetpoint: { params: [{ kind: 'number', min: 0, max: 100 }], returns: num }, readSetpoint: { params: [], returns: num } },
+                history: { '1': { methods: v1.methods } }
+            }
+        }
+    }
+    const callerContract: RpcSchema = { schema: 1, namespaces: { plant: { version: '1', methods: v1.methods } } }
+
+    const server = new RpcServer({ transports: [{ port: 3967 }], schema: served })
+    await server.ready()
+    server.exposeClassInstance(new Plant(), 'plant')
+
+    const stale = new RpcClient('http://localhost:3967', { schema: callerContract })
+    await stale.ready()
+    const error = await t.throwsAsync(async () => (await stale.proxy<Plant>('plant')).remote!.writeSetpoint(50), { instanceOf: RpcError })
+    t.is(error?.code, 'IncompatibleVersion')
+    t.regex(error?.message ?? '', /plant@1 is not compatible with plant@2/)
+    t.regex(error?.message ?? '', /writeSetpoint argument 0 narrowed/)
+
+    // A caller declaring nothing is unaffected: only its arguments are checked.
+    const current = new RpcClient('http://localhost:3967')
+    await current.ready()
+    t.is(await (await current.proxy<Plant>('plant')).remote!.writeSetpoint(50), 50)
+
+    await stale.close()
+    await current.close()
+    await server.close()
+})
+
+test('an older caller whose contract still holds keeps working', async (t) => {
+    // v2 only widens, so a v1 caller is still safe and must not be refused.
+    const served: RpcSchema = {
+        schema: 1,
+        namespaces: {
+            plant: {
+                version: '2',
+                methods: { writeSetpoint: { params: [{ kind: 'union', options: [num, str] }], returns: num }, readSetpoint: { params: [], returns: num } },
+                history: { '1': { methods: v1.methods } }
+            }
+        }
+    }
+    const server = new RpcServer({ transports: [{ port: 3968 }], schema: served })
+    await server.ready()
+    server.exposeClassInstance(new Plant(), 'plant')
+
+    const older = new RpcClient('http://localhost:3968', { schema: { schema: 1, namespaces: { plant: { version: '1', methods: v1.methods } } } })
+    await older.ready()
+
+    t.is(await (await older.proxy<Plant>('plant')).remote!.writeSetpoint(50), 50, 'a caller whose contract still holds was refused')
+
+    await older.close()
+    await server.close()
+})
