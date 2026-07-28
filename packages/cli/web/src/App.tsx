@@ -44,7 +44,14 @@ const useConsole = () => {
                 const name = readableNameFrom(window.location.host) + (first ? '' : `-${tab}`)
                 setMe(name)
 
-                server = new RpcServer({ name, transports: [{ connect: window.location.origin }], readyTimeout: 10000 })
+                server = new RpcServer({
+                    name,
+                    transports: [{ connect: window.location.origin }],
+                    readyTimeout: 10000,
+                    // So a page can be selected in another page's console and describe itself.
+                    // Without it every peer here answers ClassNotFound, which is true but useless.
+                    exposeIntrospection: true
+                })
                 server.exposeClassInstance(new ChatService((from, text) => said.current?.(from, text)), 'chat')
                 const link = server.transports[0]
                 link?.on(TransportEvent.disconnected, () => setStatus('reconnecting'))

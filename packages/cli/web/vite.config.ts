@@ -16,6 +16,10 @@ export default defineConfig({
     build: {
         outDir: '../dist/web',
         emptyOutDir: true,
+        // A console is a debugging tool. When it breaks, "_ is not a function" in minified output
+        // is worth less than the few hundred kB the maps cost, and they are only fetched when
+        // devtools is open.
+        sourcemap: true,
         // Fixed names, so the static handler serves a known set rather than hashed ones.
         rollupOptions: { output: { entryFileNames: 'app.js', assetFileNames: 'app.[ext]' } }
     },

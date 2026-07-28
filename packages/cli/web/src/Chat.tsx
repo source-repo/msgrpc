@@ -49,7 +49,12 @@ export const Chat = ({
     const [sending, setSending] = useState(false)
     const end = useRef<HTMLDivElement>(null)
 
-    useEffect(() => end.current?.scrollIntoView({ block: 'end' }), [messages.length])
+    // Block body on purpose. React 19 calls whatever an effect returns as its cleanup, and an
+    // arrow with an expression body returns the expression - which is how this crashed the page
+    // with "_ is not a function" the moment the log grew.
+    useEffect(() => {
+        end.current?.scrollIntoView({ block: 'end' })
+    }, [messages.length])
 
     const send = async () => {
         if (!text.trim() || !peer) return
