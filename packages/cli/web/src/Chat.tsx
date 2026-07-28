@@ -34,12 +34,10 @@ export class ChatService {
 }
 
 export const Chat = ({
-    me,
     peer,
     messages,
     onSend
 }: {
-    me: string
     peer: string | null
     messages: ChatMessage[]
     onSend: (text: string) => Promise<string | undefined>
@@ -67,7 +65,8 @@ export const Chat = ({
         <div className="chat">
             <header>
                 <h1>Chat</h1>
-                <span className="muted mono">{me}</span>
+                {/* Who you are talking to. Which peer you are is in the sidebar, always visible. */}
+                <span className="muted mono">{peer ?? '—'}</span>
             </header>
             {!peer && <p className="muted">Select a peer to talk to it. Any peer running this console can answer.</p>}
             {peer && (

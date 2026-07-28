@@ -259,7 +259,7 @@ export const App = () => {
             </main>
 
             <section className="side">
-                <Chat me={me} peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />
+                <Chat peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />
                 <div className="stream">
                 <header>
                     <h1>Events</h1>

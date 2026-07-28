@@ -121,9 +121,16 @@ aside {
     word-break: break-word;
 }
 
+.said.mine {
+    /* Yours on the right, theirs on the left - which side a line sits on says who said it before
+       the label does. */
+    text-align: right;
+}
+
 .said.mine .text {
     background: var(--accent-dim);
     color: #eaf3ff;
+    text-align: left;
 }
 
 .chat-send {
