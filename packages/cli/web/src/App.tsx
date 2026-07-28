@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RpcServer, TransportEvent, readableNameFrom } from '@source-repo/msgrpc'
-import { Chat, ChatMessage, ChatService } from './Chat'
+import { RpcServer, TransportEvent, readableNameFrom, type RpcSchema } from '@source-repo/msgrpc'
+import { Chat } from './Chat'
+import { ChatMessage, ChatService } from './ChatService'
+// Extracted from ChatService by `npm run contract` and committed. A page is the one peer nobody can
+// read the source of at runtime, so shipping its contract is what lets another console show
+// `say(from: string, text: string)` instead of `say(…)`.
+import chatContract from './chat.types.json'
 import { MethodPanel } from './MethodPanel'
 import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, fetchConsoleName, typeText } from './types'
 
@@ -48,11 +53,14 @@ const useConsole = () => {
                     name,
                     transports: [{ connect: window.location.origin }],
                     readyTimeout: 10000,
+                    schema: chatContract as RpcSchema,
                     // So a page can be selected in another page's console and describe itself.
                     // Without it every peer here answers ClassNotFound, which is true but useless.
                     exposeIntrospection: true
                 })
-                server.exposeClassInstance(new ChatService((from, text) => said.current?.(from, text)), 'chat')
+                // No name here: @rpcNamespace('chat') carries it. That matters in a bundle, where
+                // the class name is minified to something like `Mv` and would be the fallback.
+                server.exposeClassInstance(new ChatService((from, text) => said.current?.(from, text)))
                 const link = server.transports[0]
                 link?.on(TransportEvent.disconnected, () => setStatus('reconnecting'))
                 link?.on(TransportEvent.connected, () => setStatus('connected'))

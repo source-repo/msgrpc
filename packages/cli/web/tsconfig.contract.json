@@ -1,0 +1,6 @@
+{
+    // Only the service the page hosts. The rest of the app calls outwards and exposes nothing, so
+    // there is nothing there for a peer to hold a contract against.
+    "extends": "./tsconfig.json",
+    "include": ["src/ChatService.ts"]
+}

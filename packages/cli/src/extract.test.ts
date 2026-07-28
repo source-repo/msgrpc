@@ -1,5 +1,6 @@
 import test from 'ava'
 import { fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import type { NamespaceSchema, TypeNode } from '@source-repo/msgrpc'
 import { namespaceProblems } from '@source-repo/msgrpc'
@@ -96,6 +97,20 @@ test('types that cannot be described are reported, never emitted as any', (t) =>
         diagnostics.every((diagnostic) => diagnostic.file && diagnostic.line),
         'each diagnostic should point at a place in the source'
     )
+})
+
+test('the contracts this package ships still match the source they came from', (t) => {
+    // Both are loaded at runtime - the console loads its own, the page ships its chat one - so a
+    // service changed without re-extracting would ship a contract describing the old shape, and
+    // validation would refuse calls the method now accepts. `npm run contract` regenerates them.
+    for (const [project, stored] of [
+        ['../tsconfig.contract.json', '../src/console.types.json'],
+        ['../web/tsconfig.contract.json', '../web/src/chat.types.json']
+    ]) {
+        const { schema, diagnostics } = extractSchema(resolve(here, project))
+        t.deepEqual(diagnostics, [], `${project} should describe cleanly`)
+        t.deepEqual(schema, JSON.parse(readFileSync(resolve(here, stored), 'utf8')), `${stored} is stale — run npm run contract`)
+    }
 })
 
 test('the extracted contract feeds the same comparison the server uses', (t) => {

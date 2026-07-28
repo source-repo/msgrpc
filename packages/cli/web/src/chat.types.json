@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "namespaces": {
+    "chat": {
+      "methods": {
+        "say": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "from",
+            "text"
+          ],
+          "returns": {
+            "kind": "string"
+          }
+        },
+        "who": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "app": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "kind": {
+                "type": {
+                  "kind": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

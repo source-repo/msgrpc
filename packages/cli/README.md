@@ -233,18 +233,27 @@ object with a timestamp in it would be rejected by the server that asked for one
 
 ### The console describes itself
 
-The console ships its own contract, extracted from its own source, so pointing one console at
-another gives argument fields rather than `call(…)`:
+Both services this package runs — the CLI's `console` namespace and the `chat` namespace the page
+hosts — ship a contract extracted from their own source, so pointing one console at another gives
+argument fields rather than `call(…)` and `say(…)`:
 
 ```
-npm run contract        # extract --project tsconfig.contract.json --out src/console.types.json
+npm run contract        # extract both, into src/console.types.json and web/src/chat.types.json
 npm run check:contract  # the same comparison the server applies to an older caller
 ```
 
-The file is committed, which is what makes it reviewable and lets `check:contract` fail a build that
-would refuse a page built against the old one. This was also the first thing to need `record`:
-`describe()` returns a `ServerDescription`, which is built out of `{ [name: string]: TypeNode }` —
-so until the type language could describe a dictionary, it could not describe its own output.
+The files are committed, which makes them reviewable and lets `check:contract` fail a build that
+would refuse a peer built against the old one. A test asserts they still match their source, since a
+service changed without re-extracting would ship a contract describing the old shape.
+
+The console's own contract was the first thing to need `record`: `describe()` returns a
+`ServerDescription`, built out of `{ [name: string]: TypeNode }` — so until the type language could
+describe a dictionary, it could not describe its own output.
+
+The chat contract is the one that has to survive a bundler. `@rpc` and `@rpcNamespace` are standard
+ECMAScript decorators, and they come through Vite's build intact — which is also what keeps the
+namespace called `chat` rather than the minified class name, and what `extract` reads statically to
+write the contract in the first place.
 
 ### Watching events
 
@@ -257,9 +266,16 @@ that outlive it.
 
 The browser half is a React app talking to the CLI **over msgrpc itself**. The CLI runs an
 `RpcServer` on the same HTTP server that serves the page and exposes a `console` namespace
-(`peers`, `describe`, `call`, `watch`, `unwatch`) plus `event` and `peer` events; the page is an
-ordinary `RpcClient`. There is no REST API and no server-sent events, and the console is the
-library's own first client — a bug in event routing shows up here before it reaches a plant.
+(`peers`, `describe`, `call`, `watch`, `unwatch`) plus `event` and `peer` events. There is no REST
+API and no server-sent events, and the console is the library's own first client — a bug in event
+routing shows up here before it reaches a plant.
+
+The page is an `RpcServer` too, not a client. It serves over the connection it opens to the console,
+which is the only thing a browser can do since it cannot listen, and that is what lets its `chat`
+namespace be called by another peer. The same object calls outwards with `proxy()`, so browsing the
+network and hosting a service on it share one link and one name. Chat exists to exercise exactly
+that direction: two consoles on one bus, a page on each, and a message crossing between them tests
+dial-out serving, presence propagation and relaying in a way no amount of calling the console can.
 
 Everything is bundled into the CLI's `dist`: no CDN, no runtime download. A plant network usually
 has no route to the internet, and a page that fetches from one renders blank exactly where it is
