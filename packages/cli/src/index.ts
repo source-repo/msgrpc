@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { createHmacSigner, createHmacVerifier, namespaceProblems, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/msgrpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
+import { startBroker } from './broker.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -19,6 +20,7 @@ const usage = `msgrpc <command> [options]
   extract   write the contract described by the source to a file
   check     compare the source against a written contract and fail on a breaking change
   console   browse a live network in a browser: peers, what they expose, calls and events
+  broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
 
   extract / check
     --project <tsconfig.json>   default ./tsconfig.json
@@ -36,12 +38,22 @@ const usage = `msgrpc <command> [options]
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how the console identifies itself, default msgrpc-console-<pid>
     --sign <keyfile>            HMAC keys, so the console can talk to a signed network
+
+  broker
+    --port <n>                  default 8080, on every interface
+    --name <peer>               how the broker identifies itself, default msgrpc-broker
+    --upstream <url>            join another broker, repeatable; the two become one network
+    --quiet                     do not log peers arriving and leaving
 `
 
 const argument = (argv: string[], flag: string, fallback: string) => {
     const index = argv.indexOf(flag)
     return index === -1 ? fallback : (argv[index + 1] ?? fallback)
 }
+
+/** Every occurrence of a repeatable flag, so --upstream can be given more than once. */
+const argumentList = (argv: string[], flag: string) =>
+    argv.map((value, index) => (value === flag ? argv[index + 1] : undefined)).filter((value): value is string => !!value)
 
 const DIAGNOSTIC_LIMIT = 25
 
@@ -106,6 +118,34 @@ const readSigningKeys = (path: string) => {
     return { keys, sign, verify }
 }
 
+const runBroker = async (argv: string[]) => {
+    const port = Number(argument(argv, '--port', '8080'))
+    const upstream = argumentList(argv, '--upstream')
+    const quiet = argv.includes('--quiet')
+    const name = argument(argv, '--name', 'msgrpc-broker')
+
+    const running = await startBroker({
+        port,
+        name,
+        ...(upstream.length ? { upstream } : {}),
+        ...(quiet ? {} : { onPeer: (peer, state, where) => process.stdout.write(`  ${state === 'online' ? '+' : '-'} ${peer} (${where})\n`) })
+    }).catch((e: Error) => {
+        // A port already taken is the ordinary way this fails, and it deserves a sentence.
+        process.stderr.write(`msgrpc broker: cannot start on port ${port}: ${e.message}\n`)
+        process.exit(1)
+    })
+    process.stdout.write(`msgrpc broker ${name} on port ${port}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`)
+    // It listens on every interface and forwards for whoever connects, without checking who they
+    // are. Worth saying plainly rather than leaving to be discovered.
+    process.stderr.write('msgrpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust.\n')
+
+    const stop = () => void running.close().then(() => process.exit(0))
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+    // Nothing else keeps this process alive; the listener does.
+    await new Promise(() => {})
+}
+
 const runConsole = async (argv: string[]) => {
     const broker = argument(argv, '--broker', '')
     const hub = argument(argv, '--hub', '')
@@ -153,6 +193,10 @@ const main = () => {
     const command = argv[0]
     const project = resolve(argument(argv, '--project', 'tsconfig.json'))
 
+    if (command === 'broker') {
+        void runBroker(argv)
+        return
+    }
     if (command === 'console') {
         void runConsole(argv)
         return

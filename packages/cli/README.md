@@ -15,6 +15,7 @@ ESM only, Node 18.17 or later.
 msgrpc extract   write the contract described by the source to a file
 msgrpc check     compare the source against a written contract, exit 1 on a breaking change
 msgrpc console   browse a live network: peers, what they expose, calls and events
+msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share
 ```
 
 | flag | commands | default | meaning |
@@ -31,6 +32,10 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 | `--timeout <ms>` | console | `10000` | call timeout |
 | `--name <peer>` | console | `msgrpc-console-<pid>` | how the console identifies itself to the network |
 | `--sign <keyfile>` | console | — | HMAC keys, so the console can talk to a signed network |
+| `--port <n>` | broker | `8080` | listens on every interface |
+| `--name <peer>` | broker | `msgrpc-broker` | how the broker identifies itself |
+| `--upstream <url>` | broker | — | join another broker; repeatable |
+| `--quiet` | broker | off | stop logging peers arriving and leaving |
 
 ## Declaring the contract
 
@@ -118,6 +123,59 @@ the caller receives.
 
 `extract --keep-history` moves the previous contract into `history` when the version changes, which
 is what lets both this check and the server recognise an older caller.
+
+## broker
+
+```
+msgrpc broker --port 8080
+```
+
+A bus for networks that have no MQTT broker to share. It runs until Ctrl-C, relaying between the
+peers that connect to it and telling each of them who else is there — which is what MQTT gives you
+through retained presence and per-peer topics, over one WebSocket port instead.
+
+```
+msgrpc broker plantBus on port 8085
+  + cellBus (:8085)
+  + panel1 (:8085)
+  + hmi (:8085)
+```
+
+Peers join it by dialling out, which is also the only thing a browser page can do:
+
+```typescript
+const panel = new RpcServer({ name: 'panel1', transports: [{ connect: 'http://bus:8080' }] })
+panel.exposeClassInstance(new Panel(), 'panel')      // now callable by anything else on the bus
+```
+
+There is no separate broker implementation and there should not be: this is an `RpcServer` that
+exposes nothing. A peer addressing the broker by name gets `ClassNotFound`, which is the truth —
+it is a switchboard, not a service.
+
+### Joining two brokers
+
+`--upstream` dials another broker, and the two become one network. Each side's peers are advertised
+to the other, and a call crosses without either end knowing there was a hop:
+
+```
+msgrpc broker --port 8085 --name plantBus
+msgrpc broker --port 8086 --name cellBus --upstream http://plant:8085
+```
+
+A peer on `cellBus` is then callable from `plantBus` and the other way round. Repeat `--upstream` to
+join more than one. Loops are handled — a peer is never advertised back along the link it came from,
+and frames carry a hop count and are dropped after 8 relays — so brokers dialling each other in a
+ring settle rather than storm.
+
+### What it is not
+
+**Not a store-and-forward broker.** Nothing is queued for a peer that is not connected: a frame is
+handed to a peer that is there now, or reported as unroutable. If a peer needs to receive what was
+sent while it was down, that is what MQTT and `persistentSession` are for.
+
+**Not authenticated.** It listens on every interface and relays for whoever connects, without
+checking who they are, and it says so on startup. Put it behind a network you trust, or build one
+from the library with `authenticate` and a `relay` rule.
 
 ## console
 

@@ -124,6 +124,35 @@ await oven.remote!.temperature()
 one connection, rather than an `RpcServer` and an `RpcClient` under two names — which over MQTT
 would mean two broker sessions.
 
+### One peer, several links
+
+A peer holds one link per transport, and the two kinds are not interchangeable:
+
+| transport | connections |
+| --- | --- |
+| `{ port }` / `{ server }` | **accepts** many — every peer that dials in |
+| `{ connect: url }` | **opens** exactly one, to that url |
+| `{ brokerurl }` | opens one, to that broker |
+
+A socket cannot both accept and dial, so a Node service that serves browsers *and* joins a bus
+genuinely holds two:
+
+```
+browsers ──▶ :8080 ┐
+                   ├─ nodeSrv ──▶ ws://bus:9000
+                   ┘
+```
+
+But **every link carries traffic both ways**. `proxy()` picks whichever transport reaches the
+target, so:
+
+- calling a browser that dialled in costs no new connection — the frame goes back down the socket
+  that browser opened;
+- calling a peer on the bus goes out over the link `nodeSrv` already holds.
+
+What `proxy()` removed was not the second link but a *third*: before it, calling anything on the bus
+meant a separate `RpcClient` with its own connection to the bus and its own name on it.
+
 ### Serving over a connection you open
 
 A browser cannot listen, so a page that wants to *host* a service has to dial out. `connect` gives

@@ -41,6 +41,10 @@ always has - and so a server hosted in a browser page is a peer like any other.
   left its event subscriptions on the MQTT server forever.
 - **`msgrpc console --hub <url>`**, on its own or alongside `--broker`. With both, one list covers
   both networks and each peer is called over the link it was found on.
+- **`msgrpc broker`** runs a WebSocket bus until Ctrl-C, for networks with no MQTT broker to share:
+  it relays between the peers that connect and tells each who else is there. `--upstream <url>`
+  joins another broker, repeatable, and the two become one network - a peer on either is callable
+  from the other. It is an `RpcServer` exposing nothing; there is no separate implementation.
 
 ### Fixed
 
@@ -52,6 +56,9 @@ always has - and so a server hosted in a browser page is a peer like any other.
   only ever saw as an unexplained timeout.
 - `MqttTransport` set the response topic of a forwarded request to its own address, so a
   non-msgrpc peer honouring it would have replied to the wrong peer.
+- A socket.io server reported itself ready before its port was bound, and had no handler for the
+  listener's `error`. A port already in use therefore announced a running server and then took the
+  process down with an unhandled event; it now waits for `listening` and reports the failure.
 
 ### Tests
 

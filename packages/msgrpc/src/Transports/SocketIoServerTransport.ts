@@ -166,11 +166,18 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 }
             })
         })
-        if (this.server && this.ourServer && !(this.server instanceof SocketIo.Server))
-            this.server.listen(port, () => {
+        if (this.server && this.ourServer && !(this.server instanceof SocketIo.Server)) {
+            const listener = this.server
+            // Without a handler Node throws on the unhandled 'error', so a port already in use took
+            // the process down with a stack trace instead of a diagnosis.
+            listener.on('error', (e) => this.emit(TransportEvent.transportError, e))
+            // Ready means listening. It used to be set here regardless, so ready() resolved before
+            // the port was bound and a server could announce itself and then die of EADDRINUSE.
+            listener.listen(port, () => {
+                this.readyFlag = true
                 console.log(`Socket.io server listening on port ${port}`)
             })
-        this.readyFlag = true
+        } else this.readyFlag = true
     }
 
     /**
