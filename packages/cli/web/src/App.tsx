@@ -106,6 +106,12 @@ export const App = () => {
         setWatching(new Set(state.watching))
     }, [service])
 
+    // The tab is where two consoles are told apart when both are open, so it carries the peer name
+    // rather than a title that is the same on every one of them.
+    useEffect(() => {
+        if (me) document.title = me
+    }, [me])
+
     useEffect(() => {
         said.current = (from, text) =>
             setChats((current) => ({ ...current, [from]: [...(current[from] ?? []), { from, text, at: Date.now(), mine: false }] }))
