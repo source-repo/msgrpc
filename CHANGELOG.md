@@ -19,6 +19,15 @@
 
 ### Fixed
 
+- **`SocketIoClientTransport.close()` returned before the connection was closed.** `disconnect()`
+  only starts it: a close packet goes out and it returns, leaving the engine's ping timer armed
+  until the transport is actually torn down. So a promise that was supposed to mean "closed"
+  resolved while the connection was still running - the mirror of what the server transport already
+  got right, where `io.close()` and the HTTP server's close are both awaited. This was also the
+  intermittent hang after a passing test suite, which ava 8 reports as a failure rather than a
+  warning: 4 reproductions in 40 runs before, 0 in 40 after.
+- socket.io connections are refused while a server is closing, at the handshake, so one completing
+  inside that window cannot outlive the sweep that was meant to disconnect it.
 - `GenericModule.ready()` polled with no way out, so a module that never became ready - one that
   failed to start, or was closed while something still awaited it - spun on a 10 ms timer for the
   life of the process, which is also enough to keep the process alive with nothing left to do. It
