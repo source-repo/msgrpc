@@ -21,6 +21,13 @@ const subtle = () => {
 const toBytes = (value: Uint8Array | string) => (typeof value === 'string' ? stringToUint8Array(value) : value)
 
 /**
+ * WebCrypto takes a BufferSource, which recent typings narrow to views over a plain ArrayBuffer.
+ * A Uint8Array may sit on a SharedArrayBuffer, so copying is what makes the type honest rather
+ * than asserted away. The cost is trivial next to the hashing that follows.
+ */
+const bufferSource = (bytes: Uint8Array): Uint8Array<ArrayBuffer> => new Uint8Array(bytes)
+
+/**
  * The exact bytes a signature covers: a JSON array of the header fields, followed by the payload.
  *
  * A JSON array fixes the field order and escapes the values, so no combination of names can be
@@ -135,8 +142,8 @@ const identityOf = (source: string, identityFor?: (source: string) => RpcIdentit
  */
 export const createHmacSigner = (secret: Uint8Array | string): MessageSigner => {
     let imported: Promise<CryptoKey> | undefined
-    const key = () => (imported ??= subtle().importKey('raw', toBytes(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']))
-    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('HMAC', await key(), canonicalBytes)))
+    const key = () => (imported ??= subtle().importKey('raw', bufferSource(toBytes(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']))
+    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('HMAC', await key(), bufferSource(canonicalBytes))))
 }
 
 export const createHmacVerifier = (
@@ -146,9 +153,9 @@ export const createHmacVerifier = (
     return async (canonicalBytes, signature, { source }) => {
         const secret = await resolveSecret(source)
         if (!secret) return undefined
-        const key = await subtle().importKey('raw', toBytes(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
+        const key = await subtle().importKey('raw', bufferSource(toBytes(secret)), { name: 'HMAC', hash: 'SHA-256' }, false, ['verify'])
         // subtle.verify compares in constant time, so this does not leak the expected signature.
-        const valid = await subtle().verify('HMAC', key, base64ToUint8Array(signature), canonicalBytes)
+        const valid = await subtle().verify('HMAC', key, bufferSource(base64ToUint8Array(signature)), bufferSource(canonicalBytes))
         return valid ? identityOf(source, identityFor) : undefined
     }
 }
@@ -159,7 +166,7 @@ export const createHmacVerifier = (
  * forge messages from its peers.
  */
 export const createEd25519Signer = (privateKey: CryptoKey): MessageSigner => {
-    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('Ed25519', privateKey, canonicalBytes)))
+    return async (canonicalBytes) => uint8ArrayToBase64(new Uint8Array(await subtle().sign('Ed25519', privateKey, bufferSource(canonicalBytes))))
 }
 
 export const createEd25519Verifier = (
@@ -169,7 +176,7 @@ export const createEd25519Verifier = (
     return async (canonicalBytes, signature, { source }) => {
         const publicKey = await resolvePublicKey(source)
         if (!publicKey) return undefined
-        const valid = await subtle().verify('Ed25519', publicKey, base64ToUint8Array(signature), canonicalBytes)
+        const valid = await subtle().verify('Ed25519', publicKey, bufferSource(base64ToUint8Array(signature)), bufferSource(canonicalBytes))
         return valid ? identityOf(source, identityFor) : undefined
     }
 }
