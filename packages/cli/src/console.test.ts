@@ -111,7 +111,7 @@ test('the console discovers a peer, describes it, calls it and streams its event
             if (text.includes('event: event')) streamed.push(text)
         }
     })()
-    t.deepEqual(await post('/api/watch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { already: false })
+    t.deepEqual(await post('/api/watch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: true, already: false })
 
     const called = await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [90] })
     t.is(called.result, 90)
@@ -125,6 +125,24 @@ test('the console discovers a peer, describes it, calls it and streams its event
     const refused = await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [500] })
     t.is(refused.code, 'InvalidParams')
     t.regex(String(refused.error), /above the maximum 120/)
+
+    // Unwatching has to stop the events, not merely change a label.
+    t.deepEqual(await post('/api/unwatch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: false, already: false })
+    t.deepEqual(((await get('/api/peers')).watching as string[]) ?? [], [])
+    // The server drops its side too, rather than emitting into a listener nobody reads.
+    t.is(server.rpc.eventProxies.size, 0, 'the server kept a subscription after unwatch')
+
+    const before = streamed.length
+    await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [70] })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    t.is(streamed.length, before, 'an event arrived after unwatching')
+
+    // Unwatching twice is not an error, and watching again works.
+    t.deepEqual(await post('/api/unwatch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: false, already: true })
+    t.deepEqual(await post('/api/watch', { peer: 'boilerServer', namespace: 'boiler', event: 'changed' }), { watching: true, already: false })
+    await post('/api/call', { peer: 'boilerServer', namespace: 'boiler', method: 'setTemperature', args: [80] })
+    await waitFor(() => streamed.length > before)
+    t.regex(String(streamed[streamed.length - 1]), /\[80\]/)
 
     await reader.cancel().catch(() => {})
     await running.close()

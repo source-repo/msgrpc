@@ -296,6 +296,10 @@ Reconnection is handled for you:
 - Replaying is idempotent: the server will not stack a second listener for a subscription it
   already holds.
 - When a client's connection drops, the server releases the event subscriptions it held for it.
+- `proxy.remote.off(event, handler)` unsubscribes, removing the local listener and telling the
+  server to drop its side. It is not subject to `authorize`: a subscription is keyed by the peer
+  that made it, so a peer can only drop its own, and refusing to let someone stop receiving events
+  would be a strange thing to enforce.
 
 # Authentication and authorization
 

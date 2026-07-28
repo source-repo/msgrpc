@@ -69,8 +69,11 @@ export const startConsole = async (options: ConsoleOptions) => {
     })
     await client.ready()
 
-    /** Subscriptions this console holds, so the browser can be told what is already streaming. */
-    const watching = new Set<string>()
+    /**
+     * Subscriptions this console holds, keyed by peer/namespace/event. The handler is kept because
+     * removing a listener needs the same function reference that was registered.
+     */
+    const watching = new Map<string, (...args: unknown[]) => void>()
 
     const describe = async (peer: string) => {
         const proxy = await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc', peer)
@@ -82,13 +85,30 @@ export const startConsole = async (options: ConsoleOptions) => {
         return proxy.remote![method](...args)
     }
 
+    type Subscribable = {
+        on: (event: string, handler: (...args: unknown[]) => void) => void
+        off: (event: string, handler: (...args: unknown[]) => void) => void
+    }
+
     const watch = async (peer: string, namespace: string, event: string) => {
         const key = `${peer}/${namespace}/${event}`
-        if (watching.has(key)) return { already: true }
-        const proxy = await client.proxy<{ on: (event: string, handler: (...args: unknown[]) => void) => void }>(namespace, peer)
-        await proxy.remote!.on(event, (...args: unknown[]) => send(live, 'event', { peer, namespace, event, args, at: Date.now() }))
-        watching.add(key)
-        return { already: false }
+        if (watching.has(key)) return { watching: true, already: true }
+        const handler = (...args: unknown[]) => send(live, 'event', { peer, namespace, event, args, at: Date.now() })
+        const proxy = await client.proxy<Subscribable>(namespace, peer)
+        await proxy.remote!.on(event, handler)
+        watching.set(key, handler)
+        return { watching: true, already: false }
+    }
+
+    const unwatch = async (peer: string, namespace: string, event: string) => {
+        const key = `${peer}/${namespace}/${event}`
+        const handler = watching.get(key)
+        if (!handler) return { watching: false, already: true }
+        const proxy = await client.proxy<Subscribable>(namespace, peer)
+        // Removes the local listener and tells the server to drop its side.
+        await proxy.remote!.off(event, handler)
+        watching.delete(key)
+        return { watching: false, already: false }
     }
 
     const server = createServer((request, response) => {
@@ -100,7 +120,7 @@ export const startConsole = async (options: ConsoleOptions) => {
                     response.end(page)
                     return
                 }
-                if (url.pathname === '/api/peers') return json(response, 200, { peers: [...live.peers].sort(), watching: [...watching] })
+                if (url.pathname === '/api/peers') return json(response, 200, { peers: [...live.peers].sort(), watching: [...watching.keys()] })
                 if (url.pathname === '/api/describe') return json(response, 200, await describe(url.searchParams.get('peer') ?? ''))
                 if (url.pathname === '/api/events') {
                     response.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' })
@@ -115,9 +135,10 @@ export const startConsole = async (options: ConsoleOptions) => {
                     const result = await call(body.peer, body.namespace, body.method, body.args ?? [])
                     return json(response, 200, { result, ms: Date.now() - started })
                 }
-                if (request.method === 'POST' && url.pathname === '/api/watch') {
+                if (request.method === 'POST' && (url.pathname === '/api/watch' || url.pathname === '/api/unwatch')) {
                     const body = JSON.parse(await readBody(request)) as { peer: string; namespace: string; event: string }
-                    return json(response, 200, await watch(body.peer, body.namespace, body.event))
+                    const act = url.pathname === '/api/watch' ? watch : unwatch
+                    return json(response, 200, await act(body.peer, body.namespace, body.event))
                 }
                 json(response, 404, { error: 'not found' })
             } catch (e) {
@@ -133,6 +154,11 @@ export const startConsole = async (options: ConsoleOptions) => {
     return {
         url: `http://${options.host}:${options.port}`,
         close: async () => {
+            // Drop the subscriptions rather than leaving them on servers that outlive this process.
+            for (const key of [...watching.keys()]) {
+                const [peer, namespace, event] = key.split('/')
+                await unwatch(peer, namespace, event).catch(() => undefined)
+            }
             for (const listener of live.listeners) listener.end()
             await new Promise<void>((resolve) => server.close(() => resolve()))
             await client.close()

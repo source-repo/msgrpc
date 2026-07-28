@@ -82,6 +82,11 @@ no scan, no probe and no configured list of hosts.
 A peer only appears in detail if it was started with `exposeIntrospection`; otherwise the console
 says so rather than guessing.
 
+The watch button toggles, and unwatching drops the server's subscription too rather than only
+silencing the browser — the subscriber count next to the event moves with it. Closing the console
+unsubscribes everything it held, so a debugging session does not leave listeners behind on servers
+that outlive it.
+
 The page is served from the CLI with no CDN, no bundler and no framework — one HTTP handler, an
 inlined page, and server-sent events for the live half. A plant network usually has no route to the
 internet, and a tool for looking at one should be something you can read in a sitting.
