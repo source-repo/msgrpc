@@ -1,4 +1,5 @@
 import anyTest, { TestFn } from 'ava'
+import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
 import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer } from '@source-repo/msgrpc'
@@ -24,6 +25,15 @@ const test = anyTest as TestFn<Context>
 test.before(async (t) => {
     t.context = { skipped: !(await brokerAvailable()) }
 })
+
+/**
+ * Unique per run: a peer name is the MQTT client id, so a second run sharing one has the broker
+ * resume the first run's session and hand it whatever that session still had queued. Prefixes go
+ * the same way, since presence under them is retained.
+ */
+const run = randomUUID().slice(0, 8)
+const peer = (name: string) => `${name}-${run}`
+const prefixFor = (name: string) => `msgrpc/${name}-${run}`
 
 const waitFor = async (condition: () => boolean, timeout = 8000) => {
     const deadline = Date.now() + timeout
@@ -71,9 +81,9 @@ test('the console discovers a peer, describes it, calls it and streams its event
         t.pass(`no MQTT broker at ${BROKER_URL} - skipped`)
         return
     }
-    const prefix = 'msgrpc/console-test'
+    const prefix = prefixFor('console-test')
     const server = new RpcServer({
-        name: 'boilerServer',
+        name: peer('boilerServer'),
         transports: [{ brokerurl: BROKER_URL, prefix }],
         schema,
         exposeIntrospection: true
@@ -81,18 +91,18 @@ test('the console discovers a peer, describes it, calls it and streams its event
     server.exposeClassInstance(new Boiler())
     await server.ready()
 
-    const running = await startConsole({ broker: BROKER_URL, prefix, port: 7391, host: '127.0.0.1', name: 'console-test', callTimeout: 5000 })
+    const running = await startConsole({ broker: BROKER_URL, prefix, port: 7391, host: '127.0.0.1', name: peer('console-test'), callTimeout: 5000 })
     const { client, remote } = await browserClient(running.url)
 
     // Discovery comes from retained presence, so nothing probes and nothing is configured.
     const peers = await pollUntil(
         async () => (await remote.peers()).peers,
-        (found) => found.includes('boilerServer')
+        (found) => found.includes(peer('boilerServer'))
     )
-    t.true(peers.includes('boilerServer'), `discovered peers: ${JSON.stringify(peers)}`)
+    t.true(peers.includes(peer('boilerServer')), `discovered peers: ${JSON.stringify(peers)}`)
 
     // Describe reports what the server exposes, with types from the schema.
-    const described = (await remote.describe('boilerServer')) as {
+    const described = (await remote.describe(peer('boilerServer'))) as {
         namespaces: { name: string; methods: { name: string; params?: unknown[]; paramNames?: string[] }[] }[]
     }
     const boiler = described.namespaces.find((namespace) => namespace.name === 'boiler')
@@ -106,37 +116,37 @@ test('the console discovers a peer, describes it, calls it and streams its event
     // Subscribe before calling, so the event the call emits reaches the browser.
     const streamed: { peer: string; namespace: string; event: string; args: unknown[] }[] = []
     await remote.on('event', (event: unknown) => void streamed.push(event as (typeof streamed)[number]))
-    t.deepEqual(await remote.watch('boilerServer', 'boiler', 'changed'), { watching: true, already: false })
+    t.deepEqual(await remote.watch(peer('boilerServer'), 'boiler', 'changed'), { watching: true, already: false })
 
-    const called = await remote.call('boilerServer', 'boiler', 'setTemperature', [90])
+    const called = await remote.call(peer('boilerServer'), 'boiler', 'setTemperature', [90])
     t.is(called.result, 90)
     t.is(typeof called.ms, 'number')
 
     await waitFor(() => streamed.length > 0)
     t.is(streamed[0].event, 'changed')
     t.deepEqual(streamed[0].args, [90])
-    t.is(streamed[0].peer, 'boilerServer')
+    t.is(streamed[0].peer, peer('boilerServer'))
 
     // A refused call comes back with its code rather than as a transport failure.
-    const refused = await remote.call('boilerServer', 'boiler', 'setTemperature', [500])
+    const refused = await remote.call(peer('boilerServer'), 'boiler', 'setTemperature', [500])
     t.is(refused.code, 'InvalidParams')
     t.regex(String(refused.error), /above the maximum 120/)
 
     // Unwatching has to stop the events, not merely change a label.
-    t.deepEqual(await remote.unwatch('boilerServer', 'boiler', 'changed'), { watching: false, already: false })
+    t.deepEqual(await remote.unwatch(peer('boilerServer'), 'boiler', 'changed'), { watching: false, already: false })
     t.deepEqual((await remote.peers()).watching, [])
     // The server drops its side too, rather than emitting into a listener nobody reads.
     t.is(server.rpc.eventProxies.size, 0, 'the server kept a subscription after unwatch')
 
     const before = streamed.length
-    await remote.call('boilerServer', 'boiler', 'setTemperature', [70])
+    await remote.call(peer('boilerServer'), 'boiler', 'setTemperature', [70])
     await new Promise((resolve) => setTimeout(resolve, 500))
     t.is(streamed.length, before, 'an event arrived after unwatching')
 
     // Unwatching twice is not an error, and watching again works.
-    t.deepEqual(await remote.unwatch('boilerServer', 'boiler', 'changed'), { watching: false, already: true })
-    t.deepEqual(await remote.watch('boilerServer', 'boiler', 'changed'), { watching: true, already: false })
-    await remote.call('boilerServer', 'boiler', 'setTemperature', [80])
+    t.deepEqual(await remote.unwatch(peer('boilerServer'), 'boiler', 'changed'), { watching: false, already: true })
+    t.deepEqual(await remote.watch(peer('boilerServer'), 'boiler', 'changed'), { watching: true, already: false })
+    await remote.call(peer('boilerServer'), 'boiler', 'setTemperature', [80])
     await waitFor(() => streamed.length > before)
     t.deepEqual(streamed[streamed.length - 1].args, [80])
 
@@ -150,7 +160,7 @@ test('the console app is served and needs no network to render', async (t) => {
         t.pass('no broker - skipped')
         return
     }
-    const running = await startConsole({ broker: BROKER_URL, prefix: 'msgrpc/console-page', port: 7392, host: '127.0.0.1', name: 'console-page', callTimeout: 2000 })
+    const running = await startConsole({ broker: BROKER_URL, prefix: prefixFor('console-page'), port: 7392, host: '127.0.0.1', name: peer('console-page'), callTimeout: 2000 })
     const html = await (await fetch(running.url)).text()
 
     t.regex(html, /<title>msgrpc console<\/title>/)

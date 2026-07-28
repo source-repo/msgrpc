@@ -1,5 +1,6 @@
 import anyTest, { TestFn } from 'ava'
 import { connectAsync } from 'mqtt'
+import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { MqttTransport, RpcClient, RpcServer } from './index.js'
 import { RpcCallInstanceMethodPayload, RpcMessageType } from './RPC/RpcServerHandler.js'
@@ -19,6 +20,17 @@ const brokerAvailable = async () => {
         return false
     }
 }
+
+/**
+ * Everything a broker keys state on has to be unique per run. A peer name is the MQTT client id,
+ * and a server keeps a persistent session, so a second run with the same name resumes the first
+ * one's session and is handed its queued frames; a prefix is a topic tree, and presence under it is
+ * retained. Sharing either let one run's leftovers arrive in the next, which surfaced as a failure
+ * that never reproduced when the file was run on its own.
+ */
+const run = randomUUID().slice(0, 8)
+const peer = (name: string) => `${name}-${run}`
+const prefixFor = (name: string) => `msgrpc/${name}-${run}`
 
 const waitFor = async (condition: () => boolean, timeout = 5000) => {
     const deadline = Date.now() + timeout
@@ -103,14 +115,14 @@ test('a server whose broker is unreachable gives up instead of hanging', async (
 
 test('a call is answered over MQTT', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: 'mqttServer1', transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer1'), transports: [{ brokerurl: BROKER_URL }] })
     await server.ready()
     server.exposeClassInstance(new Plant(10), 'plant')
 
     const client = new RpcClient(undefined, {
-        name: 'mqttClient1',
-        transport: new MqttTransport('mqttClient1', BROKER_URL),
-        defaultTarget: 'mqttServer1'
+        name: peer('mqttClient1'),
+        transport: new MqttTransport(peer('mqttClient1'), BROKER_URL),
+        defaultTarget: peer('mqttServer1')
     })
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
@@ -123,8 +135,8 @@ test('a call is answered over MQTT', async (t) => {
 
 test('rpc traffic is published per peer, not to a shared topic', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/test-isolation'
-    const server = new RpcServer({ name: 'mqttServer2', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const prefix = prefixFor('test-isolation')
+    const server = new RpcServer({ name: peer('mqttServer2'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(1), 'plant')
 
@@ -134,17 +146,19 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
     await observer.subscribeAsync(`${prefix}/#`)
 
     const client = new RpcClient(undefined, {
-        name: 'mqttClient2',
-        transport: new MqttTransport('mqttClient2', BROKER_URL, { prefix }),
-        defaultTarget: 'mqttServer2'
+        name: peer('mqttClient2'),
+        transport: new MqttTransport(peer('mqttClient2'), BROKER_URL, { prefix }),
+        defaultTarget: peer('mqttServer2')
     })
     await client.ready()
     await (await client.proxy<Plant>('plant')).remote?.add(1, 1)
-    await waitFor(() => topics.length >= 2)
+    // Counting every message would let the two presence announcements satisfy the wait, and the
+    // reply is the message this test is about - so wait for the rpc topics themselves.
+    const rpcTopics = () => [...new Set(topics)].filter((topic) => !topic.includes('/presence/')).sort()
+    await waitFor(() => rpcTopics().length >= 2)
 
     // One topic per addressee and per channel: the request to the server, the reply to the client.
-    const rpcTopics = [...new Set(topics)].filter((topic) => !topic.includes('/presence/')).sort()
-    t.deepEqual(rpcTopics, [`${prefix}/req/mqttServer2`, `${prefix}/rsp/mqttClient2`])
+    t.deepEqual(rpcTopics(), [`${prefix}/req/${peer('mqttServer2')}`, `${prefix}/rsp/${peer('mqttClient2')}`])
 
     await observer.endAsync()
     await client.close()
@@ -153,15 +167,15 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
 
 test('a departing peer releases its subscriptions through presence', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: 'mqttServer3', transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer3'), transports: [{ brokerurl: BROKER_URL }] })
     await server.ready()
     const plant = new Plant()
     server.exposeClassInstance(plant, 'plant')
 
     const client = new RpcClient(undefined, {
-        name: 'mqttClient3',
-        transport: new MqttTransport('mqttClient3', BROKER_URL),
-        defaultTarget: 'mqttServer3'
+        name: peer('mqttClient3'),
+        transport: new MqttTransport(peer('mqttClient3'), BROKER_URL),
+        defaultTarget: peer('mqttServer3')
     })
     await client.ready()
     const proxy = await client.proxy<Plant>('plant')
@@ -180,15 +194,15 @@ test('a departing peer releases its subscriptions through presence', async (t) =
 
 test('events reach a subscriber over MQTT', async (t) => {
     if (skipWithoutBroker(t)) return
-    const server = new RpcServer({ name: 'mqttServer4', transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer4'), transports: [{ brokerurl: BROKER_URL }] })
     await server.ready()
     const plant = new Plant()
     server.exposeClassInstance(plant, 'plant')
 
     const client = new RpcClient(undefined, {
-        name: 'mqttClient4',
-        transport: new MqttTransport('mqttClient4', BROKER_URL),
-        defaultTarget: 'mqttServer4'
+        name: peer('mqttClient4'),
+        transport: new MqttTransport(peer('mqttClient4'), BROKER_URL),
+        defaultTarget: peer('mqttServer4')
     })
     await client.ready()
     const proxy = await client.proxy<Plant>('plant')
@@ -206,11 +220,11 @@ test('events reach a subscriber over MQTT', async (t) => {
 test('a client built from an mqtt url connects through the on-demand transport', async (t) => {
     if (skipWithoutBroker(t)) return
     // Exercises the dynamic import RpcClient uses so browser bundles need not carry the MQTT client.
-    const server = new RpcServer({ name: 'mqttServer5', transports: [{ brokerurl: BROKER_URL }] })
+    const server = new RpcServer({ name: peer('mqttServer5'), transports: [{ brokerurl: BROKER_URL }] })
     await server.ready()
     server.exposeClassInstance(new Plant(3), 'plant')
 
-    const client = new RpcClient(BROKER_URL, { name: 'mqttClient5', defaultTarget: 'mqttServer5' })
+    const client = new RpcClient(BROKER_URL, { name: peer('mqttClient5'), defaultTarget: peer('mqttServer5') })
     await client.ready()
 
     t.is(await (await client.proxy<Plant>('plant')).remote?.add(1, 1), 5)
@@ -221,9 +235,9 @@ test('a client built from an mqtt url connects through the on-demand transport',
 
 test('one client watching two peers keeps their events apart', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/event-routing'
-    const first = new RpcServer({ name: 'routeA', transports: [{ brokerurl: BROKER_URL, prefix }] })
-    const second = new RpcServer({ name: 'routeB', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const prefix = prefixFor('event-routing')
+    const first = new RpcServer({ name: peer('routeA'), transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const second = new RpcServer({ name: peer('routeB'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     const plantA = new Plant()
     const plantB = new Plant()
     first.exposeClassInstance(plantA, 'plant')
@@ -232,12 +246,12 @@ test('one client watching two peers keeps their events apart', async (t) => {
     await second.ready()
 
     // One client and one transport across both peers, which is how the console watches a network.
-    const client = new RpcClient(undefined, { name: 'routeWatcher', transport: new MqttTransport('routeWatcher', BROKER_URL, { prefix }) })
+    const client = new RpcClient(undefined, { name: peer('routeWatcher'), transport: new MqttTransport(peer('routeWatcher'), BROKER_URL, { prefix }) })
     await client.ready()
     const fromA: string[] = []
     const fromB: string[] = []
-    await (await client.proxy<Plant>('plant', 'routeA')).remote!.on('alarm', (value: string) => fromA.push(value))
-    await (await client.proxy<Plant>('plant', 'routeB')).remote!.on('alarm', (value: string) => fromB.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeA'))).remote!.on('alarm', (value: string) => fromA.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeB'))).remote!.on('alarm', (value: string) => fromB.push(value))
 
     plantA.fire()
     await waitFor(() => fromA.length === 1)

@@ -2,7 +2,7 @@
 
 ## msgrpc 2.1.1
 
-Documentation only.
+Documentation and test hygiene; no change to shipped code.
 
 - The quick start did not compile: `Calculator` was neither exported by the server snippet nor
   imported by the client one, and the client needs the class as a type to get a typed proxy. It is
@@ -22,6 +22,16 @@ Documentation only.
   It now says the instance is one live object that every call runs against, and the quick start
   demonstrates state surviving between calls.
 - Exposing more than one namespace, and `exposeObject`, are both shown.
+
+### Tests
+
+- The MQTT tests gave every peer a fixed name, and a peer name is the broker's client id. A server
+  keeps a persistent session, so a second run resumed the first run's session and was handed
+  whatever it still had queued - which showed up as an occasional failure that never reproduced
+  when the file was run on its own. Names and topic prefixes now carry a per-run suffix.
+- `rpc traffic is published per peer` waited for two messages on the observed prefix before
+  asserting, which the two presence announcements could satisfy on their own, leaving the reply
+  still in flight. It now waits for the rpc topics it is actually about.
 
 ## msgrpc-cli 2.2.0
 

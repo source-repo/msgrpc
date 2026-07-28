@@ -1,4 +1,5 @@
 import anyTest, { TestFn } from 'ava'
+import { randomUUID } from 'crypto'
 import { connectAsync } from 'mqtt'
 import { encode as msgPackEncode } from '@msgpack/msgpack'
 import { stringToUint8Array } from 'uint8array-extras'
@@ -32,13 +33,24 @@ const verifier = createHmacVerifier((peer) => SECRETS[peer], (peer) => ({ name: 
  * one connection hold a clientId - a second one disconnects the first, which is the loud failure
  * that unique-name addressing deserves but which would otherwise make concurrent tests collide.
  */
+/**
+ * A peer name is the MQTT client id, so two runs sharing one make the broker resume the first run's
+ * session and hand the second its queued frames. Names carry a per-run suffix; the helpers below
+ * apply it, so tests keep naming peers `srv-ok` and `hmi-ok`.
+ */
+const run = randomUUID().slice(0, 8)
+const peer = (name: string) => `${name}-${run}`
+const prefixFor = (name: string) => `msgrpc/${name}-${run}`
+
 const makeKeyring = (roles: { [peer: string]: string[] }) => {
+    // Keyed by the name that travels on the wire, which is the suffixed one.
+    const onWire = Object.fromEntries(Object.entries(roles).map(([name, granted]) => [peer(name), granted]))
     const secrets: { [peer: string]: string } = {}
-    for (const peer of Object.keys(roles)) secrets[peer] = `secret-material-for-${peer}`
+    for (const name of Object.keys(onWire)) secrets[name] = `secret-material-for-${name}`
     return {
         secrets,
-        signerFor: (peer: string) => createHmacSigner(secrets[peer]),
-        verifier: createHmacVerifier((peer) => secrets[peer], (peer) => ({ name: peer, roles: roles[peer] }))
+        signerFor: (name: string) => createHmacSigner(secrets[peer(name)]),
+        verifier: createHmacVerifier((name) => secrets[name], (name) => ({ name, roles: onWire[name] }))
     }
 }
 
@@ -129,13 +141,13 @@ test('the replay guard does not grow without bound', (t) => {
 // protocol 4 throughout: these forge $-header frames by hand, which is the v1 layout. The MQTT 5
 // equivalents live in Mqtt5.test.ts.
 const signedServer = (name: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
-    new RpcServer({ name, transports: [{ brokerurl: BROKER_URL, prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
+    new RpcServer({ name: peer(name), transports: [{ brokerurl: BROKER_URL, prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }], ...extra })
 
 const signedClient = (name: string, target: string, prefix: string, keys: ReturnType<typeof makeKeyring>, extra = {}) =>
     new RpcClient(undefined, {
-        name,
-        defaultTarget: target,
-        transport: new MqttTransport(name, BROKER_URL, { prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }),
+        name: peer(name),
+        defaultTarget: peer(target),
+        transport: new MqttTransport(peer(name), BROKER_URL, { prefix, protocol: 4, sign: keys.signerFor(name), verify: keys.verifier }),
         ...extra
     })
 
@@ -149,7 +161,7 @@ const forgeFrame = async (sign: MessageSigner, header: { source: string; target:
 
 test('a signed call is accepted end to end', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/sign-ok'
+    const prefix = prefixFor('sign-ok')
     const keys = makeKeyring({ 'hmi-ok': ['operator'], 'srv-ok': ['server'] })
     const server = signedServer('srv-ok', prefix, keys)
     await server.ready()
@@ -167,7 +179,7 @@ test('a signed call is accepted end to end', async (t) => {
 
 test('a verified MQTT peer gains an identity that authorize can act on', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/sign-identity'
+    const prefix = prefixFor('sign-identity')
     const keys = makeKeyring({ 'hmi-id': ['operator'], 'srv-id': ['server'] })
     const seen: (string | undefined)[] = []
     // MQTT peers had no identity at all before signing, so requireAuthenticatedPeers would have
@@ -185,7 +197,7 @@ test('a verified MQTT peer gains an identity that authorize can act on', async (
     await client.ready()
 
     t.is(await (await client.proxy<Plant>('plant')).remote?.writeSetpoint(7), 7)
-    t.deepEqual(seen, ['hmi-id'])
+    t.deepEqual(seen, [peer('hmi-id')])
 
     await client.close()
     await server.close()
@@ -193,7 +205,7 @@ test('a verified MQTT peer gains an identity that authorize can act on', async (
 
 test('an unsigned peer cannot reach a server that requires signatures', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/sign-unsigned'
+    const prefix = prefixFor('sign-unsigned')
     const keys = makeKeyring({ 'hmi-un': ['operator'], 'srv-un': ['server'] })
     const server = signedServer('srv-un', prefix, keys)
     await server.ready()
@@ -202,10 +214,10 @@ test('an unsigned peer cannot reach a server that requires signatures', async (t
 
     // Same broker, same topics, no signature at all.
     const client = new RpcClient(undefined, {
-        name: 'hmi-un',
-        defaultTarget: 'srv-un',
+        name: peer('hmi-un'),
+        defaultTarget: peer('srv-un'),
         callTimeout: 900,
-        transport: new MqttTransport('hmi-un', BROKER_URL, { prefix, protocol: 4 })
+        transport: new MqttTransport(peer('hmi-un'), BROKER_URL, { prefix, protocol: 4 })
     })
     await client.ready()
 
@@ -219,7 +231,7 @@ test('an unsigned peer cannot reach a server that requires signatures', async (t
 
 test('a peer holding its own valid key cannot sign as another peer', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/sign-impersonate'
+    const prefix = prefixFor('sign-impersonate')
     const keys = makeKeyring({ 'hmi-im': ['operator'], 'srv-im': ['server'], 'rogue-im': ['operator'] })
     const server = signedServer('srv-im', prefix, keys)
     await server.ready()
@@ -232,10 +244,10 @@ test('a peer holding its own valid key cannot sign as another peer', async (t) =
     const rogue = await connectAsync(BROKER_URL)
     const frame = await forgeFrame(
         keys.signerFor('rogue-im'),
-        { source: 'hmi-im', target: 'srv-im', time: Date.now(), seq: 0, nonce: createNonce() },
+        { source: peer('hmi-im'), target: peer('srv-im'), time: Date.now(), seq: 0, nonce: createNonce() },
         { id: 'forged-1', type: RpcMessageType.CallInstanceMethod, path: 'plant', method: 'writeSetpoint', params: [9999] }
     )
-    await rogue.publishAsync(`${prefix}/rpc/srv-im`, frame, { qos: 1 })
+    await rogue.publishAsync(`${prefix}/rpc/${peer('srv-im')}`, frame, { qos: 1 })
     await new Promise((resolve) => setTimeout(resolve, 500))
 
     t.is(plant.setpoint, 0, 'a forged command was executed')
@@ -247,7 +259,7 @@ test('a peer holding its own valid key cannot sign as another peer', async (t) =
 
 test('a captured frame cannot be replayed', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/sign-replay'
+    const prefix = prefixFor('sign-replay')
     const keys = makeKeyring({ 'hmi-rp': ['operator'], 'srv-rp': ['server'] })
     const server = signedServer('srv-rp', prefix, keys)
     await server.ready()
@@ -264,16 +276,16 @@ test('a captured frame cannot be replayed', async (t) => {
     const attacker = await connectAsync(BROKER_URL)
     const frame = await forgeFrame(
         keys.signerFor('hmi-rp'),
-        { source: 'hmi-rp', target: 'srv-rp', time: Date.now(), seq: 0, nonce: createNonce() },
+        { source: peer('hmi-rp'), target: peer('srv-rp'), time: Date.now(), seq: 0, nonce: createNonce() },
         { id: 'replay-1', type: RpcMessageType.CallInstanceMethod, path: 'counter', method: 'bump', params: [] }
     )
 
-    await attacker.publishAsync(`${prefix}/rpc/srv-rp`, frame, { qos: 1 })
+    await attacker.publishAsync(`${prefix}/rpc/${peer('srv-rp')}`, frame, { qos: 1 })
     await new Promise((resolve) => setTimeout(resolve, 400))
     t.is(calls, 1, 'the genuine frame was not accepted')
 
     // Byte for byte the same frame again: the signature is still valid, the nonce is not.
-    await attacker.publishAsync(`${prefix}/rpc/srv-rp`, frame, { qos: 1 })
+    await attacker.publishAsync(`${prefix}/rpc/${peer('srv-rp')}`, frame, { qos: 1 })
     await new Promise((resolve) => setTimeout(resolve, 400))
     t.is(calls, 1, 'a replayed frame ran the method again')
 

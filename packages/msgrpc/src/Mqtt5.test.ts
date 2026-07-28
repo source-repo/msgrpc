@@ -1,4 +1,5 @@
 import anyTest, { TestFn } from 'ava'
+import { randomUUID } from 'crypto'
 import { connectAsync, MqttClient } from 'mqtt'
 import { decode as msgPackDecode, encode as msgPackEncode } from '@msgpack/msgpack'
 import { MqttTransport, RpcClient, RpcServer } from './index.js'
@@ -38,6 +39,15 @@ const skipWithoutBroker = (t: { context: Context; pass: (m?: string) => void }) 
     return t.context.skipped
 }
 
+/**
+ * A peer name is the MQTT client id, and a server keeps a persistent session, so two runs sharing a
+ * name make the broker resume the first one's session and deliver its queued frames into the
+ * second. Prefixes are per-run for the same reason: presence under them is retained.
+ */
+const run = randomUUID().slice(0, 8)
+const peer = (name: string) => `${name}-${run}`
+const prefixFor = (name: string) => `msgrpc/${name}-${run}`
+
 const props = (packet: { properties?: Record<string, unknown> }) => packet.properties ?? {}
 const userProp = (packet: { properties?: { userProperties?: Record<string, string | string[]> } }, key: string) => {
     const value = packet.properties?.userProperties?.[key]
@@ -46,11 +56,11 @@ const userProp = (packet: { properties?: { userProperties?: Record<string, strin
 
 test('a plain MQTT 5 client with no msgrpc code can serve an msgrpc call', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/interop-serve'
+    const prefix = prefixFor('interop-serve')
 
     // ---- the whole third-party responder, in vanilla mqtt.js ----
     const device: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
-    await device.subscribeAsync(`${prefix}/req/legacyDevice`, { qos: 1 })
+    await device.subscribeAsync(`${prefix}/req/${peer('legacyDevice')}`, { qos: 1 })
     device.on('message', (topic, payload, packet) => {
         const p = props(packet) as { responseTopic?: string; correlationData?: Buffer; contentType?: string }
         const args = msgPackDecode(payload) as number[]
@@ -60,16 +70,16 @@ test('a plain MQTT 5 client with no msgrpc code can serve an msgrpc call', async
             properties: {
                 correlationData: p.correlationData,
                 contentType: p.contentType,
-                userProperties: { 'mr-v': '1', 'mr-src': 'legacyDevice', 'mr-kind': 'result' }
+                userProperties: { 'mr-v': '1', 'mr-src': peer('legacyDevice'), 'mr-kind': 'result' }
             }
         })
     })
     // ---- end of third-party code ----
 
     const client = new RpcClient(undefined, {
-        name: 'hmi-interop-1',
-        defaultTarget: 'legacyDevice',
-        transport: new MqttTransport('hmi-interop-1', BROKER_URL, { prefix })
+        name: peer('hmi-interop-1'),
+        defaultTarget: peer('legacyDevice'),
+        transport: new MqttTransport(peer('hmi-interop-1'), BROKER_URL, { prefix })
     })
     await client.ready()
     const sensor = await client.proxy<{ read: (n: number) => Promise<number> }>('sensor')
@@ -82,13 +92,13 @@ test('a plain MQTT 5 client with no msgrpc code can serve an msgrpc call', async
 
 test('a plain MQTT 5 client can call an msgrpc server', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/interop-call'
+    const prefix = prefixFor('interop-call')
     class Plant {
         async writeSetpoint(value: number) {
             return value + 1
         }
     }
-    const server = new RpcServer({ name: 'plantServer', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('plantServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(), 'plant')
 
@@ -101,7 +111,7 @@ test('a plain MQTT 5 client can call an msgrpc server', async (t) => {
             resolve({ value: msgPackDecode(payload), kind: userProp(packet, 'mr-kind'), corr: p.correlationData?.toString() })
         })
     })
-    await tool.publishAsync(`${prefix}/req/plantServer`, Buffer.from(msgPackEncode([1199])), {
+    await tool.publishAsync(`${prefix}/req/${peer('plantServer')}`, Buffer.from(msgPackEncode([1199])), {
         qos: 1,
         properties: {
             responseTopic: `${prefix}/rsp/toolbox`,
@@ -129,13 +139,13 @@ test('a plain MQTT 5 client can call an msgrpc server', async (t) => {
 
 test('an error reaches a plain MQTT 5 caller with its code in a user property', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/interop-error'
+    const prefix = prefixFor('interop-error')
     class Thing {
         async boom(): Promise<never> {
             throw new Error('deliberate failure')
         }
     }
-    const server = new RpcServer({ name: 'errServer', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('errServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Thing(), 'thing')
 
@@ -146,7 +156,7 @@ test('an error reaches a plain MQTT 5 caller with its code in a user property', 
             resolve({ kind: userProp(packet, 'mr-kind'), code: userProp(packet, 'mr-code'), body: msgPackDecode(payload) })
         )
     })
-    await tool.publishAsync(`${prefix}/req/errServer`, Buffer.from(msgPackEncode([])), {
+    await tool.publishAsync(`${prefix}/req/${peer('errServer')}`, Buffer.from(msgPackEncode([])), {
         qos: 1,
         properties: {
             responseTopic: `${prefix}/rsp/errtool`,
@@ -168,7 +178,7 @@ test('an error reaches a plain MQTT 5 caller with its code in a user property', 
 
 test('a frame repeating a control property is rejected', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/interop-dup'
+    const prefix = prefixFor('interop-dup')
     let calls = 0
     class Counter {
         async bump() {
@@ -176,7 +186,7 @@ test('a frame repeating a control property is rejected', async (t) => {
             return calls
         }
     }
-    const server = new RpcServer({ name: 'dupServer', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('dupServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Counter(), 'counter')
     const rejected: unknown[] = []
@@ -185,7 +195,7 @@ test('a frame repeating a control property is rejected', async (t) => {
     // MQTT permits a user property to repeat. Taking the first or the last would let an attacker
     // show one value to a check and another to the dispatcher.
     const tool: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
-    await tool.publishAsync(`${prefix}/req/dupServer`, Buffer.from(msgPackEncode([])), {
+    await tool.publishAsync(`${prefix}/req/${peer('dupServer')}`, Buffer.from(msgPackEncode([])), {
         qos: 1,
         properties: {
             responseTopic: `${prefix}/rsp/dup`,
@@ -210,14 +220,14 @@ test('a frame repeating a control property is rejected', async (t) => {
 
 test('a JSON-speaking caller is answered in JSON', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/interop-json'
+    const prefix = prefixFor('interop-json')
     class Plant {
         async double(v: number) {
             return v * 2
         }
     }
     // The server's own codec is msgpack; the caller's contentType has to win for the reply.
-    const server = new RpcServer({ name: 'jsonServer', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const server = new RpcServer({ name: peer('jsonServer'), transports: [{ brokerurl: BROKER_URL, prefix }] })
     await server.ready()
     server.exposeClassInstance(new Plant(), 'plant')
 
@@ -228,7 +238,7 @@ test('a JSON-speaking caller is answered in JSON', async (t) => {
             resolve({ contentType: (props(packet) as { contentType?: string }).contentType, raw: payload.toString('utf8') })
         )
     })
-    await tool.publishAsync(`${prefix}/req/jsonServer`, Buffer.from(JSON.stringify([21]), 'utf8'), {
+    await tool.publishAsync(`${prefix}/req/${peer('jsonServer')}`, Buffer.from(JSON.stringify([21]), 'utf8'), {
         qos: 1,
         properties: {
             responseTopic: `${prefix}/rsp/jsontool`,
@@ -248,7 +258,7 @@ test('a JSON-speaking caller is answered in JSON', async (t) => {
 
 // ------------------------------------------------------------------ signing over the v5 layout
 
-const SIGN_SECRETS: { [peer: string]: string } = { 'hmi-v5': 'hmi-v5-secret', 'srv-v5': 'srv-v5-secret', 'rogue-v5': 'rogue-v5-secret' }
+const SIGN_SECRETS: { [peer: string]: string } = Object.fromEntries(['hmi-v5', 'srv-v5', 'rogue-v5'].map((name) => [peer(name), `${name}-secret`]))
 const v5Verifier = createHmacVerifier(
     (peer) => SIGN_SECRETS[peer],
     (peer) => ({ name: peer, roles: ['operator'] })
@@ -297,7 +307,7 @@ const publishSignedV5 = async (
 
 test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5sign-ok'
+    const prefix = prefixFor('v5sign-ok')
     class Plant {
         async write(v: number) {
             return v
@@ -305,8 +315,8 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
     }
     const seen: (string | undefined)[] = []
     const server = new RpcServer({
-        name: 'srv-v5',
-        transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner(SIGN_SECRETS['srv-v5']), verify: v5Verifier }],
+        name: peer('srv-v5'),
+        transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-v5')]), verify: v5Verifier }],
         requireAuthenticatedPeers: true,
         authorize: ({ identity }) => {
             seen.push(identity?.name)
@@ -317,14 +327,14 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
     server.exposeClassInstance(new Plant(), 'plant')
 
     const client = new RpcClient(undefined, {
-        name: 'hmi-v5',
-        defaultTarget: 'srv-v5',
-        transport: new MqttTransport('hmi-v5', BROKER_URL, { prefix, sign: createHmacSigner(SIGN_SECRETS['hmi-v5']), verify: v5Verifier })
+        name: peer('hmi-v5'),
+        defaultTarget: peer('srv-v5'),
+        transport: new MqttTransport(peer('hmi-v5'), BROKER_URL, { prefix, sign: createHmacSigner(SIGN_SECRETS[peer('hmi-v5')]), verify: v5Verifier })
     })
     await client.ready()
 
     t.is(await (await client.proxy<Plant>('plant')).remote!.write(5), 5)
-    t.deepEqual(seen, ['hmi-v5'])
+    t.deepEqual(seen, [peer('hmi-v5')])
 
     await client.close()
     await server.close()
@@ -332,7 +342,7 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
 
 test('an MQTT 5 frame signed by the wrong key cannot claim another peer', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5sign-forge'
+    const prefix = prefixFor('v5sign-forge')
     let calls = 0
     class Counter {
         async bump() {
@@ -340,7 +350,7 @@ test('an MQTT 5 frame signed by the wrong key cannot claim another peer', async 
         }
     }
     const server = new RpcServer({
-        name: 'srv-forge',
+        name: peer('srv-forge'),
         transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner('srv-forge-secret'), verify: v5Verifier }]
     })
     await server.ready()
@@ -351,9 +361,9 @@ test('an MQTT 5 frame signed by the wrong key cannot claim another peer', async 
     const rogue: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
     // Signed with rogue-v5's key, but claiming to be hmi-v5.
     await publishSignedV5(rogue, {
-        topic: `${prefix}/req/srv-forge`,
-        source: 'hmi-v5',
-        signAs: 'rogue-v5',
+        topic: `${prefix}/req/${peer('srv-forge')}`,
+        source: peer('hmi-v5'),
+        signAs: peer('rogue-v5'),
         kind: 'call',
         path: 'counter',
         method: 'bump',
@@ -371,7 +381,7 @@ test('an MQTT 5 frame signed by the wrong key cannot claim another peer', async 
 
 test('a captured MQTT 5 frame cannot be replayed', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5sign-replay'
+    const prefix = prefixFor('v5sign-replay')
     let calls = 0
     class Counter {
         async bump() {
@@ -379,7 +389,7 @@ test('a captured MQTT 5 frame cannot be replayed', async (t) => {
         }
     }
     const server = new RpcServer({
-        name: 'srv-replay',
+        name: peer('srv-replay'),
         transports: [{ brokerurl: BROKER_URL, prefix, sign: createHmacSigner('srv-replay-secret'), verify: v5Verifier }]
     })
     await server.ready()
@@ -388,9 +398,9 @@ test('a captured MQTT 5 frame cannot be replayed', async (t) => {
     const attacker: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
     // One genuine, correctly signed frame - then the identical packet a second time.
     const frame = {
-        topic: `${prefix}/req/srv-replay`,
-        source: 'hmi-v5',
-        signAs: 'hmi-v5',
+        topic: `${prefix}/req/${peer('srv-replay')}`,
+        source: peer('hmi-v5'),
+        signAs: peer('hmi-v5'),
         kind: 'call',
         path: 'counter',
         method: 'bump',
@@ -415,7 +425,7 @@ test('a captured MQTT 5 frame cannot be replayed', async (t) => {
 
 test('a shared subscription distributes requests across replicas', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5-shared'
+    const prefix = prefixFor('v5-shared')
     const handled: string[] = []
     class Work {
         constructor(public replica: string) {}
@@ -428,7 +438,7 @@ test('a shared subscription distributes requests across replicas', async (t) => 
     // replicaId is for: a broker permits one connection per client id.
     const replicas = ['a', 'b'].map((id) => {
         const server = new RpcServer({
-            name: 'replicaSrv',
+            name: peer('replicaSrv'),
             transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: id }]
         })
         server.exposeClassInstance(new Work(id), 'work')
@@ -437,9 +447,9 @@ test('a shared subscription distributes requests across replicas', async (t) => 
     for (const replica of replicas) await replica.ready()
 
     const client = new RpcClient(undefined, {
-        name: 'shared-client',
-        defaultTarget: 'replicaSrv',
-        transport: new MqttTransport('shared-client', BROKER_URL, { prefix })
+        name: peer('shared-client'),
+        defaultTarget: peer('replicaSrv'),
+        transport: new MqttTransport(peer('shared-client'), BROKER_URL, { prefix })
     })
     await client.ready()
     const work = await client.proxy<Work>('work')
@@ -454,7 +464,7 @@ test('a shared subscription distributes requests across replicas', async (t) => 
 
 test('a replica does not announce presence for the whole group', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5-shared-presence'
+    const prefix = prefixFor('v5-shared-presence')
     // One replica stopping must not publish 'offline' for a name its siblings still serve.
     const observer: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
     const presence: string[] = []
@@ -462,7 +472,7 @@ test('a replica does not announce presence for the whole group', async (t) => {
     await observer.subscribeAsync(`${prefix}/presence/#`)
 
     const replica = new RpcServer({
-        name: 'quietSrv',
+        name: peer('quietSrv'),
         transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: 'solo' }]
     })
     await replica.ready()
@@ -477,7 +487,7 @@ test('a replica does not announce presence for the whole group', async (t) => {
 
 test('a persistent session delivers a request published while the server was down', async (t) => {
     if (skipWithoutBroker(t)) return
-    const prefix = 'msgrpc/v5-session'
+    const prefix = prefixFor('v5-session')
     const handled: unknown[] = []
     class Recorder {
         async record(value: unknown) {
@@ -486,7 +496,7 @@ test('a persistent session delivers a request published while the server was dow
         }
     }
     const start = async () => {
-        const server = new RpcServer({ name: 'sessionSrv', transports: [{ brokerurl: BROKER_URL, prefix }] })
+        const server = new RpcServer({ name: peer('sessionSrv'), transports: [{ brokerurl: BROKER_URL, prefix }] })
         // Exposed before awaiting ready(): a resumed session is handed its queued requests the
         // moment it connects, so anything registered afterwards is registered too late and those
         // requests come back ClassNotFound.
@@ -502,7 +512,7 @@ test('a persistent session delivers a request published while the server was dow
 
     // Published to a server that is not running. QoS 1 into a retained session means it queues.
     const caller: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
-    await caller.publishAsync(`${prefix}/req/sessionSrv`, Buffer.from(msgPackEncode(['while-down'])), {
+    await caller.publishAsync(`${prefix}/req/${peer('sessionSrv')}`, Buffer.from(msgPackEncode(['while-down'])), {
         qos: 1,
         properties: {
             responseTopic: `${prefix}/rsp/caller`,
