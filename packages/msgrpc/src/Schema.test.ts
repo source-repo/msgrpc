@@ -471,6 +471,58 @@ test('describe reports namespaces, methods, events and live instances', async (t
     await server.close()
 })
 
+test('describe describes itself, and required validation does not refuse it', async (t) => {
+    // Before this, the one call a peer makes to find out what a server offers was the only
+    // undescribed thing on it, and 'required' refused it outright.
+    const server = new RpcServer({
+        transports: [{ port: 3979 }],
+        schema: { schema: 1, namespaces: { boiler: { methods: { status: { params: [], returns: str } } } } },
+        validation: 'required',
+        exposeIntrospection: true
+    })
+    await server.ready()
+    server.exposeClassInstance(new Boiler())
+    const client = new RpcClient('http://localhost:3979')
+    await client.ready()
+
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote!.describe()
+    const introspection = described.namespaces.find((namespace) => namespace.name === 'msgrpc')
+    t.deepEqual(
+        introspection!.methods.find((method) => method.name === 'describe')!.returns,
+        { kind: 'ref', name: 'msgrpc.ServerDescription' },
+        'describe should report the type it actually returns'
+    )
+
+    // The prefix keeps a library out of the user's type names: one flat map serves every namespace,
+    // so an unprefixed ServerDescription here would collide with a plant that defines its own.
+    t.truthy(described.types?.['msgrpc.ServerDescription'])
+    t.deepEqual((described.types!['msgrpc.ServerDescription'] as { kind: 'object'; fields: { [name: string]: { type: TypeNode } } }).fields.types.type, {
+        kind: 'record',
+        values: { kind: 'ref', name: 'msgrpc.TypeNode' }
+    })
+
+    await client.close()
+    await server.close()
+})
+
+test('a schema of its own for the msgrpc namespace is left alone', async (t) => {
+    // It is the contract that server actually serves; overwriting it would describe the server as
+    // something it is not.
+    const mine: RpcSchema = { schema: 1, namespaces: { msgrpc: { methods: { describe: { params: [], returns: { kind: 'any' } } } } } }
+    const server = new RpcServer({ transports: [{ port: 3980 }], schema: mine, exposeIntrospection: true })
+    await server.ready()
+    const client = new RpcClient('http://localhost:3980')
+    await client.ready()
+
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote!.describe()
+    const introspection = described.namespaces.find((namespace) => namespace.name === 'msgrpc')
+    t.deepEqual(introspection!.methods.find((method) => method.name === 'describe')!.returns, { kind: 'any' })
+    t.falsy(described.types?.['msgrpc.ServerDescription'], 'nothing should have been merged in')
+
+    await client.close()
+    await server.close()
+})
+
 test('describe is subject to authorize like any other call', async (t) => {
     const server = new RpcServer({
         transports: [{ port: 3972 }],

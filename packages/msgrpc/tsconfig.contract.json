@@ -1,0 +1,6 @@
+{
+    // The one namespace this package serves itself. Everything else here is the machinery a user's
+    // own classes are exposed through, not a contract msgrpc offers.
+    "extends": "./tsconfig.json",
+    "include": ["src/RPC/Introspection.ts"]
+}

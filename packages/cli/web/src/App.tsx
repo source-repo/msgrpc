@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RpcServer, TransportEvent, readableNameFrom, type RpcSchema } from '@source-repo/msgrpc'
+import { RpcServer, TransportEvent, type RpcSchema } from '@source-repo/msgrpc'
+import { claimPeerName } from './peerName'
 import { Chat } from './Chat'
 import { ChatMessage, ChatService } from './ChatService'
 // Extracted from ChatService by `npm run contract` and committed. A page is the one peer nobody can
@@ -32,21 +33,18 @@ const useConsole = () => {
 
     useEffect(() => {
         let server: RpcServer | undefined
+        let release: (() => void) | undefined
         void (async () => {
             try {
                 // Ask who is serving this page before addressing it: the console's name is its own
                 // name on the network, so it differs between instances.
                 const consoleName = await fetchConsoleName()
                 // Derived from the console rather than drawn at random, so a reload comes back as
-                // the same peer instead of leaving a stranger in everyone's list. A second tab on
-                // the same console adds a suffix, which sessionStorage keeps across its reloads.
-                let tab = sessionStorage.getItem('msgrpc-tab')
-                if (!tab) {
-                    tab = Math.random().toString(36).slice(2, 5)
-                    sessionStorage.setItem('msgrpc-tab', tab)
-                }
-                const first = !sessionStorage.getItem('msgrpc-second-tab')
-                const name = readableNameFrom(window.location.host) + (first ? '' : `-${tab}`)
+                // the same peer. A second tab on the same console takes a suffix instead, since two
+                // pages announcing one name is two pages sharing an address.
+                const claimed = await claimPeerName(window.location.host)
+                release = claimed.release
+                const name = claimed.name
                 setMe(name)
 
                 server = new RpcServer({
@@ -91,7 +89,10 @@ const useConsole = () => {
                 setStatus(`cannot reach the console: ${(e as Error).message}`)
             }
         })()
-        return () => void server?.close()
+        return () => {
+            release?.()
+            void server?.close()
+        }
     }, [])
 
     return { service, status, me, events, peerChange, said, peer }

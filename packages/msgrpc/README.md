@@ -488,6 +488,13 @@ It reports each namespace with its class, its contract version, whether the inst
 runtime, its methods with types when a schema describes them, and its events with how many peers are
 currently subscribed. `msgrpc console` renders this in a browser.
 
+`describe` describes itself: the `msgrpc` namespace comes with its own contract, so a peer reading a
+server sees the type it will get back, and `validation: 'required'` does not refuse the one call
+made to find out what is there. Its named types are prefixed — `msgrpc.ServerDescription` — because
+the schema has one type map shared by every namespace, and a plant defining its own `TypeNode`
+should not find `describe()` described against it. A schema that already defines `msgrpc` is left
+untouched.
+
 **Off by default, and subject to `authorize` like any other call.** Listing every class, method and
 live instance is reconnaissance, and instance names on a plant network tend to encode plant
 structure.

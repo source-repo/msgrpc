@@ -1,7 +1,7 @@
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
-import { Introspection } from './RPC/Introspection.js'
+import { Introspection, withIntrospection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import { RpcProxy } from './RpcClient.js'
@@ -137,7 +137,12 @@ export class RpcServerBase implements IManageRpc {
         this.rpc.unknownVersion = this.options.unknownVersion ?? 'allow'
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
-        if (this.options.exposeIntrospection) this.rpc.manageRpc.exposeClassInstance(new Introspection(this.rpc))
+        if (this.options.exposeIntrospection) {
+            this.rpc.manageRpc.exposeClassInstance(new Introspection(this.rpc))
+            // Describing the describer. Without this the one call a peer makes to find out what is
+            // here is the only undescribed thing on the server, and 'required' refuses it outright.
+            this.rpc.schema = withIntrospection(this.rpc.schema)
+        }
 
         // Building a listener or a broker connection means loading a module, so this is where the
         // constructor stops being synchronous. ready() awaits it and reports what went wrong.

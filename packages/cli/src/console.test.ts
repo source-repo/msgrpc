@@ -207,6 +207,9 @@ test('the console describes its own service with argument types', async (t) => {
 
     const onlooker = new RpcServer({ name: peer('onlooker'), transports: [{ connect: 'http://localhost:3991' }] })
     await onlooker.ready()
+    // ready() means the link is up, not that presence has arrived. Addressing a peer the registry
+    // has not heard of yet is what made this the flakiest test in the suite.
+    await waitFor(() => onlooker.peers.names().includes(peer('console-self')))
     const introspection = await onlooker.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer('console-self'))
     const description = await introspection.remote!.describe()
 
