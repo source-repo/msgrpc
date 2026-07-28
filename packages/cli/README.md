@@ -30,10 +30,10 @@ msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share
 | `--port <n>` | console | `7300` | |
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
 | `--timeout <ms>` | console | `10000` | call timeout |
-| `--name <peer>` | console | `msgrpc-console-<pid>` | how the console identifies itself to the network |
+| `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
 | `--sign <keyfile>` | console | — | HMAC keys, so the console can talk to a signed network |
 | `--port <n>` | broker | `8080` | listens on every interface |
-| `--name <peer>` | broker | `msgrpc-broker` | how the broker identifies itself |
+| `--name <peer>` | broker | `broker-<three words>` | how the broker identifies itself |
 | `--upstream <url>` | broker | — | join another broker; repeatable |
 | `--quiet` | broker | off | stop logging peers arriving and leaving |
 

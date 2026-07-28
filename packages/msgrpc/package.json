@@ -49,6 +49,7 @@
   },
   "dependencies": {
     "@msgpack/msgpack": "^3.1.2",
+    "@scure/bip39": "^2.2.0",
     "events": "^3.3.0",
     "mqtt": "^5.10.1",
     "socket.io": "^4.8.1",
@@ -72,5 +73,8 @@
   "homepage": "https://github.com/source-repo/msgrpc/tree/main/packages/msgrpc#readme",
   "bugs": {
     "url": "https://github.com/source-repo/msgrpc/issues"
+  },
+  "browser": {
+    "./dist/Transports/NodeTransports.js": "./dist/Transports/NodeTransports.browser.js"
   }
 }

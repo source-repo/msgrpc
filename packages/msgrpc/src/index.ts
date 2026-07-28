@@ -19,6 +19,7 @@ export * from './RPC/Signing.js'
 export * from './RPC/RpcClientHandler.js'
 export * from './RPC/RpcServerHandler.js'
 
+export * from './Utilities/ReadableName.js'
 export * from './Utilities/Converters.js'
 export * from './Utilities/Switch.js'
 export * from './Utilities/Filter.js'

@@ -7,7 +7,7 @@ import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { codecFor } from './RPC/Codec.js'
-import { v4 as uuidv4 } from 'uuid'
+import { readableName } from './Utilities/ReadableName.js'
 
 export interface RpcClientOptions {
     name: string
@@ -59,7 +59,9 @@ export class RpcClient extends EventEmitter {
     // No transport here: constructing one in a field initialiser opened a socket on every client
     // that init() then replaced and orphaned, leaving it reconnecting forever.
     options: RpcClientOptions = {
-        name: uuidv4(),
+        // Readable rather than a UUID: this name is what a peer list shows, what a log line blames
+        // and, over MQTT, the broker's client id.
+        name: readableName(),
         defaultTarget: '*',
         useMsgPack: true,
         callTimeout: defaultCallTimeout,

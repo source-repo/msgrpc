@@ -10,6 +10,8 @@ type Servers = HttpServer | HttpsServer | SocketIo.Server
 
 export class SocketIoServerTransport extends GenericModule<Message, unknown, Message, unknown> {
     closed = false
+    /** Set when this transport can never come up - a port already in use, most often. */
+    startupError?: unknown
     /** Owned here rather than by a converter above, so the transport decides its own wire form. */
     codec: FrameCodec = msgPackCodec
     io?: SocketIo.Server
@@ -112,7 +114,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             const listener = this.server
             // Without a handler Node throws on the unhandled 'error', so a port already in use took
             // the process down with a stack trace instead of a diagnosis.
-            listener.on('error', (e) => this.emit(TransportEvent.transportError, e))
+            listener.on('error', (e) => {
+                // Recorded as well as emitted. A listener that cannot bind never becomes ready, and
+                // without this the only symptom was ready() timing out with nothing about the port.
+                this.startupError = e
+                this.emit(TransportEvent.transportError, e)
+            })
             // Ready means listening. It used to be set here regardless, so ready() resolved before
             // the port was bound and a server could announce itself and then die of EADDRINUSE.
             listener.listen(port, () => {

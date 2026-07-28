@@ -31,12 +31,9 @@ export const startBroker = async (options: BrokerOptions) => {
         // name gets ClassNotFound, which is the truth: it is a switchboard, not a service.
         readyTimeout: 15000
     })
-    // Attached before ready() so a bind failure is reported as itself rather than as a timeout.
-    const failure = new Promise<never>((_resolve, reject) =>
-        server.transports.forEach((transport) => transport.on(TransportEvent.transportError, (e: Error) => reject(e)))
-    )
     try {
-        await Promise.race([server.ready(), failure])
+        // ready() reports a listener that cannot bind rather than waiting it out.
+        await server.ready()
     } catch (e) {
         // A broker that could not start still holds a socket.io server and whatever upstream links
         // it opened. Throwing without closing them leaves them behind for the life of the process.

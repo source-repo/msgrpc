@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createHmacSigner, createHmacVerifier, namespaceProblems, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/msgrpc'
+import { createHmacSigner, createHmacVerifier, namespaceProblems, readableNameFor, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/msgrpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
@@ -36,12 +36,12 @@ const usage = `msgrpc <command> [options]
     --port <n>                  default 7300
     --host <address>            default 127.0.0.1 - see the warning it prints before widening this
     --timeout <ms>              call timeout, default 10000
-    --name <peer>               how the console identifies itself, default msgrpc-console-<pid>
+    --name <peer>               how the console identifies itself, default console-<three words>
     --sign <keyfile>            HMAC keys, so the console can talk to a signed network
 
   broker
     --port <n>                  default 8080, on every interface
-    --name <peer>               how the broker identifies itself, default msgrpc-broker
+    --name <peer>               how the broker identifies itself, default broker-<three words>
     --upstream <url>            join another broker, repeatable; the two become one network
     --quiet                     do not log peers arriving and leaving
 `
@@ -122,7 +122,7 @@ const runBroker = async (argv: string[]) => {
     const port = Number(argument(argv, '--port', '8080'))
     const upstream = argumentList(argv, '--upstream')
     const quiet = argv.includes('--quiet')
-    const name = argument(argv, '--name', 'msgrpc-broker')
+    const name = argument(argv, '--name', readableNameFor('broker'))
 
     const running = await startBroker({
         port,
@@ -175,7 +175,7 @@ const runConsole = async (argv: string[]) => {
         process.stderr.write(`msgrpc console: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
         process.exit(1)
     }
-    const name = requestedName || signing?.keys.name || `msgrpc-console-${process.pid}`
+    const name = requestedName || signing?.keys.name || readableNameFor('console')
 
     const running = await startConsole({
         ...(broker ? { broker } : {}),

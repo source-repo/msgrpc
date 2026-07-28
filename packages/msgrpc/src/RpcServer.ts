@@ -1,4 +1,4 @@
-import { Server } from 'http'
+import type { Server } from 'http'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
@@ -6,8 +6,7 @@ import { Introspection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import { RpcProxy } from './RpcClient.js'
-import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
-import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
+import type { MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { RelayRule } from './Transports/Presence.js'
 import { codecFor } from './RPC/Codec.js'
@@ -116,100 +115,16 @@ export class RpcServer implements IManageRpc {
     options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true, readyTimeout: 30000 }
     constructor(options: Partial<RpcServerOptions> = {}) {
         this.options = { ...this.options, ...options }
-        this.transports = this.options.transports.map((serveroption) => {
-            let transport: Transport | undefined
-            if (serveroption instanceof GenericModule) transport = serveroption as Transport
-            else if ((serveroption as HttpServerOptions).port)
-                transport = new SocketIoServerTransport(
-                    this.options.name,
-                    undefined,
-                    (serveroption as HttpServerOptions).port,
-                    (serveroption as HttpServerOptions).https,
-                    [],
-                    { path: (serveroption as HttpServerOptions).path },
-                    this.options.authenticate
-                )
-            else if ((serveroption as MqttServerOptions).brokerurl) {
-                const mqttServerOptions = serveroption as MqttServerOptions
-                transport = new MqttTransport(this.options.name, mqttServerOptions.brokerurl, {
-                    // A server should not lose requests published while it was restarting, so it
-                    // keeps its broker session by default. Clients do not: a late reply is useless
-                    // to a call that has already timed out, and every short-lived peer would leave
-                    // session state behind on the broker.
-                    persistentSession: true,
-                    ...mqttServerOptions
-                })
-            }
-            else if ((serveroption as ConnectServerOptions).connect) {
-                const connectOptions = serveroption as ConnectServerOptions
-                transport = new SocketIoClientTransport(
-                    this.options.name,
-                    connectOptions.connect,
-                    [],
-                    {
-                        ...(connectOptions.path ? { path: connectOptions.path } : {}),
-                        ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
-                    }
-                )
-            }
-            else if ((serveroption as ExternalServerOptions).server)
-                transport = new SocketIoServerTransport(
-                    this.options.name,
-                    (serveroption as ExternalServerOptions).server,
-                    0,
-                    false,
-                    [],
-                    { path: (serveroption as ExternalServerOptions).path },
-                    this.options.authenticate
-                )
-            if (!transport) throw new Error('RpcServer: Invalid transport defined')
-            return transport
-        })
-        if (this.transports.length == 0) this.transports.push(new SocketIoServerTransport('*', undefined, defaultWebSocketPort, false))
-
-        // The transports encode, so there is no converter between them and the handler. A
-        // structured wire format such as MQTT 5 needs to see the message rather than bytes a
-        // converter already flattened.
-        const codec = codecFor(this.options.useMsgPack)
-        for (const transport of this.transports) {
-            transport.codec = codec
-            if (this.options.relay !== undefined && transport instanceof SocketIoServerTransport) transport.relay = this.options.relay
-        }
-        this.rpc = new RpcServerHandler(this.options.name, this.transports)
-        // Both handlers see every inbound frame and each ignores what is not theirs: the server
-        // handler acts only on calls, the client handler only on responses and events.
-        this.caller = new RpcClientHandler(this.options.name, this.transports, this.options.callTimeout ?? defaultCallTimeout)
+        // Handlers first, with no sources. Transports attach to them as they are built, which is
+        // what lets exposeClassInstance() run before any link exists - and lets the two node-only
+        // transports be imported on demand, so a browser bundle carrying RpcServer does not carry
+        // socket.io's server and the MQTT client to reach a hub it dials.
+        this.rpc = new RpcServerHandler(this.options.name)
+        this.caller = new RpcClientHandler(this.options.name, [], this.options.callTimeout ?? defaultCallTimeout)
         this.switch = new Switch([this.rpc, this.caller])
-        this.switch.setTargets(this.transports)
         // One registry for this server's modules only. The transports record which peer they saw a
         // message from; the switch reads it back to route the reply out of the same transport.
-        for (const module of [...this.transports, this.rpc, this.caller, this.switch]) module.usePeerRegistry(this.peers)
-        this.transports.forEach((transport) => {
-            // Both listeners are guarded: a transport emits these synchronously from its own
-            // inbound path, so anything thrown here unwinds into the transport rather than into
-            // something able to report it.
-            transport.on(TransportEvent.peerGone, (peer: string) =>
-                this.safely('peerGone', peer, () => {
-                    // Drop the peer's event subscriptions and forget its route as soon as it goes.
-                    this.rpc.removePeer(peer)
-                    this.peers.delete(peer)
-                    this.relayPresence(transport, peer, 'offline')
-                    // A gateway subscription taken out for this peer has nothing left to collect.
-                    for (const other of this.transports)
-                        if (other instanceof MqttTransport)
-                            void other.stopWatchingFor(peer).catch((e) => this.emitSafely('presenceError', { peer, error: e }))
-                })
-            )
-            // A peer that arrives on one transport is announced on the others, so a browser
-            // connected over socket.io learns about a peer that only exists on the broker.
-            transport.on(TransportEvent.peerOnline, (peer: string) =>
-                this.safely('peerOnline', peer, () => this.relayPresence(transport, peer, 'online'))
-            )
-            // Subscriptions this server holds on other peers are replayed when a link returns, the
-            // same way RpcClient does it - otherwise a server that watches its peers goes deaf
-            // after a blip with nothing to say so.
-            transport.on(TransportEvent.connected, () => void this.caller.resubscribe().catch((e) => this.emitSafely('resubscribeError', e)))
-        })
+        for (const module of [this.rpc, this.caller, this.switch]) module.usePeerRegistry(this.peers)
 
         this.rpc.authorize = this.options.authorize
         this.rpc.requireIdentity = this.options.requireAuthenticatedPeers ?? !!this.options.authenticate
@@ -230,7 +145,17 @@ export class RpcServer implements IManageRpc {
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         if (this.options.exposeIntrospection) this.rpc.manageRpc.exposeClassInstance(new Introspection(this.rpc))
-        this.readyFlag = true
+
+        // Building a listener or a broker connection means loading a module, so this is where the
+        // constructor stops being synchronous. ready() awaits it and reports what went wrong.
+        this.starting = this.buildTransports().then(
+            () => {
+                this.readyFlag = true
+            },
+            (e: unknown) => {
+                this.initError = e
+            }
+        )
         // init() is a no-op here but is meant to be overridden, and the constructor cannot await
         // it. Left unguarded, a subclass whose init() rejected took the process down from a
         // constructor; kept instead, so ready() can name the cause.
@@ -241,6 +166,95 @@ export class RpcServer implements IManageRpc {
     }
     /** Why init() failed, rethrown by ready() so the caller sees the cause and not a timeout. */
     private initError?: unknown
+    /** Resolves when every transport has been built and wired. ready() waits on it. */
+    private starting: Promise<void> = Promise.resolve()
+
+    /**
+     * Build each configured transport and wire it in. The socket.io listener and the MQTT client
+     * are imported here rather than at the top of the file: a page hosting an RpcServer over a
+     * connection it dials has no use for either, and a static import would put both in its bundle.
+     */
+    private async buildTransports() {
+        const codec = codecFor(this.options.useMsgPack)
+        const configured = this.options.transports.length ? this.options.transports : [{ port: defaultWebSocketPort }]
+        for (const serveroption of configured) {
+            let transport: Transport | undefined
+            if (serveroption instanceof GenericModule) transport = serveroption as Transport
+            else if ((serveroption as ConnectServerOptions).connect) {
+                const connectOptions = serveroption as ConnectServerOptions
+                transport = new SocketIoClientTransport(this.options.name, connectOptions.connect, [], {
+                    ...(connectOptions.path ? { path: connectOptions.path } : {}),
+                    ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
+                })
+            } else if ((serveroption as HttpServerOptions).port) {
+                const { SocketIoServerTransport } = await import('./Transports/NodeTransports.js')
+                const httpOptions = serveroption as HttpServerOptions
+                transport = new SocketIoServerTransport(
+                    this.options.name,
+                    undefined,
+                    httpOptions.port,
+                    httpOptions.https,
+                    [],
+                    { path: httpOptions.path },
+                    this.options.authenticate
+                )
+            } else if ((serveroption as ExternalServerOptions).server) {
+                const { SocketIoServerTransport } = await import('./Transports/NodeTransports.js')
+                const externalOptions = serveroption as ExternalServerOptions
+                transport = new SocketIoServerTransport(this.options.name, externalOptions.server, 0, false, [], { path: externalOptions.path }, this.options.authenticate)
+            } else if ((serveroption as MqttServerOptions).brokerurl) {
+                const { MqttTransport } = await import('./Transports/NodeTransports.js')
+                const mqttServerOptions = serveroption as MqttServerOptions
+                transport = new MqttTransport(this.options.name, mqttServerOptions.brokerurl, {
+                    // A server should not lose requests published while it was restarting, so it
+                    // keeps its broker session by default. Clients do not: a late reply is useless
+                    // to a call that has already timed out, and every short-lived peer would leave
+                    // session state behind on the broker.
+                    persistentSession: true,
+                    ...mqttServerOptions
+                })
+            }
+            if (!transport) throw new Error('RpcServer: Invalid transport defined')
+            // The transports encode, so there is no converter between them and the handler. A
+            // structured wire format such as MQTT 5 needs to see the message rather than bytes a
+            // converter already flattened.
+            transport.codec = codec
+            if (this.options.relay !== undefined && 'relay' in transport) (transport as { relay: RelayRule }).relay = this.options.relay
+            this.attach(transport)
+        }
+    }
+
+    /** Put one transport into the graph: piped into both handlers, routable from the switch. */
+    private attach(transport: Transport) {
+        this.transports.push(transport)
+        transport.usePeerRegistry(this.peers)
+        transport.pipe(this.rpc)
+        transport.pipe(this.caller)
+        this.switch?.setTarget(transport)
+        // Both listeners are guarded: a transport emits these synchronously from its own inbound
+        // path, so anything thrown here unwinds into the transport rather than into something able
+        // to report it.
+        transport.on(TransportEvent.peerGone, (peer: string) =>
+            this.safely('peerGone', peer, () => {
+                // Drop the peer's event subscriptions and forget its route as soon as it goes.
+                this.rpc.removePeer(peer)
+                this.peers.delete(peer)
+                this.relayPresence(transport, peer, 'offline')
+                // A gateway subscription taken out for this peer has nothing left to collect.
+                for (const other of this.transports) {
+                    const gateway = other as { stopWatchingFor?: (peer: string) => Promise<void> }
+                    if (gateway.stopWatchingFor) void gateway.stopWatchingFor(peer).catch((e) => this.emitSafely('presenceError', { peer, error: e }))
+                }
+            })
+        )
+        // A peer that arrives on one transport is announced on the others, so a browser connected
+        // over socket.io learns about a peer that only exists on the broker.
+        transport.on(TransportEvent.peerOnline, (peer: string) => this.safely('peerOnline', peer, () => this.relayPresence(transport, peer, 'online')))
+        // Subscriptions this server holds on other peers are replayed when a link returns, the same
+        // way RpcClient does it - otherwise a server that watches its peers goes deaf after a blip
+        // with nothing to say so.
+        transport.on(TransportEvent.connected, () => void this.caller.resubscribe().catch((e) => this.emitSafely('resubscribeError', e)))
+    }
     /**
      * Pass a presence change from the transport that saw it to the other links: told directly to
      * the peers connected here, and advertised to the hubs this server has dialled into. The
@@ -251,7 +265,8 @@ export class RpcServer implements IManageRpc {
     private relayPresence(from: Transport, peer: string, state: 'online' | 'offline') {
         for (const transport of this.transports) {
             if (transport === from) continue
-            if (transport instanceof SocketIoServerTransport) transport.announcePeer(peer, state)
+            const listener = transport as { announcePeer?: (peer: string, state: 'online' | 'offline') => void }
+            if (listener.announcePeer) listener.announcePeer(peer, state)
         }
         this.advertiseReachability()
     }
@@ -322,6 +337,7 @@ export class RpcServer implements IManageRpc {
     }
     async init() {}
     async ready() {
+        await this.starting
         const allTransportsReady = () => {
             return this.transports.filter((trp) => !trp.readyFlag).length == 0
         }
@@ -329,6 +345,10 @@ export class RpcServer implements IManageRpc {
         // with no diagnostic at all.
         const deadline = Date.now() + this.options.readyTimeout
         while (!allTransportsReady() || !this.readyFlag) {
+            // A transport that can never come up says so, rather than being waited out: a port
+            // already in use is not something more time fixes.
+            const failed = this.transports.find((transport) => (transport as { startupError?: unknown }).startupError !== undefined)
+            if (failed) this.initError = (failed as { startupError?: unknown }).startupError
             if (this.initError !== undefined)
                 throw new Error(`RpcServer '${this.options.name}': could not start: ${this.initError instanceof Error ? this.initError.message : String(this.initError)}`, {
                     cause: this.initError
