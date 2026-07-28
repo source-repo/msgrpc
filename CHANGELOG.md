@@ -60,6 +60,30 @@ always has - and so a server hosted in a browser page is a peer like any other.
   it relays between the peers that connect and tells each who else is there. `--upstream <url>`
   joins another broker, repeatable, and the two become one network - a peer on either is callable
   from the other. It is an `RpcServer` exposing nothing; there is no separate implementation.
+- **A `record` kind in the schema type language**, for a dictionary whose keys are not known in
+  advance: `{ [tag: string]: Reading }`, which is how plant data usually arrives. `extract` used to
+  refuse an index signature outright, because describing one as an object with no properties
+  produces a type that rejects every value. A record checks every value against one type and leaves
+  the keys open, or constrains them with `keyPattern` - which is what a numeric index signature
+  becomes, since a JS object key is always a string on the wire - and `maxEntries` bounds it the way
+  `maxItems` bounds an array. It was also the first thing needed to describe msgrpc's own
+  introspection output, which is built out of `{ [name: string]: TypeNode }`.
+- **`describe()` describes itself.** The `msgrpc` namespace ships a contract extracted from its own
+  source, so a peer reading a server sees the type it will get back. Its named types are prefixed
+  `msgrpc.*`, because the schema has one type map shared by every namespace and a plant defining its
+  own `TypeNode` should not find `describe()` described against it. A schema that already defines
+  `msgrpc` is left untouched.
+- **The console and the page it serves ship contracts too**, so pointing one console at another
+  gives argument fields rather than `call(...)` and `say(...)`. `npm run contract` regenerates all
+  three; a test asserts they still match the source they came from.
+- **A name collision is reported rather than silent.** Both transports emit
+  `TransportEvent.peerDisplaced` and warn once when a second peer turns up under a name already in
+  use. The newcomer still takes the address - a peer reconnecting after a blip announces itself
+  while the old connection may still look live, and refusing it would lock a peer out of its own
+  name - but two peers genuinely sharing one used to send each other's replies into the wrong place,
+  which reads as calls timing out for no reason. Over socket.io the server sees both connections;
+  over MQTT the client id is derived from the peer name, so the broker hands the session over and
+  tells the displaced peer why with reason code `0x8E` (MQTT 5 only).
 
 ### Fixed
 
@@ -74,6 +98,18 @@ always has - and so a server hosted in a browser page is a peer like any other.
 - A socket.io server reported itself ready before its port was bound, and had no handler for the
   listener's `error`. A port already in use therefore announced a running server and then took the
   process down with an unhandled event; it now waits for `listening` and reports the failure.
+- `exposeIntrospection` with `validation: 'required'` refused `msgrpc.describe`, so the one call a
+  peer makes to find out what a server offers was the only undescribed thing on it.
+- `validateValue` returned "valid" for a node whose `kind` it did not recognise - a typo, or a
+  document written for a later version of the language - which is an unchecked value wearing a
+  checked type. It now refuses.
+- `extract` keyed a generic instantiation under its bare alias, so `Record<string, number>` and
+  `Record<string, string>` collapsed into one named type and the second silently became a reference
+  to the first's value type. Instantiations are inlined instead.
+- Every console page derived its peer name from the console's host, so every browser pointed at one
+  console produced the same name and their replies went to whichever the server registered last. A
+  page now takes a random readable name, kept in `sessionStorage` so a reload comes back as the same
+  peer; `?name=` overrides it, the page's version of `--name`.
 
 ### Tests
 
@@ -89,6 +125,8 @@ always has - and so a server hosted in a browser page is a peer like any other.
   `new SocketIoClientTransport(name, url, sources, options)`. A peer has to know its own name to
   announce it, the same way `MqttTransport` has always taken one. `RpcClient` passes its `name`
   through, so this only affects code constructing the transport directly.
+- `TypeNode` gains a `record` variant. A schema written by hand needs no change, but code that
+  switches exhaustively over the union has a new case to handle.
 
 ## msgrpc 2.1.1
 
