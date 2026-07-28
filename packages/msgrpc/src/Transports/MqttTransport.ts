@@ -22,6 +22,8 @@ export const defaultTopicPrefix = { 4: 'msgrpc/v1', 5: 'msgrpc/v2' } as const
 
 const PRESENCE_ONLINE = 'online'
 const PRESENCE_OFFLINE = 'offline'
+/** MQTT 5 reason code 0x8E, sent to the peer whose session a new connection has just claimed. */
+const SESSION_TAKEN_OVER = 0x8e
 
 /**
  * Wildcards, control characters and (unless this is a multi-level prefix) the level separator.
@@ -268,6 +270,25 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         // broker connection would take the process down. Not re-emitted as 'error' for the same
         // reason.
         this.client.on('error', (e) => this.emit(TransportEvent.transportError, e))
+        // A name collision on MQTT needs no detection of its own: the clientId is derived from the
+        // peer name, so a second peer using it makes the broker hand the session over and tell the
+        // incumbent why. Same outcome as socket.io - the newcomer takes the address - reported from
+        // the other end, because here it is the displaced peer that finds out rather than a server.
+        this.client.on('disconnect', (packet) => {
+            if (packet?.reasonCode === SESSION_TAKEN_OVER) this.warnAboutDisplacement()
+        })
+    }
+
+    /** Said once: mqtt.js reconnects on its own, and two peers sharing a name take turns forever. */
+    private warnedAboutDisplacement = false
+    private warnAboutDisplacement() {
+        this.emit(TransportEvent.peerDisplaced, this.name)
+        if (this.warnedAboutDisplacement) return
+        this.warnedAboutDisplacement = true
+        console.warn(
+            `msgrpc: '${this.name}' was disconnected because another connection claimed its broker session, which means a second peer is running under this name. ` +
+                'Both will keep taking the connection from each other, and calls to either will reach whichever holds it. Give them distinct names.'
+        )
     }
 
     private async onConnect() {

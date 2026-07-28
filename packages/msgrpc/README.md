@@ -196,13 +196,18 @@ Over MQTT this is retained presence: subscribing to `<prefix>/presence/+` hands 
 already online, and a last will covers a peer that dies rather than leaves. Over socket.io the
 server keeps the list and sends it to each peer that announces itself.
 
-**A name is an address, so two peers must not share one.** When a connection announces a name
-another live connection already holds, the newcomer takes the address and the server emits
-`TransportEvent.peerDisplaced` and warns once. The takeover is deliberate: a peer reconnecting after
-a blip announces itself while the server may still hold the dead socket, and refusing it would lock
-a peer out of its own name. What the event is for is the other case — two peers genuinely running
-under one name send each other's replies into the wrong socket, which reads as calls timing out for
-no reason, and is close to undiagnosable if nothing says so.
+**A name is an address, so two peers must not share one.** Both transports report a collision as
+`TransportEvent.peerDisplaced`, and warn once. The newcomer takes the address either way: a peer
+reconnecting after a blip announces itself while the old connection may still look live, and
+refusing it would lock a peer out of its own name. What the event is for is the other case — two
+peers genuinely running under one name send each other's replies into the wrong place, which reads
+as calls timing out for no reason and is close to undiagnosable if nothing says so.
+
+Which end finds out differs, because the two protocols enforce it in different places. Over
+socket.io the **server** sees a second connection announce a name it already holds. Over MQTT there
+is no server in the middle and nothing has to detect anything: the client id is derived from the
+peer name, so the broker hands the session over and tells the **displaced peer** why, with reason
+code `0x8E` — which needs MQTT 5, since 3.1.1 has no reason codes and the connection simply closes.
 
 **A server relays for the peers connected to it.** A frame addressed to another peer it can see is
 forwarded rather than executed locally, which is what makes a peer that can only dial out reachable

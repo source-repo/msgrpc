@@ -542,3 +542,32 @@ test('a persistent session delivers a request published while the server was dow
     const sweep = await connectAsync(BROKER_URL, { clientId: `msgrpc-${peer('sessionSrv')}`, clean: true, protocolVersion: 5, reconnectPeriod: 0 })
     await sweep.endAsync()
 })
+
+test('a second peer under one name takes the broker session, and the displaced one says so', async (t) => {
+    if (skipWithoutBroker(t)) return
+    // The MQTT half of the socket.io displacement warning. Nothing here detects the collision
+    // itself: the clientId is derived from the peer name, so the broker hands the session over and
+    // tells the incumbent why with reason code 0x8E. Reported from the other end than socket.io -
+    // there is no server in the middle, so it is the displaced peer that finds out.
+    const name = peer('twin5')
+    const prefix = prefixFor('twin5')
+    const options = { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY }
+
+    const incumbent = new RpcServer({ name, transports: [new MqttTransport(name, BROKER_URL, options)] })
+    await incumbent.ready()
+    const displaced: string[] = []
+    incumbent.transports[0].on('peerDisplaced', (peer: string) => displaced.push(peer))
+
+    const newcomer = new RpcServer({ name, transports: [new MqttTransport(name, BROKER_URL, options)] })
+    await newcomer.ready()
+
+    const deadline = Date.now() + 8000
+    while (!displaced.length && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50))
+    t.deepEqual(displaced, [name], 'the displaced peer should be told its session was claimed')
+
+    await newcomer.close()
+    await incumbent.close()
+    // Both used one clientId, so the loser's session is the one still on the broker. Sweep it.
+    const sweep = await connectAsync(BROKER_URL, { clientId: `msgrpc-${name}`, clean: true, protocolVersion: 5 })
+    await sweep.endAsync()
+})
