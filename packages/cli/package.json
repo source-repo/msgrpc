@@ -1,6 +1,6 @@
 {
   "name": "@source-repo/msgrpc-cli",
-  "version": "2.4.0",
+  "version": "2.4.1",
   "description": "Extracts an msgrpc contract from TypeScript source, checks it for breaking changes, and browses a live network in a browser",
   "type": "module",
   "license": "MIT",
@@ -20,6 +20,7 @@
   "scripts": {
     "build": "vite build --config web/vite.config.ts && tsc -p tsconfig.json",
     "clean": "rimraf dist",
+    "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "npm run clean && npm run build && ava",
     "prepack": "npm run clean && npm run build",

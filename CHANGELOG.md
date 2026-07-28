@@ -1,5 +1,13 @@
 # Changelog
 
+## msgrpc-cli 2.4.1
+
+- The `msgrpc` binary is made executable at build time. `tsc` writes `dist/index.js` with a shebang
+  but no executable bit; npm sets it when installing a published tarball, so the published package
+  was fine and a workspace checkout was not. `npx @source-repo/msgrpc-cli` run from inside this repo
+  resolves to the workspace copy and died with `sh: 1: msgrpc: Permission denied` - which an MCP
+  client reports only as "Connection closed".
+
 ## msgrpc 2.3.0 and msgrpc-cli 2.4.0
 
 - **`msgrpc mcp`** serves a live network to an [MCP](https://modelcontextprotocol.io) client over

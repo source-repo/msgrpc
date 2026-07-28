@@ -175,7 +175,7 @@ export const startMcp = async (options: McpOptions) => {
                     protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
                     capabilities: { tools: {} },
                     // Bumped with the package. Clients show it when reporting which server said what.
-                    serverInfo: { name: 'msgrpc', version: '2.4.0' },
+                    serverInfo: { name: 'msgrpc', version: '2.4.1' },
                     instructions:
                         'This is a live msgrpc network. Start with list_peers, then describe_peer to learn a peer' +
                         ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.'
