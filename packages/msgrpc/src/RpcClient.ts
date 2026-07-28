@@ -72,8 +72,17 @@ export class RpcClient extends EventEmitter {
     ) {
         super()
         this.options = { ...this.options, ...options }
-        this.init()
+        // init() is async and the constructor cannot await it, so its rejection was unhandled -
+        // and Node ends the process on one of those. A bad url, an unreachable broker or a name the
+        // transport refuses took the whole application down from a constructor. Kept instead, so
+        // ready() can report the real cause rather than timing out with nothing to say.
+        void this.init().catch((e) => {
+            this.initError = e
+            this.emit('initError', e)
+        })
     }
+    /** Why init() failed, rethrown by ready() so the caller sees the cause and not a timeout. */
+    private initError?: unknown
     async close() {
         this.rpcClient?.failPendingCalls('client closed')
         this.rpcClient?.subscriptions.clear()
@@ -142,6 +151,12 @@ export class RpcClient extends EventEmitter {
     async ready() {
         const deadline = Date.now() + this.options.readyTimeout
         while (!this.options.transport?.readyFlag || !this.readyFlag) {
+            // Checked every turn, not just once: init() is still running when ready() is first
+            // called, so the failure usually arrives while this loop is already waiting.
+            if (this.initError !== undefined)
+                throw new Error(`RpcClient '${this.options.name}': could not start: ${this.initError instanceof Error ? this.initError.message : String(this.initError)}`, {
+                    cause: this.initError
+                })
             if (this.options.readyTimeout > 0 && Date.now() > deadline)
                 throw new Error(`RpcClient '${this.options.name}': transport not ready within ${this.options.readyTimeout} ms`)
             await new Promise((res) => setTimeout(res, 10))

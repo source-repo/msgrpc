@@ -95,24 +95,41 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * everything listening for the name.
      */
     private deliverEvent(payload: RpcEventPayload, source?: string) {
-        if (this.eventEmitter instanceof EventEmitter) {
+        // Held in a local so the narrowing survives into the delivery callbacks below.
+        const emitter = this.eventEmitter
+        if (emitter instanceof EventEmitter) {
             const from = source ?? ''
             const keys = payload.path
                 ? [subscriptionKey(from, payload.path, payload.event), subscriptionKey('', payload.path, payload.event)]
                 : // A peer that does not name the emitting instance: deliver to every subscription
                   // for this event whose peer matches, whatever namespace it was taken out on.
-                  this.eventEmitter
+                  emitter
                       .eventNames()
                       .filter((name): name is string => typeof name === 'string')
                       .filter((name) => {
                           const [keySource, , keyEvent] = name.split('\u0000')
                           return keyEvent === payload.event && (keySource === from || keySource === '')
                       })
-            for (const key of new Set(keys)) this.eventEmitter.emit(key, ...payload.params)
+            for (const key of new Set(keys)) this.deliverSafely(() => emitter.emit(key, ...payload.params), payload)
         }
         // The handler's own emitter stays keyed by name: it is a firehose of everything this client
         // receives, and its consumers read the path off the payload.
-        this.emit(payload.event, payload.params)
+        this.deliverSafely(() => this.emit(payload.event, payload.params), payload)
+    }
+
+    /**
+     * Run one subscriber without letting it unwind into the transport that delivered the event.
+     *
+     * These are application callbacks reached from a transport's inbound loop, so a handler that
+     * threw propagated all the way back out and became an unhandled rejection - one subscriber's
+     * bug ending the process for everything else the client was doing.
+     */
+    private deliverSafely(deliver: () => void, payload: RpcEventPayload) {
+        try {
+            deliver()
+        } catch (e) {
+            this.emit('subscriberError', { event: payload.event, path: payload.path, error: e })
+        }
     }
 
     /**

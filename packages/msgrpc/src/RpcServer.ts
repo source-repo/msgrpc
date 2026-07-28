@@ -185,17 +185,26 @@ export class RpcServer implements IManageRpc {
         // message from; the switch reads it back to route the reply out of the same transport.
         for (const module of [...this.transports, this.rpc, this.caller, this.switch]) module.usePeerRegistry(this.peers)
         this.transports.forEach((transport) => {
-            transport.on(TransportEvent.peerGone, (peer: string) => {
-                // Drop the peer's event subscriptions and forget its route as soon as it goes away.
-                this.rpc.removePeer(peer)
-                this.peers.delete(peer)
-                this.relayPresence(transport, peer, 'offline')
-                // A gateway subscription taken out for this peer has nothing left to collect.
-                for (const other of this.transports) if (other instanceof MqttTransport) void other.stopWatchingFor(peer)
-            })
+            // Both listeners are guarded: a transport emits these synchronously from its own
+            // inbound path, so anything thrown here unwinds into the transport rather than into
+            // something able to report it.
+            transport.on(TransportEvent.peerGone, (peer: string) =>
+                this.safely('peerGone', peer, () => {
+                    // Drop the peer's event subscriptions and forget its route as soon as it goes.
+                    this.rpc.removePeer(peer)
+                    this.peers.delete(peer)
+                    this.relayPresence(transport, peer, 'offline')
+                    // A gateway subscription taken out for this peer has nothing left to collect.
+                    for (const other of this.transports)
+                        if (other instanceof MqttTransport)
+                            void other.stopWatchingFor(peer).catch((e) => this.emitSafely('presenceError', { peer, error: e }))
+                })
+            )
             // A peer that arrives on one transport is announced on the others, so a browser
             // connected over socket.io learns about a peer that only exists on the broker.
-            transport.on(TransportEvent.peerOnline, (peer: string) => this.relayPresence(transport, peer, 'online'))
+            transport.on(TransportEvent.peerOnline, (peer: string) =>
+                this.safely('peerOnline', peer, () => this.relayPresence(transport, peer, 'online'))
+            )
             // Subscriptions this server holds on other peers are replayed when a link returns, the
             // same way RpcClient does it - otherwise a server that watches its peers goes deaf
             // after a blip with nothing to say so.
@@ -222,8 +231,16 @@ export class RpcServer implements IManageRpc {
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         if (this.options.exposeIntrospection) this.rpc.manageRpc.exposeClassInstance(new Introspection(this.rpc))
         this.readyFlag = true
-        this.init()
+        // init() is a no-op here but is meant to be overridden, and the constructor cannot await
+        // it. Left unguarded, a subclass whose init() rejected took the process down from a
+        // constructor; kept instead, so ready() can name the cause.
+        void this.init().catch((e) => {
+            this.initError = e
+            this.emitSafely('initError', e)
+        })
     }
+    /** Why init() failed, rethrown by ready() so the caller sees the cause and not a timeout. */
+    private initError?: unknown
     /**
      * Pass a presence change from the transport that saw it to the other links: told directly to
      * the peers connected here, and advertised to the hubs this server has dialled into. The
@@ -249,6 +266,18 @@ export class RpcServer implements IManageRpc {
     /** Not 'error': an EventEmitter throws on an unhandled 'error' event. */
     private emitSafely(event: string, payload: unknown) {
         for (const transport of this.transports) transport.emit(event, payload)
+    }
+
+    /**
+     * Run a presence reaction without letting it escape into the transport that emitted the event.
+     * Bookkeeping here failing is worth reporting; it is not worth ending the process over.
+     */
+    private safely(what: string, peer: string, react: () => void) {
+        try {
+            react()
+        } catch (e) {
+            this.emitSafely('presenceError', { what, peer, error: e })
+        }
     }
 
     /**
@@ -300,6 +329,10 @@ export class RpcServer implements IManageRpc {
         // with no diagnostic at all.
         const deadline = Date.now() + this.options.readyTimeout
         while (!allTransportsReady() || !this.readyFlag) {
+            if (this.initError !== undefined)
+                throw new Error(`RpcServer '${this.options.name}': could not start: ${this.initError instanceof Error ? this.initError.message : String(this.initError)}`, {
+                    cause: this.initError
+                })
             if (this.options.readyTimeout > 0 && Date.now() > deadline) {
                 const pending = this.transports.filter((trp) => !trp.readyFlag).map((trp) => trp.getName())
                 throw new Error(`RpcServer '${this.options.name}': transports not ready within ${this.options.readyTimeout} ms: ${pending.join(', ')}`)

@@ -1,4 +1,4 @@
-import { GenericModule, IGenericModule, Message } from '../RPC/Core.js'
+import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 
 /**
  * Sends received messages to the correct target.
@@ -19,8 +19,13 @@ export class Switch extends GenericModule {
         if (this.getTarget) switchTarget = this.getTarget(target)
         if (!switchTarget) switchTarget = this.targetExists(target)
         if (!switchTarget) switchTarget = super.targetExists(target)
-        if (switchTarget) await switchTarget.receive(message, source, target)
-        return
+        if (!switchTarget) {
+            // Said out loud rather than dropped. A message the switch cannot place used to vanish
+            // here, and the only evidence was a call that never came back.
+            this.emit(TransportEvent.unroutable, { source, target, reason: 'no switch target for this peer' })
+            return
+        }
+        await switchTarget.receive(message, source, target)
     }
 
     /**

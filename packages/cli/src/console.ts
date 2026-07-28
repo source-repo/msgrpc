@@ -240,7 +240,12 @@ export const startConsole = async (options: ConsoleOptions) => {
     await Promise.all(clients.map((client) => client.ready()))
 
     const http = createServer((request, response) => {
-        void serveAsset(new URL(request.url ?? '/', 'http://console').pathname, response)
+        // serveAsset handles its own failures, so reaching this catch means the response itself
+        // could not be written. Answering is still better than rejecting into nowhere.
+        void serveAsset(new URL(request.url ?? '/', 'http://console').pathname, response).catch(() => {
+            if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+            response.end('The console could not serve this request.\n')
+        })
     })
     // socket.io attaches to the same server and answers /socket.io before this handler sees it, so
     // the console is one port: the page and the RPC link arrive over the same origin.

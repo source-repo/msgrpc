@@ -12,8 +12,9 @@ export class TryCatch extends GenericModule implements ITryCatch<unknown> {
     }
 
     override async receive(message: unknown, source: string, target: string) {
-        this.send(message, source, target)
-            .then()
-            .catch((e) => this.emit('Caught exception', message, e))
+        // 'caught' is the event this module's own interface declares. It emitted 'Caught exception',
+        // which no listener written against ITryCatch could ever have been registered for, so every
+        // error this module existed to surface was swallowed.
+        await this.send(message, source, target).catch((e) => this.emit('caught', message, e))
     }
 }

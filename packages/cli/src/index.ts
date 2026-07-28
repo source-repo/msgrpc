@@ -139,7 +139,16 @@ const runBroker = async (argv: string[]) => {
     // are. Worth saying plainly rather than leaving to be discovered.
     process.stderr.write('msgrpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust.\n')
 
-    const stop = () => void running.close().then(() => process.exit(0))
+    // Catching matters most here: a shutdown that fails would otherwise reject unhandled, and the
+    // process would die on that instead of exiting cleanly - and print nothing about why.
+    const stop = () =>
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch((e: unknown) => {
+                process.stderr.write(`msgrpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.exit(1)
+            })
     process.on('SIGINT', stop)
     process.on('SIGTERM', stop)
     // Nothing else keeps this process alive; the listener does.
@@ -183,7 +192,16 @@ const runConsole = async (argv: string[]) => {
     if (host !== '127.0.0.1' && host !== 'localhost')
         // Anyone who can reach it can invoke anything the console's own credentials permit.
         process.stderr.write(`msgrpc console: bound to ${host}, so it is reachable from the network. It can call any method it is allowed to.\n`)
-    const stop = () => void running.close().then(() => process.exit(0))
+    // Catching matters most here: a shutdown that fails would otherwise reject unhandled, and the
+    // process would die on that instead of exiting cleanly - and print nothing about why.
+    const stop = () =>
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch((e: unknown) => {
+                process.stderr.write(`msgrpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.exit(1)
+            })
     process.on('SIGINT', stop)
     process.on('SIGTERM', stop)
 }
@@ -193,12 +211,18 @@ const main = () => {
     const command = argv[0]
     const project = resolve(argument(argv, '--project', 'tsconfig.json'))
 
+    // Both are long-running and async, so their rejections were unhandled: the process died on the
+    // rejection itself, with a stack trace where a sentence belonged.
+    const fail = (e: unknown) => {
+        process.stderr.write(`msgrpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.exit(1)
+    }
     if (command === 'broker') {
-        void runBroker(argv)
+        void runBroker(argv).catch(fail)
         return
     }
     if (command === 'console') {
-        void runConsole(argv)
+        void runConsole(argv).catch(fail)
         return
     }
     if (command !== 'extract' && command !== 'check') {

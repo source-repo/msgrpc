@@ -4,8 +4,57 @@ import { v4 as uuidv4 } from 'uuid'
 import { RpcIdentity } from './Auth.js'
 import { FrameCodec } from './Codec.js'
 
-export const MAX_HEADER_LENGTH = 256
+/**
+ * Upper bound on the framed header, in bytes, including the delimiter.
+ *
+ * It has to fit the largest header this library builds: two 128-character peer names, a timestamp,
+ * a sequence number, a hop count, a 24-character nonce and an 88-character Ed25519 signature come
+ * to roughly 470 bytes. The old value of 256 was under that, and since the receiver stopped looking
+ * for the delimiter at the limit, every frame with a header past it was dropped without a word -
+ * signed frames from peers whose names were merely descriptive, at around 34 characters each.
+ */
+export const MAX_HEADER_LENGTH = 1024
 export const HEADER_DELIMITER = '$'
+
+const CHAR = { openBrace: 0x7b, closeBrace: 0x7d, quote: 0x22, backslash: 0x5c, delimiter: 0x24 } as const
+
+/**
+ * Index of the delimiter that ends the header, or -1 when there is no header to be found.
+ *
+ * Deliberately not indexOf('$'): the header is JSON, and a peer name containing a '$' puts one
+ * inside a quoted string where it is data rather than punctuation. Splitting on the first one cut
+ * the header mid-string, and the JSON.parse that followed threw - on the MQTT path, into an
+ * unhandled rejection. Reading with JSON's own quoting rules makes the split unambiguous, so a name
+ * can never reshape the frame it travels in.
+ *
+ * Scans code units rather than decoded text because every character it looks for is ASCII, and
+ * UTF-8 never produces those bytes inside a multi-byte sequence. A payload cut mid-character
+ * therefore cannot confuse it, which the previous decode-the-first-256-bytes approach could.
+ */
+const findHeaderEnd = (at: (index: number) => number, length: number) => {
+    if (length === 0 || at(0) !== CHAR.openBrace) return -1
+    const limit = Math.min(length, MAX_HEADER_LENGTH)
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let index = 0; index < limit; index++) {
+        const code = at(index)
+        if (inString) {
+            if (escaped) escaped = false
+            else if (code === CHAR.backslash) escaped = true
+            else if (code === CHAR.quote) inString = false
+            continue
+        }
+        if (code === CHAR.quote) inString = true
+        else if (code === CHAR.openBrace) depth++
+        else if (code === CHAR.closeBrace && --depth === 0) {
+            // The delimiter has to be the very next byte, or this is not a framed message.
+            const delimiter = index + 1
+            return delimiter < limit && at(delimiter) === CHAR.delimiter ? delimiter : -1
+        }
+    }
+    return -1
+}
 
 /**
  * Lifecycle events emitted by transports. Transports are EventEmitters, so anything above them
@@ -151,51 +200,56 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
         return this.frameMessage(this.buildHeader(source, target), message)
     }
 
+    /**
+     * Throws when the header will not fit the frame, rather than emitting one no receiver can read.
+     * The sender is the only party that can do anything about an over-long peer name, and it learns
+     * nothing from a frame that leaves correctly and is discarded at the far end.
+     */
     frameMessage(header: MessageHeader, message: string | Uint8Array): string | Uint8Array {
-        let result: string | Uint8Array
-        if (typeof message === 'string') {
-            result = JSON.stringify(header) + HEADER_DELIMITER + message
-        } else {
-            const headerBuffer = stringToUint8Array(JSON.stringify(header) + HEADER_DELIMITER)
-            result = new Uint8Array(headerBuffer.length + message.length)
-            result.set(headerBuffer, 0)
-            result.set(message, headerBuffer.length)
-        }
+        const headerText = JSON.stringify(header) + HEADER_DELIMITER
+        const headerBuffer = stringToUint8Array(headerText)
+        if (headerBuffer.length > MAX_HEADER_LENGTH)
+            throw new Error(
+                `message header is ${headerBuffer.length} bytes, over the ${MAX_HEADER_LENGTH} byte limit ` +
+                    `(source '${header.source}', target '${header.target}') - shorten the peer names`
+            )
+        if (typeof message === 'string') return headerText + message
+        const result = new Uint8Array(headerBuffer.length + message.length)
+        result.set(headerBuffer, 0)
+        result.set(message, headerBuffer.length)
         return result
     }
-    extractHeader(message: string | Uint8Array): [MessageHeader | undefined, string | Uint8Array] {
-        let result: [MessageHeader | undefined, string | Uint8Array] = [undefined, '']
-        if (typeof message === 'string') {
-            let header: MessageHeader
-            let nullPos = message.indexOf(HEADER_DELIMITER)
-            if (nullPos > 0) {
-                const headerText = message.substring(0, nullPos)
-                if (headerText && headerText[0] === '{') {
-                    header = JSON.parse(headerText)
-                    if (header.target) {
-                        const payload = message.slice(nullPos + HEADER_DELIMITER.length)
-                        result = [header, payload]
-                    } else nullPos = 0
-                }
-            } else nullPos = 0
-        } else {
-            const sMessage = uint8ArrayToString(message.subarray(0, Math.min(MAX_HEADER_LENGTH, message.length)))
-            let header: MessageHeader
-            let nullPos = sMessage.indexOf(HEADER_DELIMITER)
-            if (nullPos > 0) {
-                const headerText = sMessage.substring(0, nullPos)
-                if (headerText && headerText[0] === '{') {
-                    header = JSON.parse(headerText) as MessageHeader
-                    if (header.target) {
-                        const payload = new Uint8Array(message.length - nullPos - HEADER_DELIMITER.length)
-                        payload.set(message.subarray(nullPos + HEADER_DELIMITER.length))
-                        result = [header, payload]
-                    } else nullPos = 0
-                }
-            } else nullPos = 0
+
+    /**
+     * Split a frame into its header and payload. Never throws: every frame here came off the
+     * network, and one malformed frame from one peer must not take down a process serving the rest.
+     * The third element says why nothing was extracted, so a dropped frame can be diagnosed instead
+     * of merely disappearing.
+     */
+    extractHeader(message: string | Uint8Array): [MessageHeader | undefined, string | Uint8Array, string?] {
+        const isText = typeof message === 'string'
+        const end = isText
+            ? findHeaderEnd((index) => message.charCodeAt(index), message.length)
+            : findHeaderEnd((index) => message[index], message.length)
+        if (end < 0) return [undefined, '', 'no msgrpc header']
+
+        const headerText = isText ? message.substring(0, end) : uint8ArrayToString(message.subarray(0, end))
+        let header: MessageHeader
+        try {
+            header = JSON.parse(headerText) as MessageHeader
+        } catch (e) {
+            return [undefined, '', `unparsable header: ${String(e)}`]
         }
-        if (result[0]) this.setKnownSource(result[0].source)
-        return result
+        if (!header || typeof header !== 'object') return [undefined, '', 'header is not an object']
+        if (typeof header.target !== 'string' || !header.target) return [undefined, '', 'header names no target']
+        if (typeof header.source !== 'string' || !header.source) return [undefined, '', 'header names no source']
+
+        const start = end + HEADER_DELIMITER.length
+        // Copied rather than viewed: the MQTT path hands us a view over a pooled Node Buffer, which
+        // is reused for the next packet the moment this one returns.
+        const payload: string | Uint8Array = isText ? message.substring(start) : message.slice(start)
+        this.setKnownSource(header.source)
+        return [header, payload]
     }
 
     getName(): string {

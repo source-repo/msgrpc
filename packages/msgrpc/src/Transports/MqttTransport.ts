@@ -196,7 +196,20 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         // instant it connects, and a frame arriving before the RPC handler is piped in would find
         // no target and be dropped. A fresh session never exposes this, because nothing arrives
         // that early.
-        queueMicrotask(() => void this.open())
+        queueMicrotask(() => void this.open().catch((e) => this.emit(TransportEvent.transportError, e)))
+    }
+
+    /**
+     * The broker connection, or an error saying there is none.
+     *
+     * Publishing used to go through `this.client?.publishAsync(...)`, which resolves to undefined
+     * when the transport is closed or has not opened yet - so an outgoing call was dropped on the
+     * floor and its caller learned nothing until the call timed out. A frame that cannot be sent is
+     * a failure worth reporting at once.
+     */
+    private requireClient() {
+        if (!this.client) throw new Error(`MqttTransport '${this.name}': no connection to ${this.url}`)
+        return this.client
     }
 
     rpcTopic(peer: string) {
@@ -233,10 +246,18 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 ? { topic: this.presenceTopic(this.name), payload: Buffer.from(PRESENCE_OFFLINE), qos: this.qos, retain: true }
                 : this.mqttOptions.will
         })
-        this.client.on('message', (topic, messageBuffer, packet) => void this.onBrokerMessage(topic, messageBuffer, packet))
+        // Both listeners catch: an async listener's rejection is unhandled by construction, and
+        // Node's default is to end the process on one. A single malformed frame from one peer -
+        // or a stray JSON payload published to the rpc topic by any tool that can reach the broker
+        // - would otherwise take down a server answering everybody else.
+        this.client.on('message', (topic, messageBuffer, packet) =>
+            void this.onBrokerMessage(topic, messageBuffer, packet).catch((e) =>
+                this.emit(TransportEvent.rejected, { source: 'unknown', reason: `failed to handle message on '${topic}': ${String(e)}`, error: e })
+            )
+        )
         // mqtt.js reconnects on its own and re-emits 'connect', so subscriptions are renewed on
         // every transition.
-        this.client.on('connect', () => void this.onConnect())
+        this.client.on('connect', () => void this.onConnect().catch((e) => this.emit(TransportEvent.transportError, e)))
         this.client.on('close', () => {
             const wasConnected = this.connected
             this.connected = false
@@ -300,8 +321,13 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         }
         if (this.protocol === 5) return await this.receiveV5(topic, messageBuffer, packet)
         const frame = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
-        const [header, payload] = this.extractHeader(frame)
-        if (!header) return
+        const [header, payload, reason] = this.extractHeader(frame)
+        if (!header) {
+            // Reported rather than dropped in silence. Anything at all can be published to an rpc
+            // topic, and "the calls just time out" is the hardest kind of problem to diagnose.
+            this.emit(TransportEvent.rejected, { source: 'unknown', reason: reason ?? 'no msgrpc header' })
+            return
+        }
         if (!isSafeTopicSegment(header.source)) {
             // Replies are addressed by source, so an unsafe one cannot be answered anyway.
             this.emit(TransportEvent.rejected, { source: header.source, reason: 'unsafe peer name' })
@@ -560,7 +586,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         const payload = typeof framed === 'string' ? framed : Buffer.from(framed.buffer, framed.byteOffset, framed.byteLength)
         // Awaited, so at QoS > 0 a publish that never reaches the broker surfaces as a failed call
         // rather than a silent drop followed by a timeout.
-        await this.client?.publishAsync(this.rpcTopic(target), payload, { qos: this.qos })
+        await this.requireClient().publishAsync(this.rpcTopic(target), payload, { qos: this.qos })
     }
 
     /** Maps an RPC message onto the MQTT 5 packet layout. See docs/mqtt5-frame-spec.md. */
@@ -606,7 +632,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             userProperties[MR.signature] = await this.sign(canonical, { source })
         }
 
-        await this.client?.publishAsync(topic, Buffer.from(body), {
+        await this.requireClient().publishAsync(topic, Buffer.from(body), {
             qos: this.qos,
             properties: {
                 contentType: codec.contentType,

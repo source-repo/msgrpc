@@ -77,75 +77,23 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         }
         this.io.on('connection', (socket) => {
             this.emit('connection', socket)
-            socket.on(PRESENCE_EVENT, (announcement: PresenceAnnouncement) => this.onAnnouncement(socket, announcement))
-            socket.on('message', async (messageArray) => {
-                let header, payload
+            socket.on(PRESENCE_EVENT, (announcement: PresenceAnnouncement) => {
+                // Guarded because socket.io emits this synchronously from its parser: a listener
+                // that throws unwinds into the engine rather than into anything that can report it.
                 try {
-                    ;[header, payload] = this.extractHeader(new Uint8Array(messageArray))
+                    this.onAnnouncement(socket, announcement)
                 } catch (e) {
-                    // A malformed frame from one peer must not take the whole server down.
-                    this.emit(TransportEvent.rejected, { source: 'unknown', reason: `unparsable header: ${String(e)}` })
-                    return
+                    this.emit(TransportEvent.rejected, { source: 'unknown', reason: `bad presence announcement: ${String(e)}`, error: e })
                 }
-                if (!header) return
-                const identity = socket.data.identity as RpcIdentity | undefined
-                if (this.authenticate) {
-                    // The source field is written by the sender. Pinning it to the identity this
-                    // connection authenticated as is what stops one peer addressing messages as
-                    // another and inheriting its rights.
-                    if (!identity || header.source !== identity.name) {
-                        this.emit(TransportEvent.rejected, { source: header.source, reason: 'source does not match authenticated identity' })
-                        return
-                    }
-                    this.peerIdentities.set(header.source, identity)
-                }
-                // Learned before the routing check, so a peer stays addressable even when a
-                // particular frame turns out to be undeliverable.
-                this.learnPeer(header.source, socket)
-                let message: Message
-                try {
-                    message = this.codec.decode(payload as Uint8Array) as Message
-                } catch (e) {
-                    this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
-                    return
-                }
-                // Whether this frame is for us at all. A server used to run whatever reached it,
-                // testing the target only for being a name it had heard of - so a call addressed to
-                // another peer was executed here, the addressee never saw it, and the caller was
-                // answered by the wrong peer.
-                const elsewhere = header.target !== this.name ? this.peerCarrying(header.target) : undefined
-                if (elsewhere) {
-                    if (!this.mayRelay(header.source, header.target, identity)) {
-                        // Deliberately not falling through to local handling: running a call meant
-                        // for a peer this caller is not allowed to reach would answer it with the
-                        // wrong implementation and call that a success.
-                        this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
-                        return
-                    }
-                    // Forwarding within this transport is done here rather than through receive(),
-                    // so the hop count survives it. A frame that has been round too many relays is
-                    // dropped: tables settle after a link fails, but a frame circling in the
-                    // meantime never stops on its own.
-                    if (elsewhere === (this as IGenericModule)) {
-                        const hops = (header.hops ?? 0) + 1
-                        if (hops > MAX_RELAY_HOPS) {
-                            this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: `over ${MAX_RELAY_HOPS} relays` })
-                            return
-                        }
-                        this.forward(message, header.source, header.target, hops)
-                        return
-                    }
-                    await elsewhere.receive(message, header.source, header.target)
-                    return
-                }
-                if (this.targetExists(header.target)) {
-                    await this.send(message, header.source, header.target)
-                    return
-                }
-                // Neither this server nor anywhere it can forward to. Reported rather than dropped
-                // in silence, which the caller only ever saw as an unexplained timeout.
-                this.emit(TransportEvent.unroutable, { source: header.source, target: header.target })
             })
+            // The whole body is guarded, not just the parse: this is an async listener, so anything
+            // that escapes it is an unhandled rejection, and Node's default is to end the process.
+            // One peer sending one bad frame must not take down a server answering everybody else.
+            socket.on('message', (messageArray) =>
+                void this.onSocketMessage(socket, messageArray).catch((e) =>
+                    this.emit(TransportEvent.rejected, { source: 'unknown', reason: `failed to handle frame: ${String(e)}`, error: e })
+                )
+            )
             socket.on('disconnect', (reason, details) => {
                 this.carriedBy.delete(socket)
                 for (const peer of [...this.peerSockets.keys()]) {
@@ -154,16 +102,10 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                     // lets the RPC layer drop the event subscriptions held for a peer that is gone.
                     this.forgetPeer(peer, socket)
                 }
-                if (details) {
-                    // the low-level reason of the disconnection, for example "xhr post error"
-                    console.log(details.message)
-
-                    // some additional description, for example the status code of the HTTP response
-                    console.log(details.description)
-
-                    // some additional context, for example the XMLHttpRequest object
-                    console.log(details.context)
-                }
+                // Emitted rather than printed. These used to go to console.log, which put three
+                // lines of socket.io internals on the output of every disconnect and gave anything
+                // above this transport no way to see them at all.
+                this.emit(TransportEvent.disconnected, reason, details)
             })
         })
         if (this.server && this.ourServer && !(this.server instanceof SocketIo.Server)) {
@@ -178,6 +120,71 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 console.log(`Socket.io server listening on port ${port}`)
             })
         } else this.readyFlag = true
+    }
+
+    private async onSocketMessage(socket: SocketIo.Socket, messageArray: ArrayBufferLike) {
+        const [header, payload, reason] = this.extractHeader(new Uint8Array(messageArray))
+        if (!header) {
+            // Reported rather than dropped in silence, which the sender only ever saw as a timeout.
+            this.emit(TransportEvent.rejected, { source: 'unknown', reason: reason ?? 'no msgrpc header' })
+            return
+        }
+        const identity = socket.data.identity as RpcIdentity | undefined
+        if (this.authenticate) {
+            // The source field is written by the sender. Pinning it to the identity this
+            // connection authenticated as is what stops one peer addressing messages as
+            // another and inheriting its rights.
+            if (!identity || header.source !== identity.name) {
+                this.emit(TransportEvent.rejected, { source: header.source, reason: 'source does not match authenticated identity' })
+                return
+            }
+            this.peerIdentities.set(header.source, identity)
+        }
+        // Learned before the routing check, so a peer stays addressable even when a particular
+        // frame turns out to be undeliverable.
+        this.learnPeer(header.source, socket)
+        let message: Message
+        try {
+            message = this.codec.decode(payload as Uint8Array) as Message
+        } catch (e) {
+            this.emit(TransportEvent.rejected, { source: header.source, reason: `undecodable frame: ${String(e)}` })
+            return
+        }
+        // Whether this frame is for us at all. A server used to run whatever reached it, testing
+        // the target only for being a name it had heard of - so a call addressed to another peer
+        // was executed here, the addressee never saw it, and the caller was answered by the wrong
+        // peer.
+        const elsewhere = header.target !== this.name ? this.peerCarrying(header.target) : undefined
+        if (elsewhere) {
+            if (!this.mayRelay(header.source, header.target, identity)) {
+                // Deliberately not falling through to local handling: running a call meant for a
+                // peer this caller is not allowed to reach would answer it with the wrong
+                // implementation and call that a success.
+                this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
+                return
+            }
+            // Forwarding within this transport is done here rather than through receive(), so the
+            // hop count survives it. A frame that has been round too many relays is dropped: tables
+            // settle after a link fails, but a frame circling in the meantime never stops on its own.
+            if (elsewhere === (this as IGenericModule)) {
+                const hops = (header.hops ?? 0) + 1
+                if (hops > MAX_RELAY_HOPS) {
+                    this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: `over ${MAX_RELAY_HOPS} relays` })
+                    return
+                }
+                this.forward(message, header.source, header.target, hops)
+                return
+            }
+            await elsewhere.receive(message, header.source, header.target)
+            return
+        }
+        if (this.targetExists(header.target)) {
+            await this.send(message, header.source, header.target)
+            return
+        }
+        // Neither this server nor anywhere it can forward to. Reported rather than dropped in
+        // silence, which the caller only ever saw as an unexplained timeout.
+        this.emit(TransportEvent.unroutable, { source: header.source, target: header.target })
     }
 
     /**
@@ -359,7 +366,13 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             this.emit(TransportEvent.unroutable, { source, target })
             return
         }
-        socket.emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
+        try {
+            socket.emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
+        } catch (e) {
+            // Relaying is done on someone else's behalf, so there is no caller here to reject.
+            // Reported instead, or an unframeable relay would be indistinguishable from a lost one.
+            this.emit(TransportEvent.unroutable, { source, target, reason: `cannot forward: ${String(e)}`, error: e })
+        }
     }
 
     override async receive(message: Message, source: string, target: string) {

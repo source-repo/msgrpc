@@ -33,7 +33,7 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         // instant it connects, and a frame arriving before the RPC handler is piped in would find
         // no target and be dropped. A fresh session never exposes this, because nothing arrives
         // that early.
-        queueMicrotask(() => void this.open())
+        queueMicrotask(() => void this.open().catch((e) => this.emit(TransportEvent.transportError, e)))
     }
 
     override async close() {
@@ -58,7 +58,10 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         // Idempotent: the constructor opens, and RpcClient.init() opens again. Without this guard
         // every client ends up with a second, orphaned socket that stays connected forever.
         if (this.socket) return
-        super.open()
+        // Deliberately not awaited. The base hook is a no-op, and awaiting it yields before the
+        // socket below is assigned - which lets a second open() past the guard above and leaves the
+        // first socket orphaned and reconnecting forever, exactly what the guard is here to prevent.
+        void super.open()
         const urlSocketIo = this.url
         this.options = {
             rejectUnauthorized: false,
@@ -67,16 +70,28 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         this.socket = urlSocketIo ? io(urlSocketIo, this.options) : io(this.options)
         this.socket.on('message', async (messageArray) => {
             try {
-                const [header, payload] = this.extractHeader(new Uint8Array(messageArray))
-                if (!header) return
+                const [header, payload, reason] = this.extractHeader(new Uint8Array(messageArray))
+                if (!header) {
+                    // Reported rather than dropped in silence, which showed up only as a timeout.
+                    this.emit(TransportEvent.rejected, { source: 'unknown', reason: reason ?? 'no msgrpc header' })
+                    return
+                }
                 const message = this.codec.decode(payload as Uint8Array) as Message
                 await this.deliver(message, header.source, header.target, header.hops ?? 0)
             } catch (e) {
                 // A peer that sends a frame this codec cannot read must not take the client down.
-                this.emit(TransportEvent.rejected, { source: 'unknown', reason: `undecodable frame: ${String(e)}` })
+                this.emit(TransportEvent.rejected, { source: 'unknown', reason: `undecodable frame: ${String(e)}`, error: e })
             }
         })
-        this.socket.on(PRESENCE_EVENT, (update: PresenceUpdate) => this.onPresence(update))
+        this.socket.on(PRESENCE_EVENT, (update: PresenceUpdate) => {
+            // socket.io emits synchronously from its parser, so a listener that throws unwinds into
+            // the engine rather than anywhere that could report it.
+            try {
+                this.onPresence(update)
+            } catch (e) {
+                this.emit(TransportEvent.rejected, { source: 'unknown', reason: `bad presence update: ${String(e)}`, error: e })
+            }
+        })
         // socket.io emits 'connect' on reconnects too, so this fires on every transition.
         this.socket.on('connect', () => {
             this.connected = true
@@ -178,14 +193,31 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
 
     /** Send over this link with a hop count, for a frame being passed along rather than originated. */
     forward(message: Message, source: string, target: string, hops: number) {
-        this.socket?.emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
+        try {
+            this.requireSocket().emit('message', this.frameMessage(this.buildHeader(source, target, { hops }), this.codec.encode(message)))
+        } catch (e) {
+            // Relaying is done for someone else, so there is no caller here to reject.
+            this.emit(TransportEvent.unroutable, { source, target, reason: `cannot forward: ${String(e)}`, error: e })
+        }
+    }
+
+    /**
+     * The link, or an error saying there is none.
+     *
+     * Sending went through `this.socket?.emit(...)`, which is a no-op once the transport is closed -
+     * so an outgoing call was discarded without a word and its caller waited out the full timeout
+     * for a frame that was never going to be sent.
+     */
+    private requireSocket() {
+        if (!this.socket) throw new Error(`SocketIoClientTransport '${this.name}': not connected to ${this.url ?? 'the default url'}`)
+        return this.socket
     }
 
     override async receive(message: Message, source: string, target: string) {
         // No blind sleep while disconnected: socket.io already buffers outgoing frames and flushes
         // them on reconnect, so sleeping only delayed every send during a blip without helping.
         // If the link never comes back the call fails on its own timeout.
-        this.socket?.emit('message', this.frameMessage(this.buildHeader(source, target), this.codec.encode(message)))
+        this.requireSocket().emit('message', this.frameMessage(this.buildHeader(source, target), this.codec.encode(message)))
     }
 
     override isTransport() {
