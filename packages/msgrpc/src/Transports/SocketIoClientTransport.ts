@@ -49,7 +49,26 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         socket.io.reconnection(false)
         // Only disconnect() - close() is an alias for it, and calling both corrupted the manager's
         // socket bookkeeping.
+        //
+        // Awaited, because disconnect() only *starts* the close: it sends a close packet and
+        // returns, leaving the engine's ping timer armed until the transport is actually torn down.
+        // Returning before that makes close() a promise that resolves while the connection it was
+        // supposed to close is still running.
+        const engine = socket.io.engine
+        const closed =
+            socket.connected && engine
+                ? new Promise<void>((resolve) => {
+                      // Bounded: a close that never completes must not hang the caller forever.
+                      const settle = setTimeout(resolve, 2000)
+                      settle.unref?.()
+                      engine.once('close', () => {
+                          clearTimeout(settle)
+                          resolve()
+                      })
+                  })
+                : Promise.resolve()
         socket.disconnect()
+        await closed
         socket.removeAllListeners()
         this.knownPeers.clear()
     }
