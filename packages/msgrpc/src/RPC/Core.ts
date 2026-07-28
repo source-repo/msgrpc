@@ -13,12 +13,14 @@ export const HEADER_DELIMITER = '$'
  *
  * connected/disconnected are emitted by client-side transports on every transition, including
  * reconnects. peerGone is emitted by server-side transports when an identified peer's connection
- * drops. rejected is emitted when an inbound frame fails an authentication check. unroutable is
- * emitted when a frame cannot be delivered to its target.
+ * drops, and peerOnline when one announces itself, which is how a peer is discovered at all.
+ * rejected is emitted when an inbound frame fails an authentication check. unroutable is emitted
+ * when a frame cannot be delivered to its target.
  */
 export const TransportEvent = {
     connected: 'connected',
     disconnected: 'disconnected',
+    peerOnline: 'peerOnline',
     peerGone: 'peerGone',
     rejected: 'rejected',
     unroutable: 'unroutable',

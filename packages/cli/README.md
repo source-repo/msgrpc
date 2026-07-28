@@ -65,3 +65,28 @@ argument or field is safe, adding a required one is not.
 
 `extract --keep-history` moves the previous contract into `history` when the version changes, which
 is what lets both this check and the server recognise an older caller.
+
+## Browsing a live network
+
+```
+msgrpc console --broker mqtt://localhost:1883
+```
+
+Opens a console at `http://127.0.0.1:7300` listing every peer that is up, what each one exposes,
+a form to call it, and a live stream of its events.
+
+**Discovery costs nothing.** Every peer publishes retained presence, so subscribing to
+`<prefix>/presence/+` hands over everyone already online the moment the console connects. There is
+no scan, no probe and no configured list of hosts.
+
+A peer only appears in detail if it was started with `exposeIntrospection`; otherwise the console
+says so rather than guessing.
+
+The page is served from the CLI with no CDN, no bundler and no framework — one HTTP handler, an
+inlined page, and server-sent events for the live half. A plant network usually has no route to the
+internet, and a tool for looking at one should be something you can read in a sitting.
+
+**It binds to `127.0.0.1` by default.** The console can invoke any method its own credentials allow,
+so exposing it has to be a deliberate act: `--host 0.0.0.0` works and prints a warning saying what
+you have just done. It connects as an ordinary peer, so `--broker` credentials and signing apply to
+it like anything else.

@@ -226,6 +226,29 @@ The same comparison is what a future extraction tool wants at build time: regene
 compare it against the stored history, and refuse a breaking change before it ships rather than
 discovering it when an old peer calls.
 
+# Describing a server
+
+A server can report what it exposes, so a peer or a person can find out without reading the source.
+
+```typescript
+const server = new RpcServer({ transports: [{ brokerurl }], exposeIntrospection: true })
+
+const described = await (await client.proxy<Introspection>('msgrpc')).remote.describe()
+```
+
+It reports each namespace with its class, its contract version, whether the instance was created at
+runtime, its methods with types when a schema describes them, and its events with how many peers are
+currently subscribed.
+
+**Off by default, and subject to `authorize` like any other call.** Listing every class, method and
+live instance is reconnaissance, and instance names on a plant network tend to encode plant
+structure.
+
+This is msgrpc's own shape rather than a borrowed one. OpenAPI is HTTP-shaped and cannot describe a
+server pushing events; AsyncAPI models everything as a channel, which fights an RPC surface. Either
+would mean describing this system in someone else's concepts to satisfy a viewer we would still want
+to replace.
+
 # Errors
 
 A call rejects with an `RpcError` carrying a `code`, the remote `message`, and the remote stack in

@@ -2,6 +2,7 @@ import { Server } from 'http'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
+import { Introspection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { MqttTransport, MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoServerTransport } from './Transports/SocketIoServerTransport.js'
@@ -66,6 +67,12 @@ export interface RpcServerOptions {
     requireExplicitExposure?: boolean
     /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
     unknownVersion?: 'allow' | 'reject'
+    /**
+     * Publish msgrpc.describe(), which reports the exposed namespaces, their methods and events,
+     * and which instances are live. Off by default: listing all of that is reconnaissance, and it
+     * is subject to authorize() like any other call.
+     */
+    exposeIntrospection?: boolean
 }
 
 export class RpcServer implements IManageRpc {
@@ -154,6 +161,7 @@ export class RpcServer implements IManageRpc {
         this.rpc.unknownVersion = this.options.unknownVersion ?? 'allow'
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
+        if (this.options.exposeIntrospection) this.rpc.manageRpc.exposeClassInstance(new Introspection(this.rpc))
         this.readyFlag = true
         this.init()
     }

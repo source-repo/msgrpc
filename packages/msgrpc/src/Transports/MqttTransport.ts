@@ -278,9 +278,15 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (this.presence && topic.startsWith(this.presenceRoot)) {
             const peer = topic.slice(this.presenceRoot.length)
             // Retained presence means a late subscriber also learns about peers that already left.
-            if (peer && peer !== this.name && messageBuffer.toString() === PRESENCE_OFFLINE) {
+            if (!peer || peer === this.name) return
+            const state = messageBuffer.toString()
+            if (state === PRESENCE_OFFLINE) {
                 this.peerIdentities.delete(peer)
                 this.emit(TransportEvent.peerGone, peer)
+            } else if (state === PRESENCE_ONLINE) {
+                // Retained, so a subscriber learns about every peer already online the moment it
+                // subscribes. That is the whole of peer discovery.
+                this.emit(TransportEvent.peerOnline, peer)
             }
             return
         }

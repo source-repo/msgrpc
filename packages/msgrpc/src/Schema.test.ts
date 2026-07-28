@@ -351,3 +351,103 @@ test('an older caller whose contract still holds keeps working', async (t) => {
     await older.close()
     await server.close()
 })
+
+// ------------------------------------------------------------------ introspection
+
+import type { ServerDescription } from './RPC/Introspection.js'
+import { rpcNamespace } from './RPC/Expose.js'
+import { EventEmitter } from 'events'
+
+@rpcNamespace('boiler', { version: '4' })
+class Boiler extends EventEmitter {
+    @rpc
+    async setTemperature(celsius: number) {
+        return celsius
+    }
+    @rpc
+    async status() {
+        return 'ok'
+    }
+    private secret() {
+        return 'hidden'
+    }
+}
+
+test('introspection is off unless asked for', async (t) => {
+    const server = new RpcServer({ transports: [{ port: 3970 }] })
+    await server.ready()
+    server.exposeClassInstance(new Boiler())
+    const client = new RpcClient('http://localhost:3970')
+    await client.ready()
+
+    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote!.describe(), {
+        instanceOf: RpcError
+    })
+    t.is(error?.code, 'ClassNotFound')
+
+    await client.close()
+    await server.close()
+})
+
+test('describe reports namespaces, methods, events and live instances', async (t) => {
+    const boilerSchema: RpcSchema = {
+        schema: 1,
+        version: '7',
+        namespaces: {
+            boiler: {
+                version: '4',
+                methods: { setTemperature: { params: [{ kind: 'number', max: 120 }], returns: num }, status: { params: [], returns: str } },
+                events: { overheat: { params: [num] } }
+            }
+        }
+    }
+    const server = new RpcServer({ transports: [{ port: 3971 }], schema: boilerSchema, exposeIntrospection: true })
+    await server.ready()
+    const boiler = new Boiler()
+    // Exposed without a name: the class declares its namespace.
+    server.exposeClassInstance(boiler)
+    const client = new RpcClient('http://localhost:3971')
+    await client.ready()
+
+    // A live subscription should show up in the description.
+    const proxy = await client.proxy<Boiler>('boiler')
+    await proxy.remote!.on('overheat', () => {})
+
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote!.describe()
+
+    t.is(described.version, '7')
+    t.true(described.validating)
+    const boilerNs = described.namespaces.find((namespace) => namespace.name === 'boiler')
+    t.truthy(boilerNs)
+    t.is(boilerNs!.version, '4')
+    t.is(boilerNs!.className, 'Boiler')
+    t.false(boilerNs!.created)
+    t.true(boilerNs!.emitter)
+    // Only marked methods, and the schema supplies their types.
+    t.deepEqual(boilerNs!.methods.map((method) => method.name).sort(), ['setTemperature', 'status'])
+    t.deepEqual(boilerNs!.methods.find((method) => method.name === 'setTemperature')!.params, [{ kind: 'number', max: 120 }])
+    t.deepEqual(boilerNs!.events, [{ name: 'overheat', params: [{ kind: 'number' }], subscribers: 1 }])
+
+    await client.close()
+    await server.close()
+})
+
+test('describe is subject to authorize like any other call', async (t) => {
+    const server = new RpcServer({
+        transports: [{ port: 3972 }],
+        exposeIntrospection: true,
+        authorize: ({ instanceName }) => instanceName !== 'msgrpc'
+    })
+    await server.ready()
+    server.exposeClassInstance(new Boiler())
+    const client = new RpcClient('http://localhost:3972')
+    await client.ready()
+
+    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote!.describe(), {
+        instanceOf: RpcError
+    })
+    t.is(error?.code, 'Forbidden')
+
+    await client.close()
+    await server.close()
+})
