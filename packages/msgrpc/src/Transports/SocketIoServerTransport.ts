@@ -227,7 +227,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
 
     private permitted(source: string, target: string, identity?: RpcIdentity) {
         if (this.openRoutes.has(SocketIoServerTransport.pair(source, target))) return true
-        let allowed = false
+        let allowed: boolean
         try {
             allowed = (this.relay as (context: RelayContext) => boolean)({ source, target, identity })
         } catch {
