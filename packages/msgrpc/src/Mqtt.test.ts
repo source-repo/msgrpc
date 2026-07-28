@@ -270,3 +270,38 @@ test('one client watching two peers keeps their events apart', async (t) => {
     await first.close()
     await second.close()
 })
+
+test('two peers sharing a name on MQTT 3.1.1 are reported as a suspected collision', async (t) => {
+    if (skipWithoutBroker(t)) return
+    // 3.1.1 has no reason codes, so a session taken over is indistinguishable from the link
+    // dropping - except that it does not stop. Two peers share one client id, so each connection
+    // evicts the last and neither stays up. That loop is the signal, and it is reported as a
+    // suspicion rather than a fact, because a network flapping this hard would look the same.
+    const name = peer('twin3')
+    const options = { prefix: prefixFor('twin3'), protocol: 4 as const, sessionExpirySeconds: TEST_SESSION_EXPIRY }
+    const warnings: string[] = []
+    const realWarn = console.warn
+    console.warn = (message: string) => void warnings.push(String(message))
+
+    const one = new RpcServer({ name, transports: [new MqttTransport(name, BROKER_URL, options)] })
+    await one.ready()
+    const two = new RpcServer({ name, transports: [new MqttTransport(name, BROKER_URL, options)] })
+    await two.ready()
+
+    try {
+        // Each eviction is a 'close' on the loser, and mqtt.js reconnects into the next eviction.
+        const deadline = Date.now() + 15000
+        while (!warnings.some((warning) => warning.includes('without staying up')) && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 100))
+        t.true(
+            warnings.some((warning) => warning.includes('without staying up') && warning.includes(name)),
+            `expected a collision warning, got: ${warnings.join(' | ') || '(none)'}`
+        )
+    } finally {
+        console.warn = realWarn
+        await two.close()
+        await one.close()
+        const sweep = await connectAsync(BROKER_URL, { clientId: `msgrpc-${name}`, clean: true })
+        await sweep.endAsync()
+    }
+})

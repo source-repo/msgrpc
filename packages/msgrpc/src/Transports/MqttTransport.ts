@@ -24,6 +24,10 @@ const PRESENCE_ONLINE = 'online'
 const PRESENCE_OFFLINE = 'offline'
 /** MQTT 5 reason code 0x8E, sent to the peer whose session a new connection has just claimed. */
 const SESSION_TAKEN_OVER = 0x8e
+/** A connection that lasts this long was doing its job, whatever ended it afterwards. */
+const STABLE_CONNECTION_MS = 5000
+/** How many connections must die young in a row before it stops looking like bad luck. */
+const SUSPICIOUS_RECONNECTS = 3
 
 /**
  * Wildcards, control characters and (unless this is a multi-level prefix) the level separator.
@@ -264,7 +268,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             const wasConnected = this.connected
             this.connected = false
             this.readyFlag = false
-            if (wasConnected) this.emit(TransportEvent.disconnected, 'close')
+            if (wasConnected) {
+                this.noteConnectionLength()
+                this.emit(TransportEvent.disconnected, 'close')
+            }
         })
         // Without a listener here Node throws on the emitter's unhandled 'error', so a rejected
         // broker connection would take the process down. Not re-emitted as 'error' for the same
@@ -277,6 +284,38 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.client.on('disconnect', (packet) => {
             if (packet?.reasonCode === SESSION_TAKEN_OVER) this.warnAboutDisplacement()
         })
+    }
+
+    private connectedSince = 0
+    /** Consecutive connections that did not survive long enough to be doing anything useful. */
+    private shortConnections = 0
+
+    /**
+     * The 3.1.1 half of collision reporting, which has to be inferred rather than read.
+     *
+     * MQTT 5 says why it disconnected you; 3.1.1 has no reason codes, so a session taken over looks
+     * exactly like the link dropping. What it does not look like is a *stable* connection: two
+     * peers sharing a client id evict each other on sight, so both sit in a reconnect loop where no
+     * connection outlives the next one's arrival. A blip reconnects once and stays.
+     *
+     * Reported as a suspicion rather than a fact, because a network flapping this hard would look
+     * the same - and either way it is worth saying out loud.
+     */
+    private noteConnectionLength() {
+        const lifetime = Date.now() - this.connectedSince
+        this.shortConnections = lifetime < STABLE_CONNECTION_MS ? this.shortConnections + 1 : 0
+        if (this.shortConnections >= SUSPICIOUS_RECONNECTS) this.warnAboutFlapping()
+    }
+
+    private warnedAboutFlapping = false
+    private warnAboutFlapping() {
+        if (this.warnedAboutFlapping) return
+        this.warnedAboutFlapping = true
+        console.warn(
+            `msgrpc: '${this.name}' has lost its broker connection ${this.shortConnections} times in a row without staying up. ` +
+                'The usual cause is a second peer running under this name, since both use the same client id and evict each other. ' +
+                'MQTT 3.1.1 gives no reason for a disconnect, so this is a guess - MQTT 5 would say so outright.'
+        )
     }
 
     /** Said once: mqtt.js reconnects on its own, and two peers sharing a name take turns forever. */
@@ -293,6 +332,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
 
     private async onConnect() {
         this.connected = true
+        this.connectedSince = Date.now()
         try {
             if (this.protocol === 5) {
                 for (const channel of this.channels) {

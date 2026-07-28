@@ -5,6 +5,7 @@ import { createHmacSigner, createHmacVerifier, namespaceProblems, readableNameFo
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
+import { startMcp } from './mcp.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -21,6 +22,7 @@ const usage = `msgrpc <command> [options]
   check     compare the source against a written contract and fail on a breaking change
   console   browse a live network in a browser: peers, what they expose, calls and events
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
+  mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
 
   extract / check
     --project <tsconfig.json>   default ./tsconfig.json
@@ -38,6 +40,16 @@ const usage = `msgrpc <command> [options]
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how the console identifies itself, default console-<three words>
     --sign <keyfile>            HMAC keys, so the console can talk to a signed network
+
+  mcp
+    --broker <url>              an MQTT network
+    --hub <url>                 a socket.io network
+                                one of --broker and --hub is required; both watches both
+    --prefix <topic>            topic namespace, default the transport's own
+    --timeout <ms>              call timeout, default 10000
+    --name <peer>               how it identifies itself, default mcp-<three words>
+    --sign <keyfile>            HMAC keys, for a signed network
+                                stdio carries the protocol, so it is not for interactive use
 
   broker
     --port <n>                  default 8080, on every interface
@@ -155,6 +167,43 @@ const runBroker = async (argv: string[]) => {
     await new Promise(() => {})
 }
 
+const runMcp = async (argv: string[]) => {
+    const broker = argument(argv, '--broker', '')
+    const hub = argument(argv, '--hub', '')
+    if (!broker && !hub) {
+        process.stderr.write('msgrpc mcp: give it --broker, --hub, or both\n')
+        process.exit(1)
+    }
+    const prefix = argument(argv, '--prefix', '')
+    const keyFile = argument(argv, '--sign', '')
+    const signing = keyFile ? readSigningKeys(keyFile) : undefined
+    const requestedName = argument(argv, '--name', '')
+    if (signing?.keys.name && requestedName && signing.keys.name !== requestedName) {
+        process.stderr.write(`msgrpc mcp: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
+        process.exit(1)
+    }
+    const name = requestedName || signing?.keys.name || readableNameFor('mcp')
+
+    const running = await startMcp({
+        ...(broker ? { broker } : {}),
+        ...(hub ? { hub } : {}),
+        ...(prefix ? { prefix } : {}),
+        name,
+        callTimeout: Number(argument(argv, '--timeout', '10000')),
+        ...(signing ? { sign: signing.sign, ...(signing.verify ? { verify: signing.verify } : {}) } : {})
+    })
+    // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
+    const stop = () =>
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch(() => process.exit(1))
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+    // The client closing the pipe is the ordinary way this ends.
+    process.stdin.on('end', stop)
+}
+
 const runConsole = async (argv: string[]) => {
     const broker = argument(argv, '--broker', '')
     const hub = argument(argv, '--hub', '')
@@ -223,6 +272,10 @@ const main = () => {
     }
     if (command === 'console') {
         void runConsole(argv).catch(fail)
+        return
+    }
+    if (command === 'mcp') {
+        void runMcp(argv).catch(fail)
         return
     }
     if (command !== 'extract' && command !== 'check') {

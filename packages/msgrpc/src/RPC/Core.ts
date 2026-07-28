@@ -184,8 +184,21 @@ export class GenericModule<I = unknown, IP = unknown, O = unknown, OP = unknown>
             })
         }
     }
-    async ready() {
-        while (!this.readyFlag) await new Promise((res) => setTimeout(res, 10))
+    /**
+     * Waits for this module to come up, and gives up rather than waiting forever.
+     *
+     * The loop used to have no way out: a module that never became ready - one that failed to
+     * start, or was closed while something still awaited it - spun on a 10 ms timer for the life of
+     * the process, which is also long enough to keep the process alive with nothing left to do.
+     * Returning false says what happened; the overrides in RpcClient and RpcServer throw with the
+     * startup error instead, which is more than a bare module knows.
+     */
+    async ready(timeout = 30000) {
+        const deadline = Date.now() + timeout
+        while (!this.readyFlag) {
+            if (Date.now() > deadline) return false
+            await new Promise((res) => setTimeout(res, 10))
+        }
         return true
     }
     async open() {}

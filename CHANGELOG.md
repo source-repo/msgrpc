@@ -1,5 +1,29 @@
 # Changelog
 
+## msgrpc 2.3.0 and msgrpc-cli 2.4.0
+
+- **`msgrpc mcp`** serves a live network to an [MCP](https://modelcontextprotocol.io) client over
+  stdio, so a model can look at a plant the way a person looks at the console. Three tools -
+  `list_peers`, `describe_peer`, `call_method` - rather than one tool per method on the network: a
+  peer set that changes mid-conversation would mean re-issuing the tool list on every arrival and
+  departure, and `describe_peer` hands over the argument types instead. A call a peer refuses comes
+  back as tool content carrying the reason, not as a JSON-RPC failure, because a model can act on
+  the first and not the second. No MCP SDK behind it - MCP is JSON-RPC 2.0 over newline-delimited
+  stdio, and this package is about not needing a second RPC framework.
+- **A name collision is reported on MQTT 3.1.1 too**, where it has to be inferred rather than read:
+  3.1.1 has no reason codes, so a session taken over looks exactly like the link dropping - except
+  that it does not stop, because two peers sharing a client id evict each other on sight and neither
+  connection outlives the next one's arrival. Three connections in a row that die young are reported
+  as a suspected collision, and said to be a guess, since a network flapping this hard looks the
+  same. MQTT 5 still says so outright with reason code `0x8E`.
+
+### Fixed
+
+- `GenericModule.ready()` polled with no way out, so a module that never became ready - one that
+  failed to start, or was closed while something still awaited it - spun on a 10 ms timer for the
+  life of the process, which is also enough to keep the process alive with nothing left to do. It
+  now gives up and returns false.
+
 ## msgrpc 2.2.0 and msgrpc-cli 2.3.0
 
 **Discovery and routing over socket.io**, so a network with no broker works the way an MQTT one

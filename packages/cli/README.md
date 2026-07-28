@@ -16,6 +16,7 @@ msgrpc extract   write the contract described by the source to a file
 msgrpc check     compare the source against a written contract, exit 1 on a breaking change
 msgrpc console   browse a live network: peers, what they expose, calls and events
 msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share
+msgrpc mcp       serve the network to an MCP client over stdio
 ```
 
 | flag | commands | default | meaning |
@@ -24,14 +25,15 @@ msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share
 | `--out <file>` | extract | `msgrpc.types.json` | where to write the contract |
 | `--against <file>` | check | `msgrpc.types.json` | the contract to compare against |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
-| `--broker <url>` | console | — | an MQTT network, e.g. `mqtt://localhost:1883` |
-| `--hub <url>` | console | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
-| `--prefix <topic>` | console | the transport's own | must match the network you are watching |
+| `--broker <url>` | console, mcp | — | an MQTT network, e.g. `mqtt://localhost:1883` |
+| `--hub <url>` | console, mcp | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
+| `--prefix <topic>` | console, mcp | the transport's own | must match the network you are watching |
 | `--port <n>` | console | `7300` | |
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
-| `--timeout <ms>` | console | `10000` | call timeout |
+| `--timeout <ms>` | console, mcp | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
-| `--sign <keyfile>` | console | — | HMAC keys, so the console can talk to a signed network |
+| `--sign <keyfile>` | console, mcp | — | HMAC keys, so it can talk to a signed network |
+| `--name <peer>` | mcp | `mcp-<three words>` | how it identifies itself to the network |
 | `--port <n>` | broker | `8080` | listens on every interface |
 | `--name <peer>` | broker | `broker-<three words>` | how the broker identifies itself |
 | `--upstream <url>` | broker | — | join another broker; repeatable |
@@ -184,6 +186,53 @@ sent while it was down, that is what MQTT and `persistentSession` are for.
 **Not authenticated.** It listens on every interface and relays for whoever connects, without
 checking who they are, and it says so on startup. Put it behind a network you trust, or build one
 from the library with `authenticate` and a `relay` rule.
+
+## mcp
+
+```
+msgrpc mcp --broker mqtt://localhost:1883
+msgrpc mcp --hub http://hub:8080
+```
+
+Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can
+look at a plant the way a person looks at the console. It takes the same network flags as `console`,
+including `--sign`.
+
+Three tools, which are the console's three verbs:
+
+| tool | what it does |
+| --- | --- |
+| `list_peers` | who is on the network right now |
+| `describe_peer` | one peer's namespaces, methods, argument names and types, and events |
+| `call_method` | call a method, with positional arguments, and return what it returns |
+
+Not one tool per method on the network. A peer set that changes while a model is mid-conversation
+would mean re-issuing the tool list on every arrival and departure; `describe_peer` hands over the
+argument types instead, which is the same information in a form that does not go stale.
+
+A call a peer refuses comes back as tool content with `isError`, carrying the reason — `InvalidParams:
+argument 0: expected number, got string` — rather than as a JSON-RPC failure. A model should read
+that and fix its call, which it cannot do if the transport swallows it.
+
+To wire it into a client, give it the command and its flags:
+
+```json
+{
+  "mcpServers": {
+    "plant": { "command": "msgrpc", "args": ["mcp", "--broker", "mqtt://localhost:1883"] }
+  }
+}
+```
+
+**stdout carries the protocol and nothing else**, so this is not for interactive use — startup goes
+to stderr, and a stray `console.log` anywhere in the process would corrupt the stream. There is no
+MCP SDK behind it: MCP is JSON-RPC 2.0 over newline-delimited stdio, which is little enough to speak
+directly, and this package is about not needing a second RPC framework.
+
+**Anything a model can reach, it can call.** The peers this lists are real, and `call_method` will
+happily invoke one that opens a valve. Point it at a network where that is acceptable, or give it
+credentials that restrict it: `--sign` makes it a peer with an identity, and `authorize` on the
+servers decides what that identity may do.
 
 ## console
 
