@@ -73,8 +73,5 @@
   "homepage": "https://github.com/source-repo/msgrpc/tree/main/packages/msgrpc#readme",
   "bugs": {
     "url": "https://github.com/source-repo/msgrpc/issues"
-  },
-  "browser": {
-    "./dist/Transports/NodeTransports.js": "./dist/Transports/NodeTransports.browser.js"
   }
 }

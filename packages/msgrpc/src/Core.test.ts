@@ -1,7 +1,7 @@
 import test from 'ava'
 import { PeerRegistry } from './RPC/Core.js'
 import { RpcClient } from './RpcClient.js'
-import { RpcServer } from './RpcServer.js'
+import { RpcServer } from './index.js'
 
 class Echo {
     constructor(

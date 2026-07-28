@@ -1,7 +1,7 @@
 import test, { TestFn } from 'ava'
 import { io as ioClient } from 'socket.io-client'
 import { EventEmitter } from 'events'
-import { RpcServer } from './RpcServer.js'
+import { RpcServer } from './index.js'
 import { RpcClient, RpcProxy } from './RpcClient.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
 import { MessageType, TransportEvent } from './RPC/Core.js'

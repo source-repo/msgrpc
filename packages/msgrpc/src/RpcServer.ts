@@ -1,4 +1,3 @@
-import type { Server } from 'http'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
@@ -6,26 +5,14 @@ import { Introspection } from './RPC/Introspection.js'
 import { RpcServerHandler } from './RPC/RpcServerHandler.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import { RpcProxy } from './RpcClient.js'
-import type { MqttTransportOptions } from './Transports/MqttTransport.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { RelayRule } from './Transports/Presence.js'
 import { codecFor } from './RPC/Codec.js'
 import { Switch } from './Utilities/Switch.js'
-import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
+import { IManageRpc } from './RPC/Rpc.js'
 
 export interface ServerOptions {
     description?: string
-}
-
-export interface HttpServerOptions extends ServerOptions {
-    port: number
-    https?: boolean
-    path?: string
-}
-
-export interface ExternalServerOptions extends ServerOptions {
-    server: Server
-    path?: string
 }
 
 /**
@@ -40,13 +27,14 @@ export interface ConnectServerOptions extends ServerOptions {
     credentials?: unknown
 }
 
-export interface MqttServerOptions extends ServerOptions, MqttTransportOptions {
-    brokerurl: string
-}
-
 export interface RpcServerOptions {
     name: string
-    transports: (HttpServerOptions | ExternalServerOptions | ConnectServerOptions | MqttServerOptions | Transport)[]
+    /**
+     * What this server serves over. Only the two a browser can use are here; NodeRpcServer widens
+     * it with a socket.io listener, an existing http.Server and a broker connection, which is what
+     * makes `{ port: 8080 }` in browser code a compile error rather than a surprise at runtime.
+     */
+    transports: (ConnectServerOptions | Transport)[]
     useMsgPack: boolean
     /**
      * Verify credentials when a peer connects. Applied to socket.io transports this server builds.
@@ -98,7 +86,12 @@ export interface RpcServerOptions {
     exposeIntrospection?: boolean
 }
 
-export class RpcServer implements IManageRpc {
+/**
+ * Everything that works anywhere: a peer serves over connections it opens, or over transports it
+ * was handed. Listening for connections and speaking MQTT need Node, and live in NodeRpcServer,
+ * which is what `RpcServer` means when imported outside a browser.
+ */
+export class RpcServerBase implements IManageRpc {
     public rpc: RpcServerHandler
     /**
      * This server as a caller. A server on a bus is rarely only a server: it answers its peers and
@@ -174,47 +167,32 @@ export class RpcServer implements IManageRpc {
      * are imported here rather than at the top of the file: a page hosting an RpcServer over a
      * connection it dials has no use for either, and a static import would put both in its bundle.
      */
+    /** What to build when nothing was configured. A peer that cannot listen has no useful default. */
+    protected configuredTransports(): unknown[] {
+        return this.options.transports
+    }
+
+    /**
+     * Turn one configuration entry into a transport, or undefined if this class does not know that
+     * shape. NodeRpcServer overrides it for the shapes that need Node and defers here for the rest.
+     */
+    protected async buildTransport(serveroption: unknown): Promise<Transport | undefined> {
+        if (serveroption instanceof GenericModule) return serveroption as Transport
+        if ((serveroption as ConnectServerOptions).connect) {
+            const connectOptions = serveroption as ConnectServerOptions
+            return new SocketIoClientTransport(this.options.name, connectOptions.connect, [], {
+                ...(connectOptions.path ? { path: connectOptions.path } : {}),
+                ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
+            })
+        }
+        return undefined
+    }
+
     private async buildTransports() {
         const codec = codecFor(this.options.useMsgPack)
-        const configured = this.options.transports.length ? this.options.transports : [{ port: defaultWebSocketPort }]
-        for (const serveroption of configured) {
-            let transport: Transport | undefined
-            if (serveroption instanceof GenericModule) transport = serveroption as Transport
-            else if ((serveroption as ConnectServerOptions).connect) {
-                const connectOptions = serveroption as ConnectServerOptions
-                transport = new SocketIoClientTransport(this.options.name, connectOptions.connect, [], {
-                    ...(connectOptions.path ? { path: connectOptions.path } : {}),
-                    ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
-                })
-            } else if ((serveroption as HttpServerOptions).port) {
-                const { SocketIoServerTransport } = await import('./Transports/NodeTransports.js')
-                const httpOptions = serveroption as HttpServerOptions
-                transport = new SocketIoServerTransport(
-                    this.options.name,
-                    undefined,
-                    httpOptions.port,
-                    httpOptions.https,
-                    [],
-                    { path: httpOptions.path },
-                    this.options.authenticate
-                )
-            } else if ((serveroption as ExternalServerOptions).server) {
-                const { SocketIoServerTransport } = await import('./Transports/NodeTransports.js')
-                const externalOptions = serveroption as ExternalServerOptions
-                transport = new SocketIoServerTransport(this.options.name, externalOptions.server, 0, false, [], { path: externalOptions.path }, this.options.authenticate)
-            } else if ((serveroption as MqttServerOptions).brokerurl) {
-                const { MqttTransport } = await import('./Transports/NodeTransports.js')
-                const mqttServerOptions = serveroption as MqttServerOptions
-                transport = new MqttTransport(this.options.name, mqttServerOptions.brokerurl, {
-                    // A server should not lose requests published while it was restarting, so it
-                    // keeps its broker session by default. Clients do not: a late reply is useless
-                    // to a call that has already timed out, and every short-lived peer would leave
-                    // session state behind on the broker.
-                    persistentSession: true,
-                    ...mqttServerOptions
-                })
-            }
-            if (!transport) throw new Error('RpcServer: Invalid transport defined')
+        for (const serveroption of this.configuredTransports()) {
+            const transport = await this.buildTransport(serveroption)
+            if (!transport) throw new Error(`RpcServer '${this.options.name}': no transport can be built from ${JSON.stringify(serveroption)}`)
             // The transports encode, so there is no converter between them and the handler. A
             // structured wire format such as MQTT 5 needs to see the message rather than bytes a
             // converter already flattened.

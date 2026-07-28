@@ -1,5 +1,10 @@
 export * from './RpcClient.js'
 export * from './RpcServer.js'
+// `RpcServer` is the portable name: this module and index-web both export one, so a file that
+// sticks to transports a browser can use compiles and runs in either. NodeRpcServer is the same
+// class under a name that says where it runs, for code that would rather be explicit.
+export { NodeRpcServer, NodeRpcServer as RpcServer } from './NodeRpcServer.js'
+export type { HttpServerOptions, ExternalServerOptions, MqttServerOptions, NodeRpcServerOptions } from './NodeRpcServer.js'
 
 export * from './Transports/Presence.js'
 export * from './Transports/SocketIoClientTransport.js'

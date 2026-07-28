@@ -1,7 +1,7 @@
 import test from 'ava'
 import { io as ioClient } from 'socket.io-client'
 import { EventEmitter } from 'events'
-import { RpcServer, RpcServerOptions } from './RpcServer.js'
+import { RpcServer, RpcServerOptions } from './index.js'
 import { RpcClient } from './RpcClient.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
 import { RpcAuthenticator, RpcAuthorizer, RpcIdentity } from './RPC/Auth.js'

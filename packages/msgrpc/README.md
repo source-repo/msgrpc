@@ -800,6 +800,21 @@ A page can host an `RpcServer` as well as call one: `transports: [{ connect: url
 connection it opens, and the hub relays calls to it. See
 [Serving over a connection you open](#serving-over-a-connection-you-open).
 
+**`RpcServer` means a different class here**, and deliberately. In Node it is `NodeRpcServer`, which
+adds `{ port }`, `{ server }` and `{ brokerurl }`; in a browser it is the portable base, which has
+none of them — a page cannot open a listening socket or speak MQTT. So the same source file is
+portable as long as it sticks to what a browser can do, and `{ port: 8080 }` in browser code is a
+compile error rather than a class that throws when constructed:
+
+```
+Object literal may only specify known properties, and 'port' does not exist in
+type 'Transport | ConnectServerOptions'
+```
+
+It also means nothing a browser resolves imports socket.io's server or the MQTT client, so neither
+reaches the bundle — no aliases and no bundler configuration. `NodeRpcServer` is exported under that
+name too, for code that would rather say where it runs.
+
 ## Peer routing
 
 Each `RpcServer` and `RpcClient` owns a `PeerRegistry`, shared by its own modules and nothing wider:

@@ -1,5 +1,5 @@
 import test from 'ava'
-import { RpcServer } from './RpcServer.js'
+import { RpcServer } from './index.js'
 import { RpcClient } from './RpcClient.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
 import { rpc, exposeMethods, markedMethods } from './RPC/Expose.js'

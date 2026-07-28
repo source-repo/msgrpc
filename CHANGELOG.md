@@ -5,6 +5,21 @@
 **Discovery and routing over socket.io**, so a network with no broker works the way an MQTT one
 always has - and so a server hosted in a browser page is a peer like any other.
 
+- **Readable peer names.** The default is three hyphenated words from the BIP-39 English list
+  (`brisk-otter-cable`) rather than a UUID. That list is 2048 words chosen to be unambiguous in
+  their first four letters; the rest of BIP-39 - entropy sizes and a checksum - is for seed phrases
+  and does not apply. A name is what a caller addresses, what presence lists, what a log line blames
+  and, over MQTT, the broker's client id, and a UUID is none of those things legibly.
+  `readableNameFrom(seed)` derives the same name from the same seed, for a peer meant to be
+  recognised across restarts.
+- **A browser can host an `RpcServer`.** `RpcServer` in Node is `NodeRpcServer`, which adds
+  `{ port }`, `{ server }` and `{ brokerurl }`; in a browser the same name is the portable base,
+  which has none of them. Source that sticks to `{ connect }` and transport instances is portable
+  between the two, and `{ port: 8080 }` in browser code is a compile error rather than a runtime
+  throw. Nothing a browser resolves imports socket.io's server or the MQTT client, so neither
+  reaches the bundle without any bundler configuration.
+- A listener that cannot bind now fails `ready()` with the reason - a port already in use is not
+  something more waiting fixes - instead of being waited out for the full `readyTimeout`.
 - **`RpcServer.proxy()`**, the mirror of `RpcClient.proxy`. A peer that both serves and calls now
   needs one object and one connection, under one name, rather than an `RpcServer` and an
   `RpcClient` under two - which over MQTT meant two broker sessions. Its subscriptions are replayed

@@ -1,8 +1,10 @@
 export * from './RPC/Core.js'
 export * from './RpcClient.js'
-// A page can host a server as well as call one, over a connection it dials. The socket.io listener
-// and the MQTT client are loaded on demand, so neither ends up in a browser bundle.
+// A page can host a server as well as call one, over a connection it dials. `RpcServer` here is the
+// portable base: no listener and no MQTT, because a page can do neither, so nothing in a browser
+// bundle resolves socket.io's server or the MQTT client.
 export * from './RpcServer.js'
+export { RpcServerBase as RpcServer } from './RpcServer.js'
 
 export * from './Transports/Presence.js'
 export * from './Transports/SocketIoClientTransport.js'
