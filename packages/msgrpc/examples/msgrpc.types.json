@@ -1,0 +1,159 @@
+{
+  "schema": 1,
+  "types": {
+    "Limits": {
+      "kind": "object",
+      "fields": {
+        "min": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "max": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "commissioned": {
+          "type": {
+            "kind": "date"
+          },
+          "optional": true
+        }
+      }
+    }
+  },
+  "namespaces": {
+    "plant": {
+      "version": "1",
+      "methods": {
+        "readSetpoint": {
+          "params": [],
+          "returns": {
+            "kind": "number"
+          }
+        },
+        "writeSetpoint": {
+          "params": [
+            {
+              "kind": "number"
+            },
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "literal",
+                      "value": "auto"
+                    },
+                    {
+                      "kind": "literal",
+                      "value": "manual"
+                    }
+                  ]
+                },
+                {
+                  "kind": "literal",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "returns": {
+            "kind": "number"
+          }
+        },
+        "configure": {
+          "params": [
+            {
+              "kind": "ref",
+              "name": "Limits"
+            }
+          ],
+          "returns": {
+            "kind": "ref",
+            "name": "Limits"
+          }
+        }
+      },
+      "events": {
+        "setpointChanged": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ]
+        },
+        "alarm": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "number"
+            }
+          ]
+        }
+      }
+    },
+    "history": {
+      "version": "1",
+      "methods": {
+        "recent": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ],
+          "returns": {
+            "kind": "array",
+            "items": {
+              "kind": "object",
+              "fields": {
+                "at": {
+                  "type": {
+                    "kind": "date"
+                  }
+                },
+                "value": {
+                  "type": {
+                    "kind": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "summary": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "samples": {
+                "type": {
+                  "kind": "number"
+                }
+              },
+              "latest": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "number"
+                    }
+                  ]
+                },
+                "optional": true
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

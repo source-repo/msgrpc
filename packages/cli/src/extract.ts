@@ -1,4 +1,5 @@
-import { ClassDeclaration, MethodDeclaration, Node, Project, Type } from 'ts-morph'
+import { resolve as resolvePath, dirname } from 'node:path'
+import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
 import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from '@source-repo/msgrpc'
 
 /**
@@ -78,39 +79,45 @@ export const typeToNode = (type: Type, context: Context, depth = 0): TypeNode =>
     if (symbolName === 'Map' || symbolName === 'Set')
         return fail(context, `is a ${symbolName}, which MsgPack does not carry; use an object or an array`)
 
-    if (type.isUnion()) {
-        // undefined in a union means optional, which the parameter and field layers handle.
-        const options = type.getUnionTypes().filter((option) => !option.isUndefined())
-        if (!options.length) return fail(context, 'is undefined only')
-        if (options.length === 1) return typeToNode(options[0], context, depth + 1)
-        // A boolean surfaces as true | false; collapse it back.
-        if (options.length === 2 && options.every((option) => option.isBooleanLiteral())) return { kind: 'boolean' }
-        return { kind: 'union', options: options.map((option) => typeToNode(option, context, depth + 1)) }
-    }
-
     if (type.isTuple()) return { kind: 'tuple', items: type.getTupleElements().map((element) => typeToNode(element, context, depth + 1)) }
     if (type.isArray()) {
         const element = type.getArrayElementType()
         return element ? { kind: 'array', items: typeToNode(element, context, depth + 1) } : fail(context, 'is an array of an unknown element type')
     }
 
-    if (type.isObject()) {
-        const name = nameOf(type)
-        if (name) {
-            if (context.inProgress.has(name) || context.types[name]) return { kind: 'ref', name }
-            context.inProgress.add(name)
-            context.types[name] = { kind: 'any' } // placeholder so a recursive member resolves to a ref
-            context.types[name] = objectToNode(type, context, depth)
-            context.inProgress.delete(name)
-            return { kind: 'ref', name }
-        }
-        return objectToNode(type, context, depth)
+    // A named union or object becomes a reference. Registering only objects meant a recursive
+    // union - a value type, an AST node - was expanded inline until it ran out of depth.
+    const name = nameOf(type)
+    if (name && (type.isUnion() || type.isObject())) {
+        if (context.inProgress.has(name) || context.types[name]) return { kind: 'ref', name }
+        context.inProgress.add(name)
+        context.types[name] = { kind: 'any' } // placeholder, so a member referring back resolves
+        context.types[name] = type.isUnion() ? unionToNode(type, context, depth) : objectToNode(type, context, depth)
+        context.inProgress.delete(name)
+        return { kind: 'ref', name }
     }
+
+    if (type.isUnion()) return unionToNode(type, context, depth)
+    if (type.isObject()) return objectToNode(type, context, depth)
 
     return fail(context, `has no representation in the schema type language (${type.getText()})`)
 }
 
+const unionToNode = (type: Type, context: Context, depth: number): TypeNode => {
+    // undefined in a union means optional, which the parameter and field layers handle.
+    const options = type.getUnionTypes().filter((option) => !option.isUndefined())
+    if (!options.length) return fail(context, 'is undefined only')
+    if (options.length === 1) return typeToNode(options[0], context, depth + 1)
+    // A boolean surfaces as true | false; collapse it back.
+    if (options.length === 2 && options.every((option) => option.isBooleanLiteral())) return { kind: 'boolean' }
+    return { kind: 'union', options: options.map((option) => typeToNode(option, context, depth + 1)) }
+}
+
 const objectToNode = (type: Type, context: Context, depth: number): TypeNode => {
+    // getProperties() cannot see an index signature, so without this a dictionary would be
+    // described as an object permitting no properties at all, and every value would be refused.
+    if (type.getStringIndexType() || type.getNumberIndexType())
+        return fail(context, 'has an index signature, which the schema type language cannot describe yet')
     const fields: { [name: string]: { type: TypeNode; optional?: boolean } } = {}
     for (const property of type.getProperties()) {
         const propertyType = property.getTypeAtLocation(context.node)
@@ -190,11 +197,20 @@ const eventsFromDeclaration = (declaration: ClassDeclaration, context: Context) 
 
 export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
     const project = new Project({ tsConfigFilePath })
+    // Exactly what include/files/exclude resolve to, asked of TypeScript rather than inferred.
+    // Resolving types pulls dependencies into the project, and `extract --project` should describe
+    // this project rather than every decorated class it happens to import.
+    const configured = ts.parseJsonConfigFileContent(
+        ts.readConfigFile(tsConfigFilePath, ts.sys.readFile).config,
+        ts.sys,
+        dirname(resolvePath(tsConfigFilePath))
+    )
+    const own = new Set(configured.fileNames.map((file) => resolvePath(file)))
     const diagnostics: Diagnostic[] = []
     const types: { [name: string]: TypeNode } = {}
     const namespaces: { [namespace: string]: NamespaceSchema } = {}
 
-    for (const sourceFile of project.getSourceFiles()) {
+    for (const sourceFile of project.getSourceFiles().filter((file) => own.has(resolvePath(file.getFilePath())))) {
         for (const declaration of sourceFile.getClasses()) {
             const declared = namespaceDeclaration(declaration)
             if (!declared) continue
@@ -219,5 +235,13 @@ export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
         }
     }
 
-    return { schema: { schema: 1, ...(Object.keys(types).length ? { types } : {}), namespaces }, diagnostics }
+    // One unrepresentable type reaches every leaf beneath it, so the same complaint repeats.
+    const seen = new Set<string>()
+    const unique = diagnostics.filter((diagnostic) => {
+        const key = `${diagnostic.where}|${diagnostic.reason}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+    })
+    return { schema: { schema: 1, ...(Object.keys(types).length ? { types } : {}), namespaces }, diagnostics: unique }
 }

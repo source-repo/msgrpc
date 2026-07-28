@@ -39,11 +39,15 @@ const argument = (argv: string[], flag: string, fallback: string) => {
     return index === -1 ? fallback : (argv[index + 1] ?? fallback)
 }
 
+const DIAGNOSTIC_LIMIT = 25
+
 const reportDiagnostics = (diagnostics: Diagnostic[]) => {
-    for (const diagnostic of diagnostics) {
+    for (const diagnostic of diagnostics.slice(0, DIAGNOSTIC_LIMIT)) {
         const at = diagnostic.file ? ` (${diagnostic.file}:${diagnostic.line})` : ''
         process.stderr.write(`  ${diagnostic.where} ${diagnostic.reason}${at}\n`)
     }
+    // Named rather than silently dropped, so nobody reads a truncated list as the whole story.
+    if (diagnostics.length > DIAGNOSTIC_LIMIT) process.stderr.write(`  … and ${diagnostics.length - DIAGNOSTIC_LIMIT} more\n`)
 }
 
 const readSchema = (path: string): RpcSchema => JSON.parse(readFileSync(path, 'utf8')) as RpcSchema

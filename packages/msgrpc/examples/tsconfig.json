@@ -1,9 +1,11 @@
 {
-    // Examples are documentation, not shipped code: type-checked but never emitted.
+    // Examples consume the package the way a user would, so they are type-checked against the
+    // built library rather than against its source. npm run typecheck passes --noEmit itself;
+    // building them is what `npm run build:examples` is for.
     "extends": "../tsconfig.json",
     "compilerOptions": {
-        "noEmit": true,
-        "rootDir": ".."
+        "rootDir": ".",
+        "outDir": "../dist-examples"
     },
     "include": ["."]
 }
