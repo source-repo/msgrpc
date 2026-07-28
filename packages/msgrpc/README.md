@@ -1,8 +1,9 @@
 # @source-repo/msgrpc
 
-TypeScript RPC over WebSocket and MQTT. A class is the contract: expose an instance on the server,
-get a typed proxy on the client, and call its methods. No code generation and no schema files
-required, though there is a schema when you want arguments checked at runtime.
+TypeScript RPC over WebSocket and MQTT. A class is the contract: the server hands one live instance
+to `exposeClassInstance`, the client gets a typed proxy of the same class, and calling a method on
+the proxy runs it on that instance. No code generation and no schema files required, though there is
+a schema when you want arguments checked at runtime.
 
 ```
 npm install @source-repo/msgrpc
@@ -16,16 +17,29 @@ Upgrading from 1.x? [`CHANGELOG.md`](https://github.com/source-repo/msgrpc/blob/
 
 ## Quick start
 
-A server. With no transports configured it listens on WebSocket (socket.io) port 3000.
+The class both sides share. Nothing here is msgrpc-specific — no decorators, no base class:
 
 ```typescript
-import { RpcServer } from '@source-repo/msgrpc'
+// calculator.ts
+export class Calculator {
+    private memory = 0
 
-class Calculator {
     async square(n: number) {
         return n * n
     }
+
+    async add(n: number) {
+        this.memory += n
+        return this.memory
+    }
 }
+```
+
+The server. With no transports configured it listens on WebSocket (socket.io) port 3000:
+
+```typescript
+import { RpcServer } from '@source-repo/msgrpc'
+import { Calculator } from './calculator.js'
 
 const server = new RpcServer()
 server.exposeClassInstance(new Calculator(), 'calculator')
@@ -36,15 +50,93 @@ A client, in another Node process, a browser page, or the same process for testi
 
 ```typescript
 import { RpcClient } from '@source-repo/msgrpc'
+import type { Calculator } from './calculator.js'    // the type only - see below
 
-const client = new RpcClient()
+const client = new RpcClient('http://localhost:3000')
 await client.ready()
 
 const calculator = await client.proxy<Calculator>('calculator')
-console.log(await calculator.remote!.square(3))   // 9
+console.log(await calculator.remote!.square(3))      // 9
+console.log(await calculator.remote!.add(10))        // 10
+console.log(await calculator.remote!.add(5))         // 15 - one instance, holding its own state
+
+await client.close()
 ```
 
-The client shares the class only as a type, so nothing of the implementation reaches it.
+Three things worth noticing:
+
+**The instance is a real, long-lived object.** It is constructed once, by you, and every call runs
+against that same object — which is why `add` accumulates. State lives where you would put it
+anyway, in fields. Nothing is constructed or discarded per call, and the instance you passed in is
+still yours to read and mutate locally. (A class can instead be *registered* for peers to
+instantiate remotely, but that is off by default and rarely what you want — see
+[The management surface](#the-management-surface).)
+
+**`import type`** on the client is the point of the whole design: the client compiles against the
+class but imports none of its code, so the implementation never reaches the browser bundle. In a
+monorepo, put the class in a package both sides depend on. If the client cannot see the class at
+all — a different language, a different repo — describe the surface with an `interface` instead and
+pass that to `proxy<T>()`.
+
+**`.remote!`** — `proxy()` returns a small record (`{ name, target?, remote? }`) whose `remote` is
+the typed proxy. The field is optional in the type because the record is assembled piece by piece;
+`proxy()` awaits `ready()` first, so what it hands back always has one, hence the `!`.
+
+## Connecting
+
+The server's `transports` say where it listens; the client's url says where to reach it.
+
+| server | client |
+| --- | --- |
+| `new RpcServer()` | `new RpcClient()` — socket.io on port 3000, the default on both sides |
+| `transports: [{ port: 8080 }]` (also `https`, `path`) | `new RpcClient('http://host:8080')` |
+| `transports: [{ server: httpServer }]` | `new RpcClient(origin)` — share an `http.Server` you already have, so the page and its RPC arrive on one port |
+| `transports: [{ brokerurl: 'mqtt://broker:1883' }]` | `new RpcClient('mqtt://broker:1883', { defaultTarget: 'plantServer' })` |
+
+A server may hold several at once, serving the same exposed instances to each. One server can face a
+browser over socket.io and a plant network over MQTT:
+
+```typescript
+const server = new RpcServer({
+    name: 'plantServer',
+    transports: [{ port: 8080 }, { brokerurl: 'mqtt://broker:1883' }]
+})
+server.exposeClassInstance(new Plant(), 'plant')     // reachable over both
+```
+
+### Names and targets
+
+Every peer has a `name`. A server's name is how callers address it; a client's name is how the
+server routes events back and, when authenticating, who it is.
+
+Over a single socket there is one server, so the default target `'*'` finds it and names can be left
+alone. Over a broker there are many, so a caller has to say which — either once, with
+`defaultTarget`, or per proxy:
+
+```typescript
+const plant = await client.proxy<Plant>('plant', 'plantServer')
+```
+
+Client names must be unique among the peers sharing a server; the default is a UUID, which is unique
+but tells you nothing in a log. Over MQTT a name is also the broker client id, and a broker allows
+one connection per id, so two peers sharing a name disconnect each other in a loop.
+
+### Ready and close
+
+`await server.ready()` and `await client.ready()` resolve when every transport is connected, and
+throw after `readyTimeout` (30 s; `0` waits forever) rather than hanging with no diagnostic. Expose
+your instances *before* `ready()`: a resumed MQTT session is handed its queued requests the moment it
+connects.
+
+`await client.close()` rejects any in-flight calls at once instead of leaving them to time out, and
+forgets the subscriptions it held. `await server.close()` closes every transport, which is what
+tells the peers on the other side that it went away.
+
+### Encoding
+
+MsgPack by default, so `Uint8Array` and `Date` cross the wire as themselves rather than as string
+encodings of themselves. `useMsgPack: false` selects JSON on both sides — readable in a broker
+inspector, at the cost of those two types. Both ends must agree.
 
 ## Exposing methods
 
@@ -75,6 +167,83 @@ which makes the discipline enforceable across a project.
 
 `@rpcNamespace` also tells the extraction CLI which namespace a class belongs to, since the name
 would otherwise exist only at the `exposeClassInstance` call site.
+
+### More than one, and without a class
+
+A server exposes as many namespaces as you like, and a client takes a proxy per namespace:
+
+```typescript
+server.exposeClassInstance(new Plant(), 'plant')
+server.exposeClassInstance(new History(), 'history')
+server.exposeObject({ ping: () => 'pong' }, 'health')      // a plain object's own functions
+
+const plant = await client.proxy<Plant>('plant')
+const history = await client.proxy<History>('history')
+```
+
+`exposeObject` publishes an object's own function properties rather than a prototype chain, which
+suits a handful of functions that never wanted to be a class.
+
+## Errors
+
+A call rejects with an `RpcError` carrying a `code`, the remote `message`, and the remote stack in
+`remoteStack` when the peer sent one.
+
+```typescript
+import { RpcError } from '@source-repo/msgrpc'
+
+try {
+    await calculator.remote!.square(3)
+} catch (e) {
+    if (e instanceof RpcError) console.log(e.code, e.message, e.remoteStack)
+}
+```
+
+| code | meaning |
+| --- | --- |
+| `Exception` | the exposed method threw |
+| `MethodNotFound` | the instance exists but the method is not exposed |
+| `ClassNotFound` | nothing is exposed under that name |
+| `Timeout` | no response within `callTimeout` |
+| `TransportError` | the link dropped, or the message could not be encoded or sent |
+| `Unauthorized` | the caller is not authenticated and the server requires it |
+| `Forbidden` | the caller is authenticated but not permitted this call |
+| `InvalidParams` | the arguments do not match the schema for that method |
+| `IncompatibleVersion` | the caller's contract cannot be served by this one |
+
+## Events and reconnection
+
+An exposed instance that extends `EventEmitter` can push to subscribers:
+
+```typescript
+const plant = await client.proxy<Plant>('plant')
+await plant.remote!.on('alarm', (message: string) => console.log(message))
+await plant.remote!.off('alarm', handler)     // same handler reference
+```
+
+`RpcClient` is itself an `EventEmitter` reporting the state of its link, so an application can show
+it rather than infer it from failed calls:
+
+```typescript
+import { TransportEvent } from '@source-repo/msgrpc'
+
+client.on(TransportEvent.disconnected, (reason) => console.log('link lost:', reason))
+client.on(TransportEvent.connected, ({ restoredSubscriptions }) =>
+    console.log('link back, subscriptions restored:', restoredSubscriptions))
+```
+
+Reconnection is handled for you:
+
+- The underlying transport reconnects on its own (socket.io and mqtt.js both do).
+- On every reconnect the client replays its event subscriptions. This restores server-side state if
+  the server restarted, and re-identifies the client so pushed events reach it again.
+- Replaying is idempotent: the server will not stack a second listener for a subscription it already
+  holds.
+- When a client's connection drops, the server releases the event subscriptions it held for it.
+- An event is delivered only to subscriptions taken out on the peer and namespace it came from.
+  Watching `alarm` on two instances, or on two peers over one MQTT transport, keeps them apart.
+- `off()` is not subject to `authorize`: a subscription is keyed by the peer that made it, so a peer
+  can only drop its own, and refusing to let someone stop receiving events would be strange.
 
 ## Checking arguments
 
@@ -160,66 +329,27 @@ a legitimate operational choice; `unknownVersion: 'reject'` refuses it instead.
 `msgrpc check` runs the same comparison at build time, so a change that would refuse a deployed peer
 fails the build instead of surfacing when that peer next calls.
 
-## Errors
+## Describing a server
 
-A call rejects with an `RpcError` carrying a `code`, the remote `message`, and the remote stack in
-`remoteStack` when the peer sent one.
-
-```typescript
-import { RpcError } from '@source-repo/msgrpc'
-
-try {
-    await calculator.remote!.square(3)
-} catch (e) {
-    if (e instanceof RpcError) console.log(e.code, e.message, e.remoteStack)
-}
-```
-
-| code | meaning |
-| --- | --- |
-| `Exception` | the exposed method threw |
-| `MethodNotFound` | the instance exists but the method is not exposed |
-| `ClassNotFound` | nothing is exposed under that name |
-| `Timeout` | no response within `callTimeout` |
-| `TransportError` | the link dropped, or the message could not be encoded or sent |
-| `Unauthorized` | the caller is not authenticated and the server requires it |
-| `Forbidden` | the caller is authenticated but not permitted this call |
-| `InvalidParams` | the arguments do not match the schema for that method |
-| `IncompatibleVersion` | the caller's contract cannot be served by this one |
-
-## Events and reconnection
-
-An exposed instance that extends `EventEmitter` can push to subscribers:
+A server can report what it exposes, so a peer or a person can find out without reading the source.
 
 ```typescript
-const plant = await client.proxy<Plant>('plant')
-await plant.remote!.on('alarm', (message: string) => console.log(message))
-await plant.remote!.off('alarm', handler)     // same handler reference
+const server = new RpcServer({ transports: [{ brokerurl }], exposeIntrospection: true })
+
+const described = await (await client.proxy<Introspection>('msgrpc')).remote!.describe()
 ```
 
-`RpcClient` is itself an `EventEmitter` reporting the state of its link, so an application can show
-it rather than infer it from failed calls:
+It reports each namespace with its class, its contract version, whether the instance was created at
+runtime, its methods with types when a schema describes them, and its events with how many peers are
+currently subscribed. `msgrpc console` renders this in a browser.
 
-```typescript
-import { TransportEvent } from '@source-repo/msgrpc'
+**Off by default, and subject to `authorize` like any other call.** Listing every class, method and
+live instance is reconnaissance, and instance names on a plant network tend to encode plant
+structure.
 
-client.on(TransportEvent.disconnected, (reason) => console.log('link lost:', reason))
-client.on(TransportEvent.connected, ({ restoredSubscriptions }) =>
-    console.log('link back, subscriptions restored:', restoredSubscriptions))
-```
-
-Reconnection is handled for you:
-
-- The underlying transport reconnects on its own (socket.io and mqtt.js both do).
-- On every reconnect the client replays its event subscriptions. This restores server-side state if
-  the server restarted, and re-identifies the client so pushed events reach it again.
-- Replaying is idempotent: the server will not stack a second listener for a subscription it already
-  holds.
-- When a client's connection drops, the server releases the event subscriptions it held for it.
-- An event is delivered only to subscriptions taken out on the peer and namespace it came from.
-  Watching `alarm` on two instances, or on two peers over one MQTT transport, keeps them apart.
-- `off()` is not subject to `authorize`: a subscription is keyed by the peer that made it, so a peer
-  can only drop its own, and refusing to let someone stop receiving events would be strange.
+This is msgrpc's own shape rather than a borrowed one. OpenAPI is HTTP-shaped and cannot describe a
+server pushing events; AsyncAPI models everything as a channel, which fights an RPC surface. Either
+would mean describing this system in someone else's concepts.
 
 ## Authentication and authorization
 
@@ -301,7 +431,7 @@ together. The different servers are addressed by their `name`.
 ```typescript
 const server = new RpcServer({
     name: 'plantServer',
-    transports: [{ brokerurl: 'mqtt://broker:1883', prefix: 'site-4', mqtt: { username: 'plant', password: '...' } }]
+    transports: [{ brokerurl: 'mqtt://broker:1883', mqtt: { username: 'plant', password: '...' } }]
 })
 
 const client = new RpcClient('mqtt://broker:1883', {
@@ -310,6 +440,20 @@ const client = new RpcClient('mqtt://broker:1883', {
     credentials: { username: 'hmi', password: '...' }   // MQTT credentials go to the broker
 })
 ```
+
+**Both ends must agree on the prefix.** An `mqtt://` url gives the client the default `msgrpc/v2`,
+so a server that sets its own is unreachable from a client that does not — and it fails as a call
+timeout, which says nothing about why. There is no client option for it, so build the transport:
+
+```typescript
+import { MqttTransport } from '@source-repo/msgrpc'
+
+const transport = new MqttTransport('hmi-1', 'mqtt://broker:1883', { prefix: 'site-4' })
+const client = new RpcClient(undefined, { name: 'hmi-1', transport, defaultTarget: 'plantServer' })
+```
+
+The same applies to every `MqttTransportOptions` field: the url form takes the defaults, and
+anything else means constructing the transport yourself.
 
 ### Topics
 
@@ -443,28 +587,6 @@ WebCrypto keys directly and leave only public keys on the verifying side.
 Both are built on WebCrypto, so the same signer works in Node and in the browser. To use an HSM or
 another algorithm, supply your own `MessageSigner` / `MessageVerifier` — the built-ins are only
 conveniences.
-
-## Describing a server
-
-A server can report what it exposes, so a peer or a person can find out without reading the source.
-
-```typescript
-const server = new RpcServer({ transports: [{ brokerurl }], exposeIntrospection: true })
-
-const described = await (await client.proxy<Introspection>('msgrpc')).remote!.describe()
-```
-
-It reports each namespace with its class, its contract version, whether the instance was created at
-runtime, its methods with types when a schema describes them, and its events with how many peers are
-currently subscribed. `msgrpc console` renders this in a browser.
-
-**Off by default, and subject to `authorize` like any other call.** Listing every class, method and
-live instance is reconnaissance, and instance names on a plant network tend to encode plant
-structure.
-
-This is msgrpc's own shape rather than a borrowed one. OpenAPI is HTTP-shaped and cannot describe a
-server pushing events; AsyncAPI models everything as a channel, which fights an RPC surface. Either
-would mean describing this system in someone else's concepts.
 
 ## Options
 

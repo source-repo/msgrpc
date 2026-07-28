@@ -1,5 +1,28 @@
 # Changelog
 
+## msgrpc 2.1.1
+
+Documentation only.
+
+- The quick start did not compile: `Calculator` was neither exported by the server snippet nor
+  imported by the client one, and the client needs the class as a type to get a typed proxy. It is
+  now a shared `calculator.ts` the client pulls in with `import type`, which is the point being
+  made and was the thing left out.
+- The MQTT example gave the server `prefix: 'site-4'` and the client no prefix at all, so the two
+  could never reach each other. An `mqtt://` url takes the default prefix and there is no client
+  option to change it, so the section now shows building the `MqttTransport` and says what the
+  mismatch looks like: a bare call timeout.
+- A **Connecting** section, which was missing entirely - transports against urls, peer names and
+  targets, `ready()`/`close()`, and the MsgPack/JSON choice. The README went from the quick start
+  to decorators and schemas without ever saying how to point a client at a real server.
+- Reordered so the basics come first: exposing, errors, events, then schemas and versioning, then
+  introspection, authentication and MQTT. Security and broker detail used to arrive before the
+  ordinary reader had been shown a second method call.
+- The opening sentence said "expose an instance", which read as though instances were incidental.
+  It now says the instance is one live object that every call runs against, and the quick start
+  demonstrates state surviving between calls.
+- Exposing more than one namespace, and `exposeObject`, are both shown.
+
 ## msgrpc-cli 2.2.0
 
 - **`msgrpc console` is now a React app, and it reaches the CLI over msgrpc itself.** The CLI runs
