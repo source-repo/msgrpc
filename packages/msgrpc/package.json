@@ -58,10 +58,10 @@
     "uuid": "^14.0.1"
   },
   "devDependencies": {
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.1.2",
     "ava": "^8.0.1",
     "rimraf": "^6.0.1",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "ava": {
     "files": [
