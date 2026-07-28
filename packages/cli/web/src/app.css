@@ -106,13 +106,6 @@ aside {
     font-size: 13px;
 }
 
-.said .who {
-    display: block;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--muted);
-}
-
 .said .text {
     display: inline-block;
     padding: 5px 9px;

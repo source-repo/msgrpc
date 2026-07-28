@@ -73,9 +73,10 @@ export const Chat = ({
                 <>
                     <div className="chat-log">
                         {messages.length === 0 && <p className="muted">Nothing yet. Say something to {peer}.</p>}
+                        {/* No name on a line: the side it sits on already says who said it, and the
+                            header names the only other party there is. */}
                         {messages.map((message, index) => (
                             <div key={`${message.at}-${index}`} className={message.mine ? 'said mine' : 'said'}>
-                                <span className="who">{message.mine ? 'you' : message.from}</span>
                                 <span className="text">{message.text}</span>
                             </div>
                         ))}
