@@ -47,8 +47,17 @@ export interface ServerDescription {
     types?: { [name: string]: TypeNode }
 }
 
-/** The name the CLI's RpcServer answers to, so the browser addresses it instead of broadcasting. */
-export const consolePeer = 'msgrpc-console'
+/**
+ * The console's peer name is its name on the network, not a constant, so the page asks for it
+ * before connecting. This is the one thing that cannot be an RPC call: you need a name to address.
+ */
+export const consoleIdentityPath = '/console.json'
+
+export const fetchConsoleName = async () => {
+    const response = await fetch(consoleIdentityPath)
+    if (!response.ok) throw new Error(`the console did not say who it is (${response.status})`)
+    return ((await response.json()) as { name: string }).name
+}
 
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {

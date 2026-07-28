@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { RpcClient, TransportEvent } from '@source-repo/msgrpc'
 import { MethodPanel } from './MethodPanel'
-import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, consolePeer, typeText } from './types'
+import { ConsoleService, DescribedEvent, ServerDescription, StreamedEvent, fetchConsoleName, typeText } from './types'
 
 /**
  * The console talks to the CLI over msgrpc itself: the CLI runs an RpcServer on the same HTTP
@@ -19,8 +19,10 @@ const useConsole = () => {
         let client: RpcClient | undefined
         void (async () => {
             try {
-                // The console names itself, so the browser addresses it rather than broadcasting.
-                client = new RpcClient(window.location.origin, { defaultTarget: consolePeer, readyTimeout: 10000 })
+                // Ask who is serving this page before addressing it: the console's name is its own
+                // name on the network, so it differs between instances.
+                const consoleName = await fetchConsoleName()
+                client = new RpcClient(window.location.origin, { defaultTarget: consoleName, readyTimeout: 10000 })
                 client.on(TransportEvent.disconnected, () => setStatus('reconnecting'))
                 client.on(TransportEvent.connected, () => setStatus('connected'))
                 await client.ready()

@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
 import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer } from '@source-repo/msgrpc'
-import { consolePeer, startConsole, type ConsoleService } from './console.js'
+import { consoleIdentityPath, startConsole, type ConsoleService } from './console.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
 
@@ -77,7 +77,8 @@ const schema: RpcSchema = {
 
 /** Connects the way the app does: an ordinary msgrpc client over the origin that served the page. */
 const browserClient = async (url: string) => {
-    const client = new RpcClient(url, { defaultTarget: consolePeer, callTimeout: 8000, readyTimeout: 8000 })
+    const { name } = (await (await fetch(`${url}${consoleIdentityPath}`)).json()) as { name: string }
+    const client = new RpcClient(url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000 })
     const proxy = await client.proxy<ConsoleService & { on: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown> }>('console')
     return { client, remote: proxy.remote! }
 }
