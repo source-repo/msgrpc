@@ -84,6 +84,26 @@ the typed proxy. The field is optional in the type because the record is assembl
 
 ## Connecting
 
+Before the table: it is worth ten lines on what a network of these looks like, because everything
+below follows from one idea.
+
+**An `RpcServer` exposes methods; an `RpcClient` calls them.** For a single link that is the whole
+API, and the quick start above has already shown it.
+
+The rest comes from this: **a peer is anything on the network with a name**, and a frame is
+addressed to a *name*, not to a socket. A server has a name, a client has a name. Once addressing
+works that way, three things follow:
+
+- **A server can call as well as answer.** `RpcServer.proxy()` is the same call as the client's, and
+  hands back the same typed object — it just travels over a link the server already has.
+- **A server can relay.** A frame addressed to a name it is not, but can see, is passed along
+  instead of executed. That is what makes a peer reachable *through* another peer.
+- **A peer that only relays is a bus.** Nothing else is needed to build one.
+
+So a **bus** — hub, broker, switchboard, whichever word you prefer — is not a different kind of
+program. It is an `RpcServer` that exposes nothing and forwards everything. An MQTT broker plays
+exactly the same part for an MQTT network; msgrpc just does not require you to have one.
+
 The server's `transports` say where it listens; the client's url says where to reach it.
 
 | server | client |
@@ -106,8 +126,9 @@ server.exposeClassInstance(new Plant(), 'plant')     // reachable over both
 
 ### A bus without a broker
 
-An `RpcServer` that exposes nothing and only relays is a broker. Everything else dials it, and gets
-what MQTT gives you: presence, addressing by name, any peer calling any other.
+Here is that bus, in full. It exposes nothing, so every frame that reaches it is addressed to
+somebody else and gets forwarded. Everything else dials *it*, and gets what MQTT would have given
+them: presence, addressing by name, and any peer able to call any other.
 
 ```typescript
 const bus = new RpcServer({ name: 'bus', transports: [{ port: 8080 }] })
@@ -120,9 +141,14 @@ const oven = await cellSrv.proxy<Oven>('oven', 'ovenSrv')
 await oven.remote!.temperature()
 ```
 
-`proxy()` is the mirror of `RpcClient.proxy`. A peer that both serves and calls needs one object and
-one connection, rather than an `RpcServer` and an `RpcClient` under two names — which over MQTT
-would mean two broker sessions.
+Read the last two lines again, because they are the part that surprises people. `cellSrv` is a
+*server* — and it is calling out. `RpcServer.proxy()` takes the name of a namespace and the name of
+the peer holding it, and returns the same typed object `RpcClient.proxy()` would. The call leaves
+over the connection `cellSrv` already opened to the bus, the bus forwards it to `ovenSrv`, and the
+answer comes back the same way.
+
+Nothing here dialled `ovenSrv` directly. It may not even be dialable — it could be a browser tab.
+The bus is what they have in common, and that is enough.
 
 ### One peer, several links
 
@@ -150,8 +176,9 @@ target, so:
   that browser opened;
 - calling a peer on the bus goes out over the link `nodeSrv` already holds.
 
-What `proxy()` removed was not the second link but a *third*: before it, calling anything on the bus
-meant a separate `RpcClient` with its own connection to the bus and its own name on it.
+Which is why a peer that both serves and calls needs no `RpcClient` at all. Adding one to do the
+calling would open a *third* connection and put a second name on the network for what is really one
+program — and over MQTT, that means a second broker session too.
 
 ### Serving over a connection you open
 
