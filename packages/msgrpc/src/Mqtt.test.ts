@@ -218,3 +218,35 @@ test('a client built from an mqtt url connects through the on-demand transport',
     await client.close()
     await server.close()
 })
+
+test('one client watching two peers keeps their events apart', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = 'msgrpc/event-routing'
+    const first = new RpcServer({ name: 'routeA', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const second = new RpcServer({ name: 'routeB', transports: [{ brokerurl: BROKER_URL, prefix }] })
+    const plantA = new Plant()
+    const plantB = new Plant()
+    first.exposeClassInstance(plantA, 'plant')
+    second.exposeClassInstance(plantB, 'plant')
+    await first.ready()
+    await second.ready()
+
+    // One client and one transport across both peers, which is how the console watches a network.
+    const client = new RpcClient(undefined, { name: 'routeWatcher', transport: new MqttTransport('routeWatcher', BROKER_URL, { prefix }) })
+    await client.ready()
+    const fromA: string[] = []
+    const fromB: string[] = []
+    await (await client.proxy<Plant>('plant', 'routeA')).remote!.on('alarm', (value: string) => fromA.push(value))
+    await (await client.proxy<Plant>('plant', 'routeB')).remote!.on('alarm', (value: string) => fromB.push(value))
+
+    plantA.fire()
+    await waitFor(() => fromA.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    t.is(fromA.length, 1)
+    t.deepEqual(fromB, [], "one peer's event reached a subscription taken out on another")
+
+    await client.close()
+    await first.close()
+    await second.close()
+})

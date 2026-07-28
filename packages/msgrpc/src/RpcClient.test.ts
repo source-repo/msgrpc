@@ -4,7 +4,8 @@ import { EventEmitter } from 'events'
 import { RpcServer } from './RpcServer.js'
 import { RpcClient, RpcProxy } from './RpcClient.js'
 import { RpcError } from './RPC/RpcClientHandler.js'
-import { TransportEvent } from './RPC/Core.js'
+import { MessageType, TransportEvent } from './RPC/Core.js'
+import { RpcEventPayload, RpcMessageType } from './RPC/Messages.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 //import whyIsNodeRunning from 'why-is-node-running'
 
@@ -263,6 +264,85 @@ testWithContext.serial('ready() gives up instead of hanging when nothing is list
     const client = new RpcClient('http://localhost:3199', { readyTimeout: 500 })
     await t.throwsAsync(client.ready(), { message: /not ready within 500 ms/ })
     await client.close()
+})
+
+testWithContext.serial('an event reaches only the namespace it was taken out on', async (t) => {
+    // Both instances emit 'ping'. Handlers used to be keyed by event name alone, so each event
+    // went to every subscriber of that name whatever instance it came from.
+    const server = new RpcServer({ transports: [{ port: 3105 }] })
+    await server.ready()
+    const plant = new EventingRpc()
+    const boiler = new EventingRpc()
+    server.exposeClassInstance(plant, 'plant')
+    server.exposeClassInstance(boiler, 'boiler')
+    const client = new RpcClient('http://localhost:3105')
+    await client.ready()
+
+    const fromPlant: string[] = []
+    const fromBoiler: string[] = []
+    await (await client.proxy<EventingRpc>('plant')).remote!.on('ping', (value: string) => fromPlant.push(value))
+    await (await client.proxy<EventingRpc>('boiler')).remote!.on('ping', (value: string) => fromBoiler.push(value))
+
+    plant.fire('only-plant')
+    await waitFor(() => fromPlant.length === 1)
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    t.deepEqual(fromPlant, ['only-plant'])
+    t.deepEqual(fromBoiler, [], 'an event leaked into another namespace')
+
+    await client.close()
+    await server.close()
+})
+
+testWithContext.serial('unsubscribing one namespace leaves the other subscribed', async (t) => {
+    const server = new RpcServer({ transports: [{ port: 3106 }] })
+    await server.ready()
+    const plant = new EventingRpc()
+    const boiler = new EventingRpc()
+    server.exposeClassInstance(plant, 'plant')
+    server.exposeClassInstance(boiler, 'boiler')
+    const client = new RpcClient('http://localhost:3106')
+    await client.ready()
+
+    const fromPlant: string[] = []
+    const fromBoiler: string[] = []
+    const plantHandler = (value: string) => fromPlant.push(value)
+    const plantProxy = await client.proxy<EventingRpc>('plant')
+    await plantProxy.remote!.on('ping', plantHandler)
+    await (await client.proxy<EventingRpc>('boiler')).remote!.on('ping', (value: string) => fromBoiler.push(value))
+
+    await plantProxy.remote!.off('ping', plantHandler)
+    await waitFor(() => server.rpc.eventProxies.size === 1)
+
+    boiler.fire('still-here')
+    await waitFor(() => fromBoiler.length === 1)
+    plant.fire('should-be-gone')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+
+    t.deepEqual(fromBoiler, ['still-here'])
+    t.deepEqual(fromPlant, [], 'an unsubscribed namespace still received its event')
+
+    await client.close()
+    await server.close()
+})
+
+testWithContext.serial('an event that does not name its instance still reaches its subscriber', async (t) => {
+    // A peer that omits the emitting instance, which is what an older server sends.
+    const server = new RpcServer({ transports: [{ port: 3107 }] })
+    await server.ready()
+    server.exposeClassInstance(new EventingRpc(), 'eventing')
+    const client = new RpcClient('http://localhost:3107')
+    await client.ready()
+    const got: string[] = []
+    await (await client.proxy<EventingRpc>('eventing')).remote!.on('ping', (value: string) => got.push(value))
+
+    const unnamed: RpcEventPayload = { type: RpcMessageType.event, event: 'ping', params: ['unnamed'] }
+    await client.rpcClient!.receive({ type: MessageType.EventMessage, payload: unnamed }, '*')
+
+    t.deepEqual(got, ['unnamed'], 'an event without a path was dropped')
+
+    await client.close()
+    await server.close()
 })
 
 testWithContext.after(async (t) => {

@@ -14,6 +14,15 @@ import { v4 as uuidv4 } from 'uuid'
 
 export const defaultCallTimeout = 10000
 
+/**
+ * Identifies one subscription: which peer, which exposed instance, which event.
+ *
+ * Handlers used to be registered under the bare event name, so a client watching `alarm` on two
+ * namespaces - or on two peers over one MQTT transport - delivered each event to all of them. An
+ * empty source matches any peer, for a proxy created without a target.
+ */
+export const subscriptionKey = (source: string, namespace: string, event: string) => `${source}\u0000${namespace}\u0000${event}`
+
 export class RpcError extends Error {
     constructor(
         public code: RpcErrorCode,
@@ -67,8 +76,7 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
         const payload = message.payload
         if (!payload) return
         if (isEventMessage(payload)) {
-            if (this.eventEmitter instanceof EventEmitter) this.eventEmitter.emit(payload.event, ...payload.params)
-            this.emit(payload.event, payload.params)
+            this.deliverEvent(payload, source)
             return
         }
         if (isSuccessResponse(payload)) {
@@ -80,6 +88,31 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             // case the call can only be settled by its timeout.
             this.takePending(payload.id)?.reject(new RpcError(payload.code, payload.error?.message, payload.error?.stack))
         }
+    }
+
+    /**
+     * Routes an event to the handlers registered for that peer and that instance, rather than to
+     * everything listening for the name.
+     */
+    private deliverEvent(payload: RpcEventPayload, source?: string) {
+        if (this.eventEmitter instanceof EventEmitter) {
+            const from = source ?? ''
+            const keys = payload.path
+                ? [subscriptionKey(from, payload.path, payload.event), subscriptionKey('', payload.path, payload.event)]
+                : // A peer that does not name the emitting instance: deliver to every subscription
+                  // for this event whose peer matches, whatever namespace it was taken out on.
+                  this.eventEmitter
+                      .eventNames()
+                      .filter((name): name is string => typeof name === 'string')
+                      .filter((name) => {
+                          const [keySource, , keyEvent] = name.split('\u0000')
+                          return keyEvent === payload.event && (keySource === from || keySource === '')
+                      })
+            for (const key of new Set(keys)) this.eventEmitter.emit(key, ...payload.params)
+        }
+        // The handler's own emitter stays keyed by name: it is a firehose of everything this client
+        // receives, and its consumers read the path off the payload.
+        this.emit(payload.event, payload.params)
     }
 
     /**
@@ -163,13 +196,19 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                         return target[prop]
                     } else if (isEventFunction(prop)) {
                         target[prop] = (...args: unknown[]) => {
-                            ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(...args)
-                            // 'on' is the only form the server holds state for, so it is the only
-                            // one worth replaying after a reconnect.
-                            if (typeof args[0] === 'string') {
-                                const key = `${remote ?? ''} ${name} ${args[0]}`
-                                if (prop === 'on') this.subscriptions.set(key, { remote, instanceName: name, event: args[0] })
+                            const event = args[0]
+                            if (typeof event === 'string') {
+                                // Registered against this peer and this namespace, so a name shared
+                                // with another instance does not deliver to both.
+                                const key = subscriptionKey(remote ?? '', name, event)
+                                ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(key, ...args.slice(1))
+                                // 'on' is the only form the server holds state for, so it is the
+                                // only one worth replaying after a reconnect.
+                                if (prop === 'on') this.subscriptions.set(key, { remote, instanceName: name, event })
                                 else if (prop === 'off' || prop === 'removeListener') this.subscriptions.delete(key)
+                            } else {
+                                // removeAllListeners, setMaxListeners and friends take no event.
+                                ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(...args)
                             }
                             return this.call(remote, name, prop, args[0])
                         }
