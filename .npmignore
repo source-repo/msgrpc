@@ -1,8 +1,0 @@
-.git
-.vscode
-src
-.gitignore
-tsconfig.json
-.eslintrc.cjs
-Dockerfile.*
-*.tgz

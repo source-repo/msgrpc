@@ -1,0 +1,97 @@
+# @source-repo/msgrpc-cli
+
+Reads an [msgrpc](../msgrpc) contract out of TypeScript source, and checks it for breaking changes.
+
+```
+npm install --save-dev @source-repo/msgrpc-cli
+
+msgrpc extract --project tsconfig.json --out msgrpc.types.json
+msgrpc check   --project tsconfig.json --against msgrpc.types.json
+```
+
+## Declaring the contract
+
+The namespace is declared in the source, because static analysis cannot see the name a class is
+eventually exposed under at some `exposeClassInstance` call elsewhere. Methods opt in with `@rpc`,
+so the contract is the allow-list rather than everything on the prototype chain.
+
+```typescript
+import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+
+@rpcNamespace('plant', { version: '2' })
+export class Plant {
+    declare rpcEvents: { alarm: [message: string, severity: number] }
+
+    @rpc async writeSetpoint(value: number, mode?: 'auto' | 'manual') { ... }
+    async internalOnly() { ... }        // unmarked, so absent from the contract
+}
+```
+
+Events are declared as a property type rather than inferred from `emit()` calls, which cannot be
+read statically with any confidence.
+
+## What it refuses to describe
+
+Anything the type language cannot represent is **reported, never emitted as `any`**: generics,
+function parameters, `Map` and `Set`. A schema that quietly degrades on the parts it could not read
+still looks like protection while checking nothing, so `extract` writes no file when it hits one.
+
+```
+msgrpc: 3 types could not be described
+  plant.fetch return is generic (T), which has no runtime type to check (src/plant.ts:6)
+  plant.subscribe argument 0 is a function, which cannot be checked on the wire (src/plant.ts:12)
+  plant.lookup return is a Map, which MsgPack does not carry; use an object or an array (src/plant.ts:18)
+```
+
+`Date` and `Uint8Array` are values rather than encodings of them, because MsgPack carries both.
+Recursive types become named references.
+
+## Checking for breaking changes
+
+`check` compares the source against a stored contract using the **same comparison the server
+applies at runtime** to a caller declaring an older version, so a change that would refuse an
+existing peer is caught before it ships:
+
+```
+$ msgrpc check
+  plant.writeSetpoint argument 0 narrowed, so a value the caller may send is no longer accepted
+msgrpc: 1 breaking change against msgrpc.types.json
+$ echo $?
+1
+```
+
+Parameters may widen and returns may narrow; the reverse breaks callers. Adding an optional
+argument or field is safe, adding a required one is not.
+
+`extract --keep-history` moves the previous contract into `history` when the version changes, which
+is what lets both this check and the server recognise an older caller.
+
+## Browsing a live network
+
+```
+msgrpc console --broker mqtt://localhost:1883
+```
+
+Opens a console at `http://127.0.0.1:7300` listing every peer that is up, what each one exposes,
+a form to call it, and a live stream of its events.
+
+**Discovery costs nothing.** Every peer publishes retained presence, so subscribing to
+`<prefix>/presence/+` hands over everyone already online the moment the console connects. There is
+no scan, no probe and no configured list of hosts.
+
+A peer only appears in detail if it was started with `exposeIntrospection`; otherwise the console
+says so rather than guessing.
+
+The watch button toggles, and unwatching drops the server's subscription too rather than only
+silencing the browser — the subscriber count next to the event moves with it. Closing the console
+unsubscribes everything it held, so a debugging session does not leave listeners behind on servers
+that outlive it.
+
+The page is served from the CLI with no CDN, no bundler and no framework — one HTTP handler, an
+inlined page, and server-sent events for the live half. A plant network usually has no route to the
+internet, and a tool for looking at one should be something you can read in a sitting.
+
+**It binds to `127.0.0.1` by default.** The console can invoke any method its own credentials allow,
+so exposing it has to be a deliberate act: `--host 0.0.0.0` works and prints a warning saying what
+you have just done. It connects as an ordinary peer, so `--broker` credentials and signing apply to
+it like anything else.

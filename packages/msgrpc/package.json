@@ -1,0 +1,70 @@
+{
+  "name": "@source-repo/msgrpc",
+  "version": "2.0.0",
+  "description": "TypeScript RPC over WebSocket and MQTT, using classes as contracts shared by client and server",
+  "keywords": [
+    "rpc",
+    "mqtt",
+    "websocket",
+    "socket.io",
+    "typescript",
+    "msgpack"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "author": "anderswestberg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/source-repo/msgrpc.git"
+  },
+  "engines": {
+    "node": ">=18.17"
+  },
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "browser": {
+        "types": "./dist/index-web.d.ts",
+        "default": "./dist/index-web.js"
+      },
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "!dist/**/*.test.*"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "rimraf dist",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
+    "test": "npm run clean && npm run build && ava",
+    "prepack": "npm run clean && npm run build"
+  },
+  "dependencies": {
+    "@msgpack/msgpack": "^3.1.2",
+    "events": "^3.3.0",
+    "mqtt": "^5.10.1",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "uint8array-extras": "^1.1.0",
+    "uuid": "^14.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "ava": "^6.1.3",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3"
+  },
+  "ava": {
+    "files": [
+      "dist/**/*.test.js"
+    ],
+    "workerThreads": false,
+    "concurrency": 1
+  }
+}

@@ -1,0 +1,9 @@
+{
+    // Examples are documentation, not shipped code: type-checked but never emitted.
+    "extends": "../tsconfig.json",
+    "compilerOptions": {
+        "noEmit": true,
+        "rootDir": ".."
+    },
+    "include": ["."]
+}

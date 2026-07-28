@@ -1,0 +1,20 @@
+import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+
+@rpcNamespace('bad')
+export class Bad {
+    /** Generic: no runtime type exists to check. */
+    @rpc
+    async fetch<T>(id: string): Promise<T> {
+        return id as unknown as T
+    }
+    /** A callback cannot be checked on the wire. */
+    @rpc
+    async subscribe(handler: (value: number) => void) {
+        handler(1)
+    }
+    /** MsgPack does not carry a Map. */
+    @rpc
+    async lookup(): Promise<Map<string, number>> {
+        return new Map()
+    }
+}
