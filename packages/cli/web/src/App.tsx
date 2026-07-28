@@ -166,6 +166,18 @@ export const App = () => {
     return (
         <div className="app">
             <aside>
+                {/*
+                 * This page is a peer of the network, not a viewer of it - it hosts an RpcServer of
+                 * its own - so it says which peer it is, in the one place that is always visible.
+                 * The same name appears in the list below, marked, because that is where someone
+                 * looking at two consoles side by side will actually compare them.
+                 */}
+                <div className="identity">
+                    <span className="muted">this page is</span>
+                    <span className="mono name" title="the peer name this page serves and calls under">
+                        {me || '…'}
+                    </span>
+                </div>
                 <header>
                     <h1>Peers</h1>
                     <span className={`status ${status === 'connected' ? 'ok' : 'warn'}`}>{status}</span>
@@ -175,6 +187,7 @@ export const App = () => {
                     <button key={peer} className={`peer${peer === selected ? ' selected' : ''}`} onClick={() => void select(peer)}>
                         <span className={`dot${offline.has(peer) ? ' off' : ''}`} />
                         {peer}
+                        {peer === me && <span className="you">you</span>}
                     </button>
                 ))}
             </aside>
