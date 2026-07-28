@@ -15,7 +15,12 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         public options: Partial<ManagerOptions & SocketOptions> = {}
     ) {
         super('', sources)
-        this.open()
+        // Deferred by a microtask so whatever constructs this transport can finish wiring it
+        // before the link comes up. A resumed MQTT session is delivered its queued messages the
+        // instant it connects, and a frame arriving before the RPC handler is piped in would find
+        // no target and be dropped. A fresh session never exposes this, because nothing arrives
+        // that early.
+        queueMicrotask(() => void this.open())
     }
 
     override async close() {

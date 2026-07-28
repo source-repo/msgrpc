@@ -1,6 +1,6 @@
 import * as mqtt from 'mqtt'
 
-import { stringToUint8Array } from 'uint8array-extras'
+import { stringToUint8Array, uint8ArrayToBase64 } from 'uint8array-extras'
 import { GenericModule, IGenericModule, Message, MessageHeader, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, jsonCodec, msgPackCodec } from '../RPC/Codec.js'
 import type { IPublishPacket } from 'mqtt-packet'
@@ -100,6 +100,26 @@ export interface MqttTransportOptions {
     requestExpirySeconds?: number
     /** MQTT 5 only: which of this peer's channels to subscribe to. Defaults to all three. */
     channels?: Channel[]
+    /**
+     * MQTT 5 only. Join a shared subscription group so several processes can serve one peer name,
+     * with the broker distributing requests among them.
+     *
+     * Only the request channel is shared. A reply has to reach the requester waiting for it, and an
+     * event its particular subscriber, so sharing those would hand them to an arbitrary replica.
+     */
+    sharedGroup?: string
+    /**
+     * Distinguishes this replica's broker connection from its siblings'. A broker permits one
+     * connection per client id, and replicas share a peer name, so without this they would
+     * disconnect each other in a loop. Defaults to a random suffix.
+     */
+    replicaId?: string
+    /**
+     * MQTT 5 only: how long the broker keeps this peer's session after it disconnects. Bounds the
+     * queueing that makes a restart lossless, without leaving session state behind forever.
+     * Defaults to an hour for a persistent session and a minute otherwise.
+     */
+    sessionExpirySeconds?: number
 }
 
 export class MqttTransport extends GenericModule<Message, unknown, Message, unknown> {
@@ -116,6 +136,11 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     readonly protocol: 4 | 5
     readonly requestExpirySeconds: number
     readonly channels: Channel[]
+    readonly sharedGroup?: string
+    readonly replicaId: string
+    readonly sessionExpirySeconds: number
+    /** A replica must not speak for the whole group; see the constructor. */
+    readonly announcePresence: boolean
     readonly sign?: MessageSigner
     readonly verify?: MessageVerifier
     readonly replayGuard: ReplayGuard
@@ -144,6 +169,15 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.qos = options.qos ?? 1
         this.presence = options.presence ?? true
         this.persistentSession = options.persistentSession ?? false
+        this.sharedGroup = options.sharedGroup
+        this.replicaId = options.replicaId ?? uint8ArrayToBase64(globalThis.crypto.getRandomValues(new Uint8Array(6)))
+        // A replica keeps no session: its share of the queue would never be drained if it stayed
+        // down, and the broker would hold messages for a process that is not coming back.
+        this.sessionExpirySeconds = options.sessionExpirySeconds ?? (this.sharedGroup ? 0 : this.persistentSession ? 3600 : 60)
+        // Presence describes one connection. A replica's will would announce the whole shared name
+        // as offline when a single process stops, and its siblings' retained 'online' would fight
+        // with it. Replicas therefore observe presence without announcing their own.
+        this.announcePresence = this.presence && !this.sharedGroup
         this.mqttOptions = options.mqtt ?? {}
         this.sign = options.sign
         this.verify = options.verify
@@ -154,7 +188,15 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (!isSafeTopicPrefix(this.prefix)) throw new Error(`MqttTransport: unsafe topic prefix '${this.prefix}'`)
         if (!isSafeTopicSegment(this.name)) throw new Error(`MqttTransport: unsafe peer name '${this.name}'`)
         if (!isSafeTopicSegment(this.topic)) throw new Error(`MqttTransport: unsafe topic '${this.topic}'`)
-        this.open()
+        if (this.sharedGroup !== undefined && !isSafeTopicSegment(this.sharedGroup))
+            throw new Error(`MqttTransport: unsafe shared group '${this.sharedGroup}'`)
+        if (this.sharedGroup && this.protocol !== 5) throw new Error('MqttTransport: shared subscriptions need protocol 5')
+        // Deferred by a microtask so whatever constructs this transport can finish wiring it
+        // before the link comes up. A resumed MQTT session is delivered its queued messages the
+        // instant it connects, and a frame arriving before the RPC handler is piped in would find
+        // no target and be dropped. A fresh session never exposes this, because nothing arrives
+        // that early.
+        queueMicrotask(() => void this.open())
     }
 
     rpcTopic(peer: string) {
@@ -177,11 +219,17 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.client = mqtt.connect(this.url, {
             // A stable clientId is what lets the broker recognise this peer across a reconnect.
             // It used to be random per connection, so no session could ever be resumed.
-            clientId: `msgrpc-${this.name}`,
+            clientId: this.sharedGroup ? `msgrpc-${this.name}-${this.replicaId}` : `msgrpc-${this.name}`,
             protocolVersion: this.protocol,
             ...this.mqttOptions,
-            clean: this.mqttOptions.clean ?? !this.persistentSession,
-            will: this.presence
+            // MQTT 5 bounds a retained session with an expiry, so a client can queue across a blip
+            // without leaving state on the broker forever. 3.1.1 has no expiry, so it stays with
+            // the blunt choice between queueing forever and not queueing at all.
+            clean: this.mqttOptions.clean ?? (this.sharedGroup ? true : this.protocol === 5 ? false : !this.persistentSession),
+            ...(this.protocol === 5
+                ? { properties: { sessionExpiryInterval: this.sessionExpirySeconds, ...this.mqttOptions.properties } }
+                : {}),
+            will: this.announcePresence
                 ? { topic: this.presenceTopic(this.name), payload: Buffer.from(PRESENCE_OFFLINE), qos: this.qos, retain: true }
                 : this.mqttOptions.will
         })
@@ -205,11 +253,17 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.connected = true
         try {
             if (this.protocol === 5) {
-                for (const channel of this.channels) await this.client?.subscribeAsync(this.channelTopic(channel, this.topic), { qos: this.qos })
+                for (const channel of this.channels) {
+                    const topic = this.channelTopic(channel, this.topic)
+                    // Only requests are shared: replies and events must reach one specific peer.
+                    const filter = channel === 'req' && this.sharedGroup ? `$share/${this.sharedGroup}/${topic}` : topic
+                    await this.client?.subscribeAsync(filter, { qos: this.qos })
+                }
             } else await this.client?.subscribeAsync(this.rpcTopic(this.topic), { qos: this.qos })
             if (this.presence) {
+                // Observed even by replicas, which still need to know when their own peers depart.
                 await this.client?.subscribeAsync(this.presenceTopic('+'), { qos: this.qos })
-                await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, { qos: this.qos, retain: true })
+                if (this.announcePresence) await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, { qos: this.qos, retain: true })
             }
         } catch (e) {
             this.emit(TransportEvent.transportError, e)
@@ -485,7 +539,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.connected = false
         this.readyFlag = false
         if (!client) return
-        if (this.presence && client.connected) {
+        if (this.announcePresence && client.connected) {
             const topic = this.presenceTopic(this.name)
             try {
                 // A graceful goodbye, so peers release this one's subscriptions immediately instead

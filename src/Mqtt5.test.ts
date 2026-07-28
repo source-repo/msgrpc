@@ -2,6 +2,7 @@ import anyTest, { TestFn } from 'ava'
 import { connectAsync, MqttClient } from 'mqtt'
 import { decode as msgPackDecode, encode as msgPackEncode } from '@msgpack/msgpack'
 import { MqttTransport, RpcClient, RpcServer } from './index.js'
+import type { MqttTransport as MqttTransportType } from './Transports/MqttTransport.js'
 import { canonicalSignedBytesV5, createHmacSigner, createHmacVerifier, createNonce } from './RPC/Signing.js'
 import { FRAME_VERSION, MR } from './Transports/Mqtt5Frame.js'
 
@@ -408,4 +409,115 @@ test('a captured MQTT 5 frame cannot be replayed', async (t) => {
 
     await attacker.endAsync()
     await server.close()
+})
+
+// ------------------------------------------------------------------ replicas and sessions
+
+test('a shared subscription distributes requests across replicas', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = 'msgrpc/v5-shared'
+    const handled: string[] = []
+    class Work {
+        constructor(public replica: string) {}
+        async run() {
+            handled.push(this.replica)
+            return this.replica
+        }
+    }
+    // Two processes serving one peer name. Each needs its own broker connection, which is what
+    // replicaId is for: a broker permits one connection per client id.
+    const replicas = ['a', 'b'].map((id) => {
+        const server = new RpcServer({
+            name: 'replicaSrv',
+            transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: id }]
+        })
+        server.exposeClassInstance(new Work(id), 'work')
+        return server
+    })
+    for (const replica of replicas) await replica.ready()
+
+    const client = new RpcClient(undefined, {
+        name: 'shared-client',
+        defaultTarget: 'replicaSrv',
+        transport: new MqttTransport('shared-client', BROKER_URL, { prefix })
+    })
+    await client.ready()
+    const work = await client.proxy<Work>('work')
+    for (let i = 0; i < 12; i++) await work.remote!.run()
+
+    t.is(handled.length, 12, 'not every request was answered')
+    t.is(new Set(handled).size, 2, `both replicas should have taken work, got ${JSON.stringify(handled)}`)
+
+    await client.close()
+    for (const replica of replicas) await replica.close()
+})
+
+test('a replica does not announce presence for the whole group', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = 'msgrpc/v5-shared-presence'
+    // One replica stopping must not publish 'offline' for a name its siblings still serve.
+    const observer: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+    const presence: string[] = []
+    observer.on('message', (topic, payload) => presence.push(`${topic}=${payload.toString()}`))
+    await observer.subscribeAsync(`${prefix}/presence/#`)
+
+    const replica = new RpcServer({
+        name: 'quietSrv',
+        transports: [{ brokerurl: BROKER_URL, prefix, sharedGroup: 'workers', replicaId: 'solo' }]
+    })
+    await replica.ready()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    await replica.close()
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    t.deepEqual(presence, [], `a replica announced presence: ${JSON.stringify(presence)}`)
+
+    await observer.endAsync()
+})
+
+test('a persistent session delivers a request published while the server was down', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = 'msgrpc/v5-session'
+    const handled: unknown[] = []
+    class Recorder {
+        async record(value: unknown) {
+            handled.push(value)
+            return true
+        }
+    }
+    const start = async () => {
+        const server = new RpcServer({ name: 'sessionSrv', transports: [{ brokerurl: BROKER_URL, prefix }] })
+        // Exposed before awaiting ready(): a resumed session is handed its queued requests the
+        // moment it connects, so anything registered afterwards is registered too late and those
+        // requests come back ClassNotFound.
+        server.exposeClassInstance(new Recorder(), 'recorder')
+        await server.ready()
+        return server
+    }
+
+    // First run establishes the session; the broker remembers the subscription against the client id.
+    const first = await start()
+    t.is((first.transports[0] as MqttTransportType).sessionExpirySeconds, 3600, 'a server should keep its session across a restart')
+    await first.close()
+
+    // Published to a server that is not running. QoS 1 into a retained session means it queues.
+    const caller: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+    await caller.publishAsync(`${prefix}/req/sessionSrv`, Buffer.from(msgPackEncode(['while-down'])), {
+        qos: 1,
+        properties: {
+            responseTopic: `${prefix}/rsp/caller`,
+            correlationData: Buffer.from('sess-1'),
+            contentType: 'application/msgpack',
+            userProperties: { 'mr-v': '1', 'mr-src': 'caller', 'mr-kind': 'call', 'mr-path': 'recorder', 'mr-method': 'record' }
+        }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+
+    const second = await start()
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    t.deepEqual(handled, ['while-down'], 'the queued request was lost across the restart')
+
+    await caller.endAsync()
+    await second.close()
 })

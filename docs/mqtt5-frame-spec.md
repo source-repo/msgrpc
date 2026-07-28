@@ -4,10 +4,8 @@
 keeps the older `$`-delimited header for brokers that need it. Verified against a live broker with
 vanilla mqtt.js on the far side, in `src/Mqtt5.test.ts`.
 
-Not yet implemented, and independent of the frame layout: shared subscriptions for server replicas
-(a deployment subscribes `$share/<group>/...` itself; msgrpc has no option for it yet) and MQTT 5
-`sessionExpiryInterval`, which would let a client keep a session without leaving one on the broker
-forever.
+Shared subscriptions (`sharedGroup` / `replicaId`) and bounded sessions (`sessionExpirySeconds`)
+are implemented too.
 
 ## Why
 
@@ -202,6 +200,11 @@ that prefers JSON simply sets `contentType: application/json` and gets JSON repl
 - **Shared subscriptions suit stateless calls, not event subscriptions.** A client subscribing to
   events registers with whichever replica received the request, and only that replica will emit to
   it. Event fan-out across replicas needs shared state, and is out of scope here.
+- **A resumed session delivers its queue the instant it connects.** Instances therefore have to be
+  exposed before `ready()` is awaited; anything registered afterwards is too late for the requests
+  that were queued while the server was down, and those callers get `ClassNotFound`.
+- **Replicas do not announce presence.** One replica's will would declare the whole shared name
+  offline while its siblings were still serving, so they observe presence without publishing it.
 - **Duplicate suppression stays per-replica.** A QoS 1 redelivery that lands on a different replica
   after one dies would not be recognised as a repeat. Exactly-once across replicas needs a shared
   store.

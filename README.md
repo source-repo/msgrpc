@@ -378,9 +378,27 @@ server never sees a disconnect. A peer that closes gracefully announces `offline
 its retained value, so it leaves nothing behind on the broker.
 
 **Sessions.** Servers connect with a stable client id and a persistent session, so requests
-published while they restart are queued rather than lost. Clients use a clean session: a reply to
-a call that has already timed out is useless, and a persistent session per short-lived client
-accumulates state on the broker.
+published while they restart are queued rather than lost. Under MQTT 5 the session is bounded by
+`sessionExpirySeconds`, so it does not outlive the process indefinitely; under 3.1.1, which has no
+expiry, clients use a clean session instead.
+
+> **Expose before awaiting `ready()`.** A resumed session is handed its queued requests the moment
+> it connects. Anything exposed after `await server.ready()` is registered too late for them, and
+> those callers get `ClassNotFound`. Construct, expose, then await:
+>
+> ```typescript
+> const server = new RpcServer({ transports: [{ brokerurl }] })
+> server.exposeClassInstance(new Plant(), 'plant')   // before, not after
+> await server.ready()
+> ```
+
+**Replicas.** Set `sharedGroup` and several processes can serve one peer name, with the broker
+distributing requests among them. Each replica needs its own `replicaId`, because a broker permits
+one connection per client id. Only the request channel is shared - a reply has to reach the
+requester waiting for it. Replicas keep no session, since a dead replica's share of the queue would
+never be drained, and they observe presence without announcing it: one replica's will would
+otherwise declare the whole group offline. Event subscriptions still bind to the replica that
+handled them, so events do not fan out across a group.
 
 # Browser use
 
