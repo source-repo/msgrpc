@@ -25,8 +25,8 @@ npm install @source-repo/rpc
 ```
 
 ESM only, Node 18.17 or later, and it runs in the browser. Contracts can be extracted from your
-source and checked for breaking changes with [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli), which also serves
-a browser console for a live network and ships the bus as a container.
+source and checked for breaking changes with [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli), which also provides MCP
+and serves a browser console for a live network and ships the bus as a container.
 
 Upgrading from 1.x? [`CHANGELOG.md`](https://github.com/source-repo/rpc/blob/main/CHANGELOG.md) lists what breaks.
 

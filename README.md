@@ -7,7 +7,7 @@ TypeScript RPC over socket.io and MQTT 5, using classes as contracts shared by c
 | [`packages/rpc`](packages/rpc) | the library — start here |
 | [`packages/cli`](packages/cli) | `source-rpc`: extract a contract, check it against a build or a live device, and browse, tap, fake, record and bench a network |
 
-Formerly `msgrpc`. The packages and the command changed name in 3.0; **the protocol did not**. Topic
+The packages and the command changed name in 3.0; **the protocol did not**. Topic
 prefixes are still `msgrpc/v1` and `msgrpc/v2`, introspection is still the `msgrpc` namespace, and
 MQTT 5 user properties still carry the `mr-` prefix — renaming those would strand every deployed
 peer for no engineering gain.

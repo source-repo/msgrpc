@@ -184,6 +184,35 @@ test('a command whose caller has already given up is refused instead of run late
     await server.close()
 })
 
+test('a request for a peer the far end cannot reach is answered, not dropped', async (t) => {
+    // The other half of the switch fix, and the last of the three silent drops. A sender whose own
+    // switch has no route now fails at once; a sender whose route ends at a peer that cannot carry
+    // it any further used to get nothing at all - the frame went out, the far end reported an
+    // unroutable event to whoever was watching *it*, and the caller waited out its full timeout.
+    const bus = new RpcServer({ name: peer('lonelyBus'), transports: [{ port: 3815 }] })
+    await bus.ready()
+
+    const client = new RpcClient('http://localhost:3815', { name: peer('hopeful'), callTimeout: 8000 })
+    await client.ready()
+    const absent = await client.proxy<Plant>('plant', 'a-peer-that-is-not-here')
+
+    const started = Date.now()
+    const failure = await t.throwsAsync(absent.remote!.add(1, 2))
+    const took = Date.now() - started
+
+    // The code says the command certainly did not run, which is the useful thing to know: the bus
+    // never handed it on. An UnknownOutcome inferred from silence would have been weaker and later.
+    t.true(/TransportError/.test(String(failure?.message)), `expected a transport error, got: ${failure?.message}`)
+    t.true(/no route to 'a-peer-that-is-not-here'/.test(String(failure?.message)), failure?.message)
+    // And it names the peer that refused, since a caller several hops away otherwise learns only
+    // that something between here and there said no.
+    t.true(String(failure?.message).includes(peer('lonelyBus')), failure?.message)
+    t.true(took < 3000, `waited ${took} ms, so it was still the timeout answering rather than the bus`)
+
+    await client.close()
+    await bus.close()
+})
+
 test('a switch refuses a message it cannot place, rather than dropping it', async (t) => {
     // It used to drop the message and return. Reporting it was added first, which helped whoever
     // was watching the events and nobody else: the sender's promise still resolved, so a caller

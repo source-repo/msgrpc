@@ -6,6 +6,7 @@ import { FrameCodec, jsonCodec, msgPackCodec } from '../RPC/Codec.js'
 import type { IPublishPacket } from 'mqtt-packet'
 import { MessageSigner, MessageVerifier, RpcIdentity } from '../RPC/Auth.js'
 import { canonicalSignedBytes, canonicalSignedBytesV5, createNonce, ReplayGuard } from '../RPC/Signing.js'
+import { refuseDelivery } from '../RPC/Undeliverable.js'
 import {
     Channel,
     correlationToBytes,
@@ -610,7 +611,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             await this.send(message, source, target)
             return
         }
-        this.emit(TransportEvent.unroutable, { source, target })
+        await refuseDelivery(this, message, source, target, 'TransportError', `no route to '${target}'`)
     }
 
     /** Peers this transport collects answers for, so the subscriptions are made once and dropped once. */

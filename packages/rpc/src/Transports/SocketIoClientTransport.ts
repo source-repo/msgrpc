@@ -1,6 +1,7 @@
 import { io, ManagerOptions, Socket, SocketOptions } from 'socket.io-client'
 import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
+import { refuseDelivery } from '../RPC/Undeliverable.js'
 import { isUsablePeerName, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate } from './Presence.js'
 
 export class SocketIoClientTransport extends GenericModule<Message, unknown, Message, unknown> {
@@ -221,7 +222,7 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             const carrier = this.peerRegistry.get(target)
             if (carrier && carrier !== (this as IGenericModule) && carrier.isTransport()) {
                 if (hops + 1 > MAX_RELAY_HOPS) {
-                    this.emit(TransportEvent.unroutable, { source, target, reason: `over ${MAX_RELAY_HOPS} relays` })
+                    await refuseDelivery(this, message, source, target, 'TransportError', `over ${MAX_RELAY_HOPS} relays`)
                     return
                 }
                 const relay = carrier as { forward?: (message: Message, source: string, target: string, hops: number) => void }
@@ -234,7 +235,7 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             await this.send(message, source, target)
             return
         }
-        this.emit(TransportEvent.unroutable, { source, target })
+        await refuseDelivery(this, message, source, target, 'TransportError', `no route to '${target}'`)
     }
 
     /** Send over this link with a hop count, for a frame being passed along rather than originated. */

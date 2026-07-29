@@ -154,7 +154,13 @@ test.serial('a relay rule decides per connection, and covers the reply', async (
     const error = await t.throwsAsync(async () => (await denied.proxy<Boiler>('boiler')).remote!.whoAnswered())
     // Refused, not quietly served by the hub's own instance - that would be the misdelivery again,
     // handed to a caller who was specifically not allowed to reach the peer it asked for.
-    t.is((error as { code?: string }).code, 'Timeout')
+    //
+    // Forbidden rather than Timeout, which is what this was before undeliverable requests were
+    // answered: a refusal is a decision, and the caller hears it now instead of inferring it from
+    // silence. It tells a caller nothing it could not already see - presence announces who is on
+    // the bus to everyone connected, so "that peer exists but you may not reach it" was always
+    // visible; what was missing was being told.
+    t.is((error as { code?: string }).code, 'Forbidden')
     t.true(refused.length >= 1, 'a refused relay should be reported as unroutable')
 
     await allowed.close()
@@ -176,7 +182,10 @@ test.serial('relay false forwards nothing', async (t) => {
     // being allowed to reach them.
     await waitFor(() => (caller.options.transport as SocketIoClientTransport).knownPeers.has(peer('hidden4')))
     const error = await t.throwsAsync(async () => (await caller.proxy<Boiler>('boiler')).remote!.whoAnswered())
-    t.is((error as { code?: string }).code, 'Timeout')
+    // Told so, rather than left to time out. Knowing who is there still is not permission to reach
+    // them - the refusal is the same, it just arrives at once and says which peer it is about.
+    t.is((error as { code?: string }).code, 'Forbidden')
+    t.regex(String((error as Error).message), /not permitted to relay to/)
 
     await caller.close()
     await hidden.close()

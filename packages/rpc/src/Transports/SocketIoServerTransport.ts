@@ -4,6 +4,7 @@ import { createServer as createHttpsServer, Server as HttpsServer, type ServerOp
 import { GenericModule, IGenericModule, Message, TransportEvent, type RelayedFrame } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
+import { refuseDelivery } from '../RPC/Undeliverable.js'
 import { isUsablePeerName, MAX_CARRIED_PEERS, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
@@ -198,7 +199,9 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
                 // Deliberately not falling through to local handling: running a call meant for a
                 // peer this caller is not allowed to reach would answer it with the wrong
                 // implementation and call that a success.
-                this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: 'relay refused' })
+                // Refused rather than dropped: this is a decision, and the caller is entitled to
+                // hear it now instead of inferring it from ten seconds of silence.
+                await refuseDelivery(this, message, header.source, header.target, 'Forbidden', `not permitted to relay to '${header.target}'`)
                 return
             }
             // Announced here rather than in forward(), so that a frame crossing to another
@@ -213,7 +216,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             if (elsewhere === (this as IGenericModule)) {
                 const hops = (header.hops ?? 0) + 1
                 if (hops > MAX_RELAY_HOPS) {
-                    this.emit(TransportEvent.unroutable, { source: header.source, target: header.target, reason: `over ${MAX_RELAY_HOPS} relays` })
+                    await refuseDelivery(this, message, header.source, header.target, 'TransportError', `over ${MAX_RELAY_HOPS} relays`)
                     return
                 }
                 this.forward(message, header.source, header.target, hops)
@@ -226,9 +229,10 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             await this.send(message, header.source, header.target)
             return
         }
-        // Neither this server nor anywhere it can forward to. Reported rather than dropped in
-        // silence, which the caller only ever saw as an unexplained timeout.
-        this.emit(TransportEvent.unroutable, { source: header.source, target: header.target })
+        // Neither this server nor anywhere it can forward to. Answered rather than dropped: it was
+        // reported here before, which told whoever was watching this server and left the caller
+        // with an unexplained timeout, since nothing was ever coming back.
+        await refuseDelivery(this, message, header.source, header.target, 'TransportError', `no route to '${header.target}'`)
     }
 
     /**
