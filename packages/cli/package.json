@@ -55,11 +55,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/source-repo/msgrpc.git",
+    "url": "git+https://github.com/source-repo/rpc.git",
     "directory": "packages/cli"
   },
-  "homepage": "https://github.com/source-repo/msgrpc/tree/main/packages/cli#readme",
+  "homepage": "https://github.com/source-repo/rpc/tree/main/packages/cli#readme",
   "bugs": {
-    "url": "https://github.com/source-repo/msgrpc/issues"
+    "url": "https://github.com/source-repo/rpc/issues"
   }
 }
