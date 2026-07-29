@@ -55,6 +55,21 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **`msgrpc check --peer`** points the build-time check at a device. `check` against source catches a
+  change before it ships; what it could not answer is the question asked on site - the contract says
+  this device offers `writeSetpoint(value, mode?)`, is that what the box on the wall is running? The
+  peer describes itself and the answer runs through **the same comparison** the server applies to a
+  caller declaring an older version, so a device behind its own contract is reported in exactly the
+  words a stale caller would have got, and CI and the site agree about what "breaking" means.
+  - A namespace the peer does not serve at all is reported apart from one that changed, and **a peer
+    running without a schema is reported as unchecked rather than as passing**. It describes its
+    method names and nothing else, and calling that "no breaking changes" would be the most
+    useful-sounding lie available.
+- **`msgrpc diff <peerA> <peerB>`** for the question that follows: why does cell 3 behave differently
+  from cell 2? Contract versions, methods one has and the other does not, signatures that changed and
+  events one no longer emits, side by side. Signatures are compared as they read rather than
+  structurally, because the answer is read by a person standing in front of two cabinets. Exits 1 on
+  any difference, so a script can assert that two cells match.
 - **`msgrpc record` and `msgrpc replay`.** The tap already produces correlated, self-describing
   frames, so a recording is that stream in a file - jsonl, so `grep`, `jq` and `wc -l` work on it,
   and appended as frames arrive so a process killed mid-session still leaves what it saw. What it is

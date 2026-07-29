@@ -150,7 +150,7 @@ for anywhere else that acts immediately after `ready()`.
 Not built: replaying events at a device, which would be a different thing - sending a device its own
 output back. Recorded, though, so a later comparison could use them.
 
-## 6. Contract conformance against a live peer
+## 6. Contract conformance against a live peer — done in msgrpc-cli 2.5.0
 
 `check` today is source-vs-file. Add peer-vs-file:
 

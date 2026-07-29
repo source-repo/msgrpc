@@ -18,6 +18,7 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 msgrpc mcp       serve the network to an MCP client over stdio
 msgrpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
+msgrpc diff      compare what two live peers expose
 msgrpc record    write what the network is carrying to a file
 msgrpc replay    send a recording's calls at a peer and compare the answers
 
@@ -32,6 +33,7 @@ msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--project <tsconfig.json>` | extract, check | `tsconfig.json` | the project to read |
 | `--out <file>` | extract | `msgrpc.types.json` | where to write the contract |
 | `--against <file>` | check | `msgrpc.types.json` | the contract to compare against |
+| `--peer <name>` | check | — | ask a live peer what it serves instead of reading source; needs `--broker`/`--hub` |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
 | `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883` |
 | `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
@@ -155,6 +157,61 @@ the caller receives.
 
 `extract --keep-history` moves the previous contract into `history` when the version changes, which
 is what lets both this check and the server recognise an older caller.
+
+### Checking the device rather than the build
+
+`check` against source catches a change before it ships. What it cannot answer is the question asked
+on site: the contract says this device offers `writeSetpoint(value, mode?)` — is that what the box on
+the wall is actually running?
+
+```
+$ msgrpc check --peer plantServer --against plant.types.json --hub http://bus:8080
+  plant.writeSetpoint argument 0 narrowed, so a value the caller may send is no longer accepted
+  plant.read no longer exists
+  plant.event alarm is no longer emitted, so a subscription to it would never fire
+msgrpc: 3 breaking changes between plant.types.json and plantServer
+$ echo $?
+1
+```
+
+The peer describes itself and the answer runs through **the same comparison** the server applies to
+a caller declaring an older version — so a device behind its own contract is reported in exactly the
+words a stale caller would have got, and `check` in CI and `check --peer` on site agree about what
+"breaking" means.
+
+A namespace the peer does not serve at all is reported apart from one that changed. **A peer running
+without a schema is reported as unchecked, not as passing**: it describes its method names and
+nothing else, and calling that "no breaking changes" would be the most useful-sounding lie available.
+
+## diff
+
+Why does cell 3 behave differently from cell 2? Usually because one of them is running last season's
+firmware.
+
+```
+$ msgrpc diff cell2 plantServer --hub http://bus:8080
+cell2  vs  plantServer
+
+  plant contract version
+    cell2: 3
+    plantServer: 4
+
+  plant.read
+    cell2: read(): { celsius: number(0..100), bar: number(0..10) }
+    plantServer: —
+
+  plant.writeSetpoint
+    cell2: writeSetpoint(value: number(0..2000), mode?: "auto" | "manual"): boolean
+    plantServer: writeSetpoint(value: number(0..500), mode?: "auto" | "manual"): boolean
+
+  plant event alarm
+    cell2: emitted
+    plantServer: —
+```
+
+Signatures are compared as they read rather than structurally, because the answer is going to be
+read by a person standing in front of two cabinets. It exits 1 when anything differs, so a script
+can assert that two cells match; `--json` gives the same as data.
 
 ## broker
 

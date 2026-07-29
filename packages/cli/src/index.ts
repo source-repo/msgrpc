@@ -9,6 +9,7 @@ import { startMcp } from './mcp.js'
 import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
+import { checkPeer, diffPeers } from './conform.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -27,6 +28,7 @@ const usage = `msgrpc <command> [options]
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
 
+  diff      compare what two live peers expose, when one of them behaves differently
   serve     stand a peer up from a contract: answers every method, refuses what it would refuse
   record    write what the network is carrying to a file, until Ctrl-C
   replay    send a recording's calls at a peer and compare the answers
@@ -41,6 +43,12 @@ const usage = `msgrpc <command> [options]
     --out <file>                default ./msgrpc.types.json   (extract)
     --against <file>            default ./msgrpc.types.json   (check)
     --keep-history              move the previous contract into history before writing
+    --peer <name>               (check) ask a live peer what it serves instead of reading source
+                                needs --broker or --hub
+
+  diff <peerA> <peerB>
+    --broker / --hub / --prefix / --timeout / --name / --sign as above
+    --json                      machine-readable output
 
   peers / describe / call / watch
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
@@ -433,6 +441,83 @@ const runReplay = async (argv: string[]) => {
     return summary.differed || summary.failed ? 1 : 0
 }
 
+/**
+ * The build-time check pointed at a device: is the box on the wall running the contract its callers
+ * were built against?
+ */
+const runCheckPeer = async (argv: string[], peer: string) => {
+    const against = resolve(argument(argv, '--against', 'msgrpc.types.json'))
+    let stored: RpcSchema
+    try {
+        stored = readSchema(against)
+    } catch {
+        process.stderr.write(`msgrpc check: cannot read ${against}\n`)
+        return 1
+    }
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'check', 'cli')
+    let report
+    try {
+        report = await checkPeer({ ...network, peer, stored, wait: Number(argument(argv, '--wait', '5000')) })
+    } catch (e) {
+        process.stderr.write(`msgrpc check: ${e instanceof Error ? e.message : String(e)}\n`)
+        return 1
+    }
+
+    if (argv.includes('--json')) {
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+        return report.problems.length || report.missing.length ? 1 : 0
+    }
+    for (const name of report.missing) process.stderr.write(`  ${name} is not served by ${peer}\n`)
+    for (const problem of report.problems) process.stderr.write(`  ${problem.namespace}.${problem.where} ${problem.reason}\n`)
+    // Said, and not counted as a pass: a peer running without a schema cannot be checked, and
+    // reporting "no breaking changes" about one would be a lie of the most useful-sounding kind.
+    for (const name of report.undescribed) process.stderr.write(`  ${name} is served without a contract, so nothing about it was checked\n`)
+
+    const count = report.problems.length + report.missing.length
+    if (count) {
+        process.stderr.write(`msgrpc: ${count} breaking change${count === 1 ? '' : 's'} between ${against} and ${peer}\n`)
+        return 1
+    }
+    process.stdout.write(`msgrpc: ${peer} serves ${report.checked.length ? report.checked.join(', ') : 'nothing'} compatibly with ${against}\n`)
+    return 0
+}
+
+/** What two live peers offer differently, for when one cell behaves unlike the next. */
+const runDiff = async (argv: string[]) => {
+    const [, left, right] = positionals(argv)
+    if (!left || !right) {
+        process.stderr.write('msgrpc diff: give it two peers\n')
+        return 1
+    }
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'diff', 'cli')
+    let report
+    try {
+        report = await diffPeers({ ...network, left, right, wait: Number(argument(argv, '--wait', '5000')) })
+    } catch (e) {
+        process.stderr.write(`msgrpc diff: ${e instanceof Error ? e.message : String(e)}\n`)
+        return 1
+    }
+    if (argv.includes('--json')) {
+        process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+        return report.differences.length ? 1 : 0
+    }
+    if (!report.differences.length) {
+        process.stdout.write(`msgrpc diff: ${left} and ${right} expose the same thing\n`)
+        return 0
+    }
+    process.stdout.write(`${left}  vs  ${right}\n`)
+    for (const difference of report.differences) {
+        // Dotted for a method, spaced for the rest: `plant.read` is how you would say it, and
+        // `plant.contract version` is not.
+        const identifier = difference.member && /^[A-Za-z_$][\w$]*$/.test(difference.member)
+        const what = difference.member ? `${difference.namespace}${identifier ? '.' : ' '}${difference.member}` : difference.namespace
+        process.stdout.write(`\n  ${what}\n    ${left}: ${difference.left ?? '—'}\n    ${right}: ${difference.right ?? '—'}\n`)
+    }
+    // A difference is the finding, not a failure of the command - but an exit code lets a script
+    // assert that two cells match.
+    return 1
+}
+
 const runBroker = async (argv: string[]) => {
     const port = Number(argument(argv, '--port', '8080'))
     const upstream = argumentList(argv, '--upstream')
@@ -541,6 +626,18 @@ const main = () => {
     }
     if (command === 'serve') {
         void runFake(argv).catch(fail)
+        return
+    }
+    if (command === 'diff') {
+        void runDiff(argv)
+            .then((code) => process.exit(code))
+            .catch(fail)
+        return
+    }
+    if (command === 'check' && argument(argv, '--peer', '')) {
+        void runCheckPeer(argv, argument(argv, '--peer', ''))
+            .then((code) => process.exit(code))
+            .catch(fail)
         return
     }
     if (command === 'record') {
