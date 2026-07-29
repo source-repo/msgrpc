@@ -105,7 +105,10 @@ jobs:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               run: |
                   version=$(node -p "require('./package.json').version")
-                  if npm view "@source-repo/rpc@${version}" version >/dev/null 2>&1; then
+                  # Asked of the registry directly rather than through `npm view`, which reads the
+                  # .npmrc setup-node wrote and fails confusingly when NPM_TOKEN is unset - turning
+                  # "already published, nothing to do" into "try to publish without credentials".
+                  if curl -fsSL -o /dev/null "https://registry.npmjs.org/@source-repo%2frpc/${version}"; then
                     echo "@source-repo/rpc@${version} is already published"
                   else
                     npm publish --access public --provenance
@@ -116,7 +119,7 @@ jobs:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
               run: |
                   version=$(node -p "require('./package.json').version")
-                  if npm view "@source-repo/rpc-cli@${version}" version >/dev/null 2>&1; then
+                  if curl -fsSL -o /dev/null "https://registry.npmjs.org/@source-repo%2frpc-cli/${version}"; then
                     echo "@source-repo/rpc-cli@${version} is already published"
                   else
                     npm publish --access public --provenance
