@@ -1,0 +1,75 @@
+# Build, lint, typecheck and test, with a real MQTT broker alongside.
+#
+# The broker is the point. Roughly a third of this suite talks to one, and those tests skip
+# themselves when none is reachable - which is right on a laptop and wrong here, because a run that
+# reports itself green having quietly skipped every MQTT test is the run somebody trusts.
+# SOURCE_RPC_REQUIRE_BROKER turns that skip into a failure, so the broker cannot silently be absent.
+name: CI
+
+on:
+    push:
+        branches: [main]
+    pull_request:
+
+jobs:
+    test:
+        runs-on: ubuntu-latest
+
+        services:
+            # The same broker and version as docker-compose/docker-compose.yml, so a failure here is
+            # reproducible with one command locally rather than only on a runner.
+            emqx:
+                image: emqx/emqx:5.9.3
+                ports:
+                    - 1883:1883
+
+        env:
+            MSGRPC_TEST_BROKER: mqtt://localhost:1883
+            # Without this the suite would pass on a runner whose broker never came up.
+            SOURCE_RPC_REQUIRE_BROKER: '1'
+
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - run: npm ci
+
+            # A service container is started before the job, not necessarily *ready* before it: EMQX
+            # takes a few seconds to open 1883. Waiting here rather than lengthening every test's
+            # connect timeout keeps the wait in one place, and fails with a clear message if the
+            # broker never arrives - rather than as a dozen puzzling test failures.
+            - name: Wait for the broker
+              run: |
+                  node -e '
+                    const net = require("net")
+                    const deadline = Date.now() + 60000
+                    const attempt = () => {
+                      const socket = net.connect(1883, "127.0.0.1")
+                      socket.once("connect", () => { socket.end(); console.log("broker is up"); process.exit(0) })
+                      socket.once("error", () => {
+                        socket.destroy()
+                        if (Date.now() > deadline) { console.error("no MQTT broker on 1883 after 60s"); process.exit(1) }
+                        setTimeout(attempt, 500)
+                      })
+                    }
+                    attempt()
+                  '
+
+            # Before lint and typecheck: the CLI reads the library's types from its build output, so
+            # neither can say anything useful until the library has been built once.
+            - run: npm run build
+
+            - run: npm run lint
+
+            - run: npm run typecheck
+
+            # The contracts in the repository are extracted from source and committed. This is what
+            # catches a service whose shape changed without `npm run contract` being run after it.
+            - name: Check the committed contracts
+              run: npm run check:contract --workspace=@source-repo/rpc-cli
+
+            - run: npm test

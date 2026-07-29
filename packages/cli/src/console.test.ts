@@ -29,7 +29,13 @@ interface Context {
 const test = anyTest as TestFn<Context>
 
 test.before(async (t) => {
-    t.context = { skipped: !(await brokerAvailable()) }
+    const available = await brokerAvailable()
+    // Skipping is right on a laptop with no broker and wrong everywhere it matters: a suite that
+    // reports itself green having quietly run none of its MQTT tests is worse than one that fails,
+    // because it is the version somebody trusts. CI sets this, so the skip cannot happen unnoticed.
+    if (!available && process.env.SOURCE_RPC_REQUIRE_BROKER)
+        throw new Error(`SOURCE_RPC_REQUIRE_BROKER is set, but no MQTT broker answered at ${BROKER_URL} - these tests must not be skipped here`)
+    t.context = { skipped: !available }
 })
 
 /**
