@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
-import { MessageSigner } from './RPC/Auth.js'
+import { MessageSigner, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
@@ -48,6 +48,15 @@ export interface RpcClientOptions {
      * on rather than switching it off.
      */
     allowInsecureTls?: boolean
+    /**
+     * A certificate authority to trust, on top of the system ones, when dialling an `https://`,
+     * `wss://` or `mqtts://` peer.
+     *
+     * This is the answer for a plant that issues its own certificates, and it is the one to reach
+     * for before `allowInsecureTls`: verification stays on, so a server presenting anything this
+     * does not vouch for is still refused.
+     */
+    ca?: TrustedCertificateAuthority
 }
 
 export interface RpcProxy<T> {
@@ -113,7 +122,12 @@ export class RpcClient extends EventEmitter {
         // passing one had no effect at all.
         let transport = this.options.transport
         if (!transport) {
-            const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
+            const socketOptions = {
+                ...(this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}),
+                // The socket.io typings narrow `ca` to a string, while the runtime takes what Node's
+                // tls does. Passing the bytes of a PEM is the ordinary thing readFileSync gives you.
+                ...(this.options.ca ? { ca: this.options.ca as unknown as string } : {})
+            }
             if (this.url?.startsWith('http') || this.url?.startsWith('ws'))
                 transport = new SocketIoClientTransport(this.options.name, this.url, undefined, socketOptions, true, this.options.allowInsecureTls)
             else if (this.url?.startsWith('mqtt')) {
@@ -122,7 +136,10 @@ export class RpcClient extends EventEmitter {
                 // mqtt:// url is actually used.
                 const { MqttTransport } = await import('./Transports/MqttTransport.js')
                 transport = new MqttTransport(this.options.name, this.url, {
-                    mqtt: (this.options.credentials ?? {}) as IClientOptions,
+                    mqtt: {
+                        ...((this.options.credentials ?? {}) as IClientOptions),
+                        ...(this.options.ca ? { ca: this.options.ca as IClientOptions['ca'] } : {})
+                    },
                     sign: this.options.sign,
                     allowInsecureTls: this.options.allowInsecureTls
                 })

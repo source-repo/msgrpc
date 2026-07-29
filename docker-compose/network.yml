@@ -31,7 +31,7 @@ services:
     # The bus. Peers that cannot share an MQTT broker - a browser page above all, which cannot
     # listen at all - dial this instead and become reachable by name.
     bus:
-        image: sourcerepo/rpc-cli:3
+        image: ghcr.io/source-repo/rpc-cli:3
         container_name: source-rpc-bus
         restart: unless-stopped
         command: ['broker', '--name', 'bus']
@@ -46,7 +46,7 @@ services:
     # The CLI, alive in a container with a port open. Same image as the bus, different command:
     # it joins the bus as a peer and serves the browser console on 7844.
     console:
-        image: sourcerepo/rpc-cli:3
+        image: ghcr.io/source-repo/rpc-cli:3
         container_name: source-rpc-console
         restart: unless-stopped
         depends_on: [bus, emqx]

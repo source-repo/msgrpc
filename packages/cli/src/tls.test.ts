@@ -10,8 +10,7 @@ import {
     defaultSecureWebSocketPort,
     defaultWebPort,
     defaultWebSocketPort,
-    RpcServer,
-    SocketIoClientTransport
+    RpcServer
 } from '@source-repo/rpc'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
@@ -103,15 +102,38 @@ test('a console given a certificate serves https, and reports the url that works
     rmSync(directory, { recursive: true, force: true })
 })
 
+test('a peer given the wrong certificate authority is refused, not quietly accepted', async (t) => {
+    const server = selfSigned()
+    const stranger = selfSigned()
+    const running = await startBroker({ port: 7524, name: peer('strictBus'), tls: server.tls })
+
+    // Trusting an authority that did not issue this server's certificate has to fail. If this ever
+    // passes, `ca` is being ignored and every caller that thought it had pinned a trust root has not.
+    const client = new RpcServer({
+        name: peer('wrongCa'),
+        transports: [{ connect: 'https://127.0.0.1:7524', ca: stranger.tls.cert }],
+        readyTimeout: 3000
+    })
+    await t.throwsAsync(client.ready())
+
+    await client.close()
+    await running.close()
+    rmSync(server.directory, { recursive: true, force: true })
+    rmSync(stranger.directory, { recursive: true, force: true })
+})
+
 test('a broker given a certificate serves wss, and a peer that trusts it gets through', async (t) => {
     const { directory, tls } = selfSigned()
     const running = await startBroker({ port: 7523, name: peer('tlsBus'), tls })
 
-    // The transport is built here rather than with `{ connect }`, because a private certificate
-    // authority has nowhere to go in ConnectServerOptions - `allowInsecureTls` would prove only
-    // that something answered, which is the opposite of what this test is for.
-    const trusted = new SocketIoClientTransport(peer('tlsPeer'), 'https://127.0.0.1:7523', [], { ca: tls.cert } as never)
-    const client = new RpcServer({ name: peer('tlsPeer'), transports: [trusted], readyTimeout: 10000 })
+    // `ca`, not `allowInsecureTls`: this trusts exactly the plant's own authority and refuses
+    // everything else, which is what a private trust root is for. Accepting any certificate would
+    // prove only that something answered, which is the opposite of what this test is for.
+    const client = new RpcServer({
+        name: peer('tlsPeer'),
+        transports: [{ connect: 'https://127.0.0.1:7523', ca: tls.cert }],
+        readyTimeout: 10000
+    })
     await client.ready()
 
     t.true(await client.awaitPeer(peer('tlsBus'), 8000), 'the bus never became addressable over TLS')

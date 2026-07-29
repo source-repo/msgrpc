@@ -26,9 +26,29 @@ npm install @source-repo/rpc
 
 ESM only, Node 18.17 or later, and it runs in the browser. Contracts can be extracted from your
 source and checked for breaking changes with [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli), which also serves
-a browser console for a live network.
+a browser console for a live network and ships the bus as a container.
 
 Upgrading from 1.x? [`CHANGELOG.md`](https://github.com/source-repo/rpc/blob/main/CHANGELOG.md) lists what breaks.
+
+### What is in it
+
+- **Two transports, one programming model.** socket.io for browsers and anything that dials out;
+  MQTT 5 for the plant, with a [documented wire format](https://github.com/source-repo/rpc/blob/main/docs/mqtt5-frame-spec.md)
+  that a plain MQTT.js peer can speak without any of this code.
+- **Events**, with subscriptions replayed after a reconnect so a dropped link does not go quiet.
+- **Contracts checked at runtime**, and compared between versions so a change that would break a
+  deployed caller fails a build rather than a plant.
+- **Command semantics for machinery.** A method says whether repeating it is free, harmless or
+  dangerous; a caller can tell *did not run* from *may have run*; a durable idempotency hook makes a
+  redelivered command run once; calls into one instance can be serialised. See [Commands](#commands).
+- **Deadlines that mean something.** A request carries the time its caller will wait, the broker is
+  given the same deadline, and a server refuses to run a command whose caller has already gone.
+- **Authentication both ways.** Per-connection tokens where there is a connection, per-frame
+  signing (HMAC or Ed25519) where there is not, with replay protection and pinned peer names.
+- **TLS**, including trusting a plant's own certificate authority rather than switching checks off.
+- **Introspection.** A server can describe itself — namespaces, methods, argument types, events.
+  That is what the browser console reads, and what lets the CLI serve a whole network to an AI
+  assistant over [MCP](https://modelcontextprotocol.io): list the peers, describe them, call them.
 
 ## Quick start
 
@@ -1031,7 +1051,8 @@ off or absent.
 A transport entry is `{ port, tls?, path? }` for a socket.io server, `{ server, path? }` to attach
 to an existing `http.Server`, `{ connect, path?, credentials? }` to serve over a connection this
 server opens, `{ brokerurl, ...MqttTransportOptions }` for MQTT, or a `Transport` instance you built
-yourself.
+yourself. A `connect` entry also takes `ca` — the authority to trust when the hub serves TLS — and
+`allowInsecureTls` for a development hub whose certificate nobody signed.
 
 `tls` takes the certificate and key that `https.createServer` takes, and its presence is what makes
 the server HTTPS - there is no useful HTTPS server without key material, which is why there is no
@@ -1050,6 +1071,7 @@ boolean for it.
 | `credentials` | — | socket.io handshake `auth`, or MQTT broker connect options |
 | `sign` | — | sign outgoing frames; only meaningful for MQTT |
 | `schema` | — | declares the contract version this client was built against |
+| `ca` | — | trust this certificate authority as well as the system ones; verification stays **on** |
 | `allowInsecureTls` | `false` | accept any certificate on an `https`/`wss`/`mqtts` link; unsafe by design, and it says so |
 
 ### MqttTransportOptions

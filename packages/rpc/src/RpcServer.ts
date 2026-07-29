@@ -1,5 +1,5 @@
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
-import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
+import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, withIntrospection } from './RPC/Introspection.js'
 import { ExposeOptions, RpcServerHandler } from './RPC/RpcServerHandler.js'
@@ -32,6 +32,12 @@ export interface ConnectServerOptions extends ServerOptions {
      * development hub with a self-signed certificate.
      */
     allowInsecureTls?: boolean
+    /**
+     * A certificate authority to trust when dialling the hub, on top of the system ones. What a
+     * plant issuing its own certificates wants, and what to reach for before `allowInsecureTls`:
+     * verification stays on, so anything this does not vouch for is still refused.
+     */
+    ca?: TrustedCertificateAuthority
 }
 
 export interface RpcServerOptions {
@@ -207,7 +213,9 @@ export class RpcServerBase implements IManageRpc {
                 [],
                 {
                     ...(connectOptions.path ? { path: connectOptions.path } : {}),
-                    ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
+                    ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {}),
+                    // The typings narrow `ca` to a string; the runtime takes what Node's tls does.
+                    ...(connectOptions.ca ? { ca: connectOptions.ca as unknown as string } : {})
                 },
                 true,
                 connectOptions.allowInsecureTls

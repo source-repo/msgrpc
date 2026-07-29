@@ -16,7 +16,9 @@
 # @source-repo/rpc-cli
 
 Tooling for [Source RPC](https://www.npmjs.com/package/@source-repo/rpc): read a contract out of TypeScript source, fail a build when it
-changes in a way that would break a deployed peer, and browse a live network in a browser.
+changes in a way that would break a deployed peer, browse a live network in a browser, and hand that
+same network to an AI assistant over [MCP](https://modelcontextprotocol.io) — list the peers,
+describe them, call them, stand a fake one up, watch what they say to each other.
 
 ```
 npm install --save-dev @source-repo/rpc-cli
@@ -45,6 +47,22 @@ source-rpc describe  what one peer exposes
 source-rpc call      call a method, and exit 1 if the peer refuses
 source-rpc watch     stream a peer's events as jsonl until Ctrl-C
 ```
+
+### The bus in a container
+
+The same image is every command above, because the entrypoint is the CLI. `broker` is the default,
+since a bus is infrastructure rather than something somebody is holding:
+
+```
+docker run -d -p 7843:7843 ghcr.io/source-repo/rpc-cli:3 broker --name bus
+docker run --rm -i ghcr.io/source-repo/rpc-cli:3 mcp --hub http://bus:7843   # stdio, for an MCP client
+```
+
+[`docker-compose/network.yml`](https://github.com/source-repo/rpc/blob/main/docker-compose/network.yml)
+runs a whole network — an MQTT broker, the bus, and the console watching both — and
+[In a container](#in-a-container) below covers tokens, ports and what to be careful about when
+publishing the console. Ports are `7843` for the bus and `7844` for the console, or `8843`/`8844`
+when they are given a certificate.
 
 | flag | commands | default | meaning |
 | --- | --- | --- | --- |
@@ -349,9 +367,9 @@ command:
 ```
 docker run -d -p 7843:7843 \
     -e SOURCE_RPC_TOKENS='{"3f9a…":"plantServer"}' \
-    sourcerepo/rpc-cli:3                                  # no command: the default is broker
+    ghcr.io/source-repo/rpc-cli:3                                  # no command: the default is broker
 
-docker run --rm -e SOURCE_RPC_TOKEN=3f9a… sourcerepo/rpc-cli:3 \
+docker run --rm -e SOURCE_RPC_TOKEN=3f9a… ghcr.io/source-repo/rpc-cli:3 \
     peers --hub http://bus:7843 --name plantServer        # any other command, same image
 ```
 

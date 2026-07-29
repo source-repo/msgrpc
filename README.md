@@ -33,3 +33,7 @@ the encrypted one. `source-rpc broker --cert … --key …` moves itself there w
 docker compose -f docker-compose/docker-compose.yml up -d   # the MQTT broker the tests need
 docker compose -f docker-compose/network.yml up -d          # a whole network: MQTT, a bus, a console
 ```
+
+The CLI is also an image — `ghcr.io/source-repo/rpc-cli` — whose entrypoint is the command itself,
+so one image is the bus, the console, the MCP server or the recorder depending on what it is asked
+to run.

@@ -11,6 +11,16 @@
  * method.
  */
 
+/**
+ * A certificate authority to trust when dialling a TLS peer, as PEM text or the bytes of one.
+ *
+ * The counterpart to `allowInsecureTls`, and the one to reach for first: a plant with its own
+ * authority wants *its* certificates trusted, not every certificate accepted. Verification stays
+ * on, so a server presenting anything this does not vouch for is still refused - which is the whole
+ * difference between a private trust root and no trust at all.
+ */
+export type TrustedCertificateAuthority = string | Uint8Array | Array<string | Uint8Array>
+
 /** An authenticated peer. */
 export interface RpcIdentity {
     /**
