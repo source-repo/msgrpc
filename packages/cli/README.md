@@ -24,9 +24,6 @@ npm install --save-dev @source-repo/rpc-cli
 
 The command is `source-rpc`. It was `msgrpc` before 3.0.
 
-```
-```
-
 ESM only, Node 18.17 or later.
 
 ## Commands
