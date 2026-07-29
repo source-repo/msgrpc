@@ -184,15 +184,19 @@ test('a command whose caller has already given up is refused instead of run late
     await server.close()
 })
 
-test('a switch says so when it cannot place a message', async (t) => {
-    // It used to drop the message and return, so the only evidence was a call that never came back.
+test('a switch refuses a message it cannot place, rather than dropping it', async (t) => {
+    // It used to drop the message and return. Reporting it was added first, which helped whoever
+    // was watching the events and nobody else: the sender's promise still resolved, so a caller
+    // learned nothing until its own timeout expired with nothing to explain it.
     const source = new GenericModule('source')
     const router = new Switch([source])
     const unroutable: unknown[] = []
     router.on(TransportEvent.unroutable, (event) => unroutable.push(event))
 
-    await router.receive(new Message(), 'someone', 'nobody-here')
+    await t.throwsAsync(router.receive(new Message(), 'someone', 'nobody-here'), { message: /no route to 'nobody-here'/ })
 
+    // Still reported as well as refused: a console watching for trouble wants to see it, and the
+    // caller that has just been told wants to know why.
     t.is(unroutable.length, 1, 'an unplaceable message vanished without a word')
     t.like(unroutable[0], { source: 'someone', target: 'nobody-here' })
 })

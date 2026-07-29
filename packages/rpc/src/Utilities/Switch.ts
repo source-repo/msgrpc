@@ -20,10 +20,18 @@ export class Switch extends GenericModule {
         if (!switchTarget) switchTarget = this.targetExists(target)
         if (!switchTarget) switchTarget = super.targetExists(target)
         if (!switchTarget) {
-            // Said out loud rather than dropped. A message the switch cannot place used to vanish
-            // here, and the only evidence was a call that never came back.
+            // Reported *and* refused. Reporting alone was not enough: the sender's promise still
+            // resolved, so a caller learned nothing until its own timeout expired ten seconds later
+            // with nothing to explain it - and the frame had been dropped here all along.
+            //
+            // The usual way to arrive here is calling a peer the moment ready() resolves. ready()
+            // means this peer's links are up, not that anyone else has announced themselves over
+            // them, and presence lands a moment later. Under load that moment is long enough to
+            // lose the race. RpcServerBase.awaitPeer is the wait that closes it.
             this.emit(TransportEvent.unroutable, { source, target, reason: 'no switch target for this peer' })
-            return
+            throw new Error(
+                `no route to '${target}': nothing here reaches that peer. If it has only just connected, its presence may not have arrived yet - await it before calling.`
+            )
         }
         await switchTarget.receive(message, source, target)
     }

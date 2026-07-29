@@ -366,4 +366,29 @@ export class RpcServerBase implements IManageRpc {
             await new Promise((res) => setTimeout(res, 10))
         }
     }
+
+    /**
+     * Wait until a peer is addressable from here, rather than calling it and hoping.
+     *
+     * `ready()` says this peer's own links are up. It says nothing about anyone else, and it cannot:
+     * presence arrives over those links a moment after they open, and over MQTT a retained
+     * announcement lands a moment after the subscription does. Calling in that moment reaches a
+     * switch with no route and fails.
+     *
+     * This is the wait that closes it, and the reason it is here rather than in each application is
+     * that everything built on this library has needed it - the CLI's verbs, its recorder, its
+     * replayer and its console each grew their own copy before this existed.
+     *
+     * Returns true when the peer is addressable, false if it never appeared. A `false` is worth
+     * reporting as "nobody is answering to that name" rather than retrying: the usual cause is a
+     * peer that is not running or is running under a different name.
+     */
+    async awaitPeer(peer: string, timeout = 5000) {
+        const deadline = Date.now() + timeout
+        for (;;) {
+            if (this.peers.get(peer)) return true
+            if (Date.now() >= deadline) return false
+            await new Promise((resolve) => setTimeout(resolve, 20))
+        }
+    }
 }
