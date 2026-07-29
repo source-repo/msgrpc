@@ -1,23 +1,23 @@
 {
-  "name": "msgrpc-workspace",
-  "private": true,
-  "description": "msgrpc and its contract-extraction CLI",
-  "type": "module",
-  "license": "MIT",
-  "workspaces": [
-    "packages/*"
-  ],
-  "scripts": {
-    "build": "npm run build --workspaces",
-    "clean": "npm run clean --workspaces",
-    "test": "npm run test --workspaces",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "lint": "eslint . --max-warnings 0"
-  },
-  "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "eslint": "^10.8.0",
-    "globals": "^15.0.0",
-    "typescript-eslint": "^8.0.0"
-  }
+    "name": "msgrpc-workspace",
+    "private": true,
+    "description": "msgrpc and its contract-extraction CLI",
+    "type": "module",
+    "license": "MIT",
+    "workspaces": [
+        "packages/*"
+    ],
+    "scripts": {
+        "build": "npm run build --workspace=@source-repo/rpc && npm run build --workspace=@source-repo/rpc-cli",
+        "clean": "npm run clean --workspaces",
+        "test": "npm run test --workspace=@source-repo/rpc && npm run test --workspace=@source-repo/rpc-cli",
+        "typecheck": "npm run typecheck --workspace=@source-repo/rpc && npm run typecheck --workspace=@source-repo/rpc-cli",
+        "lint": "eslint . --max-warnings 0"
+    },
+    "devDependencies": {
+        "@eslint/js": "^10.0.1",
+        "eslint": "^10.8.0",
+        "globals": "^15.0.0",
+        "typescript-eslint": "^8.0.0"
+    }
 }
