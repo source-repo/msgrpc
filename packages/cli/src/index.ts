@@ -8,6 +8,7 @@ import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
 import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
+import { replaySession, startRecording } from './record.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -27,6 +28,8 @@ const usage = `msgrpc <command> [options]
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
 
   serve     stand a peer up from a contract: answers every method, refuses what it would refuse
+  record    write what the network is carrying to a file, until Ctrl-C
+  replay    send a recording's calls at a peer and compare the answers
 
   peers                             who is on the network right now
   describe  <peer>                  what one peer exposes
@@ -78,6 +81,19 @@ const usage = `msgrpc <command> [options]
     --fail <ns.method=Code>     answer with that RPC error code, repeatable
                                 Timeout is the special one: the call is never answered at all
     --broker / --hub / --prefix / --timeout / --name / --sign as above
+
+  record
+    --out <file>                where to write the recording, as jsonl
+    --peer <name>               only frames this peer sent or received
+    --namespace <name>          only this namespace
+    --no-payloads               leave arguments and results out
+    --for <ms>                  stop after this long, instead of waiting for Ctrl-C
+
+  replay <file>
+    --against <peer>            send every call here, instead of to its original addressee
+    --speed <n>                 higher is faster, default 1; 0 sends with no waiting
+    --json                      machine-readable summary
+                                exits 1 if any answer differed or any call failed
 
   broker
     --port <n>                  default 8080, on every interface
@@ -216,7 +232,13 @@ const VALUE_FLAGS = new Set([
     '--upstream',
     '--contract',
     '--script',
-    '--fail'
+    '--fail',
+    '--out',
+    '--peer',
+    '--namespace',
+    '--for',
+    '--against',
+    '--speed'
 ])
 
 const positionals = (argv: string[]) => {
@@ -330,6 +352,87 @@ const runFake = async (argv: string[]) => {
     await new Promise(() => {})
 }
 
+/** Writes what the network is carrying to a file, so it can be replayed at something else later. */
+const runRecord = async (argv: string[]) => {
+    const out = argument(argv, '--out', '')
+    if (!out) {
+        process.stderr.write('msgrpc record: give it --out <file>\n')
+        process.exit(1)
+    }
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'record', 'recorder')
+    const peerFilter = argument(argv, '--peer', '')
+    const namespaceFilter = argument(argv, '--namespace', '')
+    // On by default here, where the tap has them off: a recording without arguments and results
+    // cannot be replayed, which is the only reason to make one.
+    const payloads = !argv.includes('--no-payloads')
+    const running = await startRecording({
+        ...network,
+        out: resolve(out),
+        filter: { payloads, ...(peerFilter ? { peer: peerFilter } : {}), ...(namespaceFilter ? { namespace: namespaceFilter } : {}), ttl: 3600 }
+    })
+    if (!running.sources.length) {
+        process.stderr.write('msgrpc record: nothing here can watch traffic - no broker exposing a bus, and no --broker link.\n')
+        await running.close()
+        process.exit(1)
+    }
+    process.stdout.write(`msgrpc record: writing ${out}, watching via ${running.sources.join(', ')}\n`)
+    if (payloads) process.stderr.write('msgrpc record: arguments and results are being written to the file. Use --no-payloads to leave them out.\n')
+
+    const stop = () =>
+        void running
+            .close()
+            .then(() => {
+                process.stderr.write(`msgrpc record: ${running.frames()} frames\n`)
+                process.exit(0)
+            })
+            .catch(() => process.exit(1))
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+    const forMs = Number(argument(argv, '--for', '0'))
+    if (forMs > 0) setTimeout(stop, forMs)
+    await new Promise(() => {})
+}
+
+/** Sends a recording's calls at a peer and compares the answers with the ones that were recorded. */
+const runReplay = async (argv: string[]) => {
+    const file = positionals(argv)[1]
+    if (!file) {
+        process.stderr.write('msgrpc replay: which recording?\n')
+        return 1
+    }
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'replay', 'replayer')
+    const json = argv.includes('--json')
+    const against = argument(argv, '--against', '')
+
+    let summary
+    try {
+        summary = await replaySession(
+            { ...network, file: resolve(file), speed: Number(argument(argv, '--speed', '1')), ...(against ? { against } : {}) },
+            json
+                ? undefined
+                : (call) => {
+                      if (call.outcome === 'matched') return
+                      const where = `${call.target} ${call.namespace}.${call.method}`
+                      if (call.outcome === 'failed') process.stdout.write(`  ✗ ${where}: ${call.error}\n`)
+                      else if (call.outcome === 'sent') process.stdout.write(`  · ${where}: sent, nothing recorded to compare\n`)
+                      else process.stdout.write(`  ≠ ${where}: expected ${JSON.stringify(call.expected)}, got ${JSON.stringify(call.got)}\n`)
+                  }
+        )
+    } catch (e) {
+        process.stderr.write(`msgrpc replay: ${e instanceof Error ? e.message : String(e)}\n`)
+        return 1
+    }
+
+    if (json) process.stdout.write(JSON.stringify(summary, null, 2) + '\n')
+    else
+        process.stdout.write(
+            `msgrpc replay: ${summary.calls.length} call${summary.calls.length === 1 ? '' : 's'}, ` +
+                `${summary.matched} matched, ${summary.differed} differed, ${summary.failed} failed, ${summary.sent} uncompared\n`
+        )
+    // An answer that differed is the finding this exists to produce, so it fails the command.
+    return summary.differed || summary.failed ? 1 : 0
+}
+
 const runBroker = async (argv: string[]) => {
     const port = Number(argument(argv, '--port', '8080'))
     const upstream = argumentList(argv, '--upstream')
@@ -438,6 +541,16 @@ const main = () => {
     }
     if (command === 'serve') {
         void runFake(argv).catch(fail)
+        return
+    }
+    if (command === 'record') {
+        void runRecord(argv).catch(fail)
+        return
+    }
+    if (command === 'replay') {
+        void runReplay(argv)
+            .then((code) => process.exit(code))
+            .catch(fail)
         return
     }
     if (command === 'peers' || command === 'describe' || command === 'call' || command === 'watch') {

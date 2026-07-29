@@ -55,6 +55,24 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **`msgrpc record` and `msgrpc replay`.** The tap already produces correlated, self-describing
+  frames, so a recording is that stream in a file - jsonl, so `grep`, `jq` and `wc -l` work on it,
+  and appended as frames arrive so a process killed mid-session still leaves what it saw. What it is
+  for is the question a plant asks constantly and no test framework answers: this new device is
+  supposed to behave like the old one, does it? `replay` re-issues the recorded calls in their
+  original spacing, compares each answer with the one recorded, and **exits 1 when anything differed
+  or failed**, so a conformance check is a line in a CI file.
+  - `Date` and `Uint8Array` are tagged in the file and restored on the way back. JSON carries
+    neither, and a timestamp that replayed as a string is not what the device received - the same
+    reason this library speaks MsgPack in the first place.
+  - **A call that failed the same way it failed when recorded is a match.** A replacement that
+    refuses what the old one refused is behaving, and counting that against it would make every
+    recording of a real plant unusable. A call with nothing recorded to compare against is counted
+    apart rather than as a pass, and one recorded without payloads is reported rather than sent
+    empty - calling the method with nothing and comparing that is the worse answer.
+  - Payloads are on by default for `record`, where the tap has them off: a recording without
+    arguments and results cannot be replayed, which is the only reason to make one. It says so on
+    startup.
 - **`msgrpc serve`** stands a peer up from a contract, so an HMI has something to talk to and a test
   has a device willing to fail on request — which a real one is not. It answers every method with a
   value of the declared shape and **refuses what the real peer would refuse**, since it is handed the

@@ -137,12 +137,18 @@ Still open: a mode that varies its answers over time. Deterministic was the righ
 you cannot assert on is not a test fixture - but an HMI being demonstrated wants a reading that
 moves, and `--script` cannot express that.
 
-## 5. Record and replay
+## 5. Record and replay — done in msgrpc-cli 2.5.0
 
-Once the tap exists: `msgrpc record --out session.jsonl`, `msgrpc replay session.jsonl --against
-deviceUnderTest`. Capture a session from a working plant, replay it against a new device, diff the
-responses. Frames are already correlated and self-describing, so the recording is the tap's output
-written to a file.
+`msgrpc record --out session.jsonl` and `msgrpc replay session.jsonl --against deviceUnderTest`,
+exiting 1 on any difference.
+
+Building it turned up the same race twice more: opening a tap and issuing the first call both
+happened before presence had arrived, so a recorder found an empty network and a replay spent its
+first call waiting out a timeout. Both now settle first, as the verbs already did. Worth watching
+for anywhere else that acts immediately after `ready()`.
+
+Not built: replaying events at a device, which would be a different thing - sending a device its own
+output back. Recorded, though, so a later comparison could use them.
 
 ## 6. Contract conformance against a live peer
 
@@ -183,7 +189,19 @@ Mostly the feature set MQTT monitors have converged on, and mostly missing:
 - **Presence timeline.** Arrivals and departures with timestamps. A flapping device is a classic
   field problem and the console renders it as a dot that changes colour and forgets.
 
-## 9. The page sometimes fails to reach the console on load
+## 9. Somewhere to put a contract, and something to start from it
+
+Anders' idea, and a good one: a model can write a contract JSON easily enough, but *where it goes*
+and *how to stand something up from it* are steps that need a shell and a convention. An MCP tool
+pair - write a contract to a known place, start and stop a fake from it - would close the loop, so a
+model could scaffold a device, point an HMI at it and drive the whole thing without leaving the
+conversation.
+
+Worth designing carefully rather than quickly, because it widens what the MCP server can do from
+"call things on a network" to "write files and start processes". The existing warning that anything
+a model can reach it can call would need a companion.
+
+## 10. The page sometimes fails to reach the console on load
 
 Found while testing the Traffic tab, and **pre-existing** - it reproduces with the console page as
 it was before any of this, on a console that has not changed either, roughly one load in two when

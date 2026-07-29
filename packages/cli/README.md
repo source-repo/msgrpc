@@ -18,6 +18,8 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 msgrpc mcp       serve the network to an MCP client over stdio
 msgrpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
+msgrpc record    write what the network is carrying to a file
+msgrpc replay    send a recording's calls at a peer and compare the answers
 
 msgrpc peers     who is on the network right now
 msgrpc describe  what one peer exposes
@@ -42,6 +44,13 @@ msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
 | `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
 | `--fail <ns.method=Code>` | serve | — | answer with that RPC error code; repeatable. `Timeout` never answers |
+| `--out <file>` | record | — | where to write the recording, as jsonl |
+| `--peer <name>` | record | — | only frames this peer sent or received |
+| `--namespace <name>` | record | — | only this namespace |
+| `--no-payloads` | record | off | leave arguments and results out |
+| `--for <ms>` | record | — | stop after this long, instead of waiting for Ctrl-C |
+| `--against <peer>` | replay | the original addressee | send every call here instead |
+| `--speed <n>` | replay | `1` | higher is faster; `0` sends with no waiting |
 | `--name <peer>` | mcp | `mcp-<three words>` | how it identifies itself to the network |
 | `--name <peer>` | verbs | `cli-<three words>` | how it identifies itself to the network |
 | `--wait <ms>` | verbs | `5000` | how long to wait for the peer to appear before giving up |
@@ -497,6 +506,67 @@ supplies them — the receiving half of an HMI otherwise has nothing to receive.
 
 **It says it is a fake** on startup and in the class name a console shows, because a stand-in
 mistaken for the device is worse than no stand-in at all.
+
+## record and replay
+
+The question a plant asks constantly and no test framework answers: *this new device is supposed to
+behave like the old one — does it?* Capture a session from the working plant, replay it at the
+replacement, and compare the answers.
+
+```
+msgrpc record --out session.jsonl --hub http://bus:8080
+msgrpc replay session.jsonl --against newPlant --hub http://bus:8080
+```
+
+`record` opens a tap wherever it can — a broker's `bus` over socket.io, its own subscription over
+MQTT — and writes one frame per line:
+
+```
+{"msgrpc":"recording","version":1,"at":1785283506726,"filter":{"payloads":true},"sources":["plantBus"]}
+{"at":1785283509702,"source":"hmi-3","target":"plantServer","kind":"POST","namespace":"plant","method":"read","id":"396f…","params":[]}
+{"at":1785283509705,"source":"plantServer","target":"hmi-3","kind":"SUCCESS","id":"396f…","ms":3,"result":{"celsius":84}}
+```
+
+jsonl, so `grep`, `jq` and `wc -l` work on it. Lines are appended as they arrive, so a process
+killed mid-session still leaves what it saw — a recording is most wanted from the run that ended
+badly.
+
+**Payloads are on by default here**, where the tap has them off: a recording without arguments and
+results cannot be replayed, which is the only reason to make one. `--no-payloads` turns them off and
+`record` says on startup that it is writing them.
+
+### Replaying
+
+`replay` re-issues the recorded calls, in their original spacing, and compares each answer with the
+one that was recorded:
+
+```
+$ msgrpc replay session.jsonl --hub http://bus:8080
+  ≠ plantServer plant.read: expected {"celsius":84,"bar":3.2}, got {"celsius":12,"bar":3.2}
+msgrpc replay: 12 calls, 9 matched, 3 differed, 0 failed, 0 uncompared
+$ echo $?
+1
+```
+
+**It exits 1 when anything differed or failed**, so a conformance check is a line in a CI file.
+
+- `--against <peer>` sends every call to one peer instead of its original addressee, which is how a
+  session captured from `plantServer` is played at `plantServer-v2`.
+- `--speed <n>` scales the original gaps; `0` sends with no waiting. The spacing is kept by default
+  because a device that only misbehaves at the rate it actually sees should be given that rate.
+- **A call that failed the same way it failed when recorded is a match.** A replacement that refuses
+  what the old one refused is behaving, and marking that a failure would make every recording of a
+  real plant unusable.
+- A call recorded without payloads is reported, not sent empty — calling the method with nothing and
+  comparing that is a worse answer than saying the recording cannot be replayed.
+- Nothing recorded to compare against is counted apart as *uncompared* rather than as a pass.
+
+`Date` and `Uint8Array` are tagged in the file (`{"$date":…}`, `{"$bytes":…}`) and restored on the
+way back. JSON carries neither, and a timestamp that replayed as a string is not what the device
+received — which is the same reason this library speaks MsgPack.
+
+Events are recorded but not replayed: sending a device's own events back at it would be a different
+thing entirely.
 
 ## mcp
 
