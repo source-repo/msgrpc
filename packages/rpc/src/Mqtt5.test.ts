@@ -262,9 +262,22 @@ test('a JSON-speaking caller is answered in JSON', async (t) => {
     await server.close()
 })
 
+/** Polls until a condition holds, so a test waits for delivery rather than for a fixed guess. */
+const until = async (condition: () => boolean, timeout = 5000) => {
+    const deadline = Date.now() + timeout
+    while (!condition()) {
+        if (Date.now() > deadline) throw new Error('until timed out')
+        await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+}
+
 // ------------------------------------------------------------------ signing over the v5 layout
 
-const SIGN_SECRETS: { [peer: string]: string } = Object.fromEntries(['hmi-v5', 'srv-v5', 'rogue-v5'].map((name) => [peer(name), `${name}-secret`]))
+// A peer name is the MQTT client id, so two tests sharing one evict each other when ava runs them
+// concurrently - the very collision this transport warns about. Each signing test gets its own pair.
+const SIGN_SECRETS: { [peer: string]: string } = Object.fromEntries(
+    ['hmi-v5', 'srv-v5', 'rogue-v5', 'hmi-ct', 'srv-ct', 'hmi-ct2', 'srv-ct2', 'hmi-code', 'srv-code'].map((name) => [peer(name), `${name}-secret`])
+)
 const v5Verifier = createHmacVerifier(
     (peer) => SIGN_SECRETS[peer],
     (peer) => ({ name: peer, roles: ['operator'] })
@@ -273,11 +286,31 @@ const v5Verifier = createHmacVerifier(
 /** Builds the exact MQTT 5 packet a signing peer would publish, so a test can forge or replay one. */
 const publishSignedV5 = async (
     client: MqttClient,
-    opts: { topic: string; source: string; signAs: string; kind: string; path?: string; method?: string; correlation: string; body: unknown; nonce?: string; timestamp?: number }
+    opts: {
+        topic: string
+        source: string
+        signAs: string
+        kind: string
+        path?: string
+        method?: string
+        correlation: string
+        body: unknown
+        nonce?: string
+        timestamp?: number
+        /** Raw bytes to publish instead of encoding `body`, for the content-type forgery below. */
+        rawBody?: Uint8Array
+        /** What the signature covers. */
+        contentType?: string
+        /** What the packet actually declares - differing from `contentType` is the forgery. */
+        sentContentType?: string
+        code?: string
+        sentCode?: string
+    }
 ) => {
-    const body = new Uint8Array(msgPackEncode(opts.body))
+    const body = opts.rawBody ?? new Uint8Array(msgPackEncode(opts.body))
     const nonce = opts.nonce ?? createNonce()
     const timestamp = opts.timestamp ?? Date.now()
+    const contentType = opts.contentType ?? 'application/msgpack'
     const canonical = canonicalSignedBytesV5({
         version: FRAME_VERSION,
         topic: opts.topic,
@@ -286,6 +319,9 @@ const publishSignedV5 = async (
         path: opts.path ?? '',
         methodOrEvent: opts.method ?? '',
         correlation: opts.correlation,
+        contentType,
+        code: opts.code ?? '',
+        contractVersion: '',
         timestamp,
         nonce,
         payload: body
@@ -296,13 +332,14 @@ const publishSignedV5 = async (
         properties: {
             responseTopic: `msgrpc/v5sign/rsp/${opts.source}`,
             correlationData: Buffer.from(opts.correlation),
-            contentType: 'application/msgpack',
+            contentType: opts.sentContentType ?? contentType,
             userProperties: {
                 [MR.version]: FRAME_VERSION,
                 [MR.source]: opts.source,
                 [MR.kind]: opts.kind,
                 ...(opts.path ? { [MR.path]: opts.path } : {}),
                 ...(opts.method ? { [MR.method]: opts.method } : {}),
+                ...(opts.sentCode ?? opts.code ? { [MR.code]: (opts.sentCode ?? opts.code)! } : {}),
                 [MR.nonce]: nonce,
                 [MR.timestamp]: String(timestamp),
                 [MR.signature]: signature
@@ -570,4 +607,147 @@ test('a second peer under one name takes the broker session, and the displaced o
     // Both used one clientId, so the loser's session is the one still on the broker. Sweep it.
     const sweep = await connectAsync(BROKER_URL, { clientId: `msgrpc-${name}`, clean: true, protocolVersion: 5 })
     await sweep.endAsync()
+})
+
+test('changing the content type of a signed frame no longer changes what it says', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5sign-ct')
+    const asked: number[] = []
+    class Plant {
+        async write(v: number) {
+            asked.push(v)
+            return v
+        }
+    }
+    const server = new RpcServer({
+        name: peer('srv-ct'),
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-ct')]), verify: v5Verifier }],
+        requireAuthenticatedPeers: true
+    })
+    server.exposeClassInstance(new Plant(), 'plant')
+    await server.ready()
+    const client = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+
+    // One byte, two meanings. 0x31 is the JSON text "1", which is the number 1; the same byte is a
+    // MsgPack positive fixint, which is 49. Frame version 1 left contentType out of the signature
+    // on the reasoning that it could only make a payload fail to parse - but both of these parse,
+    // so flipping one unsigned property turned a signed `write(1)` into a signed `write(49)`.
+    const oneByte = Uint8Array.from([0x31])
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-ct')}`,
+        source: peer('hmi-ct'),
+        signAs: peer('hmi-ct'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'ct-1',
+        body: undefined,
+        rawBody: oneByte,
+        // Signed as JSON, sent as msgpack: the signature still covers the bytes, and under version 1
+        // it still verified.
+        contentType: 'application/json',
+        sentContentType: 'application/msgpack'
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    t.deepEqual(asked, [], 'a frame whose content type was altered after signing must not run the method')
+
+    // The same call, untampered, does run - so the rejection above is about the tampering and not
+    // about the frame being unusable.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-ct')}`,
+        source: peer('hmi-ct'),
+        signAs: peer('hmi-ct'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'ct-2',
+        body: undefined,
+        rawBody: oneByte,
+        contentType: 'application/json',
+        sentContentType: 'application/json'
+    })
+    await until(() => asked.length > 0)
+    t.deepEqual(asked, [1], 'signed as JSON and sent as JSON is the number 1')
+
+    await client.endAsync()
+    await server.close()
+})
+
+test('an unknown content type is refused rather than guessed at', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5sign-ct2')
+    const asked: number[] = []
+    class Plant {
+        async write(v: number) {
+            asked.push(v)
+            return v
+        }
+    }
+    const server = new RpcServer({
+        name: peer('srv-ct2'),
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-ct2')]), verify: v5Verifier }],
+        requireAuthenticatedPeers: true
+    })
+    server.exposeClassInstance(new Plant(), 'plant')
+    await server.ready()
+    const client = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+
+    // It used to fall back to msgpack, which is a guess about how to read somebody else's bytes -
+    // and the guess decides what the values mean.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-ct2')}`,
+        source: peer('hmi-ct2'),
+        signAs: peer('hmi-ct2'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'ct-3',
+        body: 7,
+        contentType: 'application/x-invented'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    t.deepEqual(asked, [])
+
+    await client.endAsync()
+    await server.close()
+})
+
+test('the error code and the declared contract version are covered by the signature', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5sign-code')
+    const asked: number[] = []
+    class Plant {
+        async write(v: number) {
+            asked.push(v)
+            return v
+        }
+    }
+    const server = new RpcServer({
+        name: peer('srv-code'),
+        transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-code')]), verify: v5Verifier }],
+        requireAuthenticatedPeers: true
+    })
+    server.exposeClassInstance(new Plant(), 'plant')
+    await server.ready()
+    const client = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+
+    // Signed with no code, sent carrying one. The code is what a caller acts on when a call fails,
+    // so a broker able to add or change it could turn "refused" into "unauthorised" and back.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-code')}`,
+        source: peer('hmi-code'),
+        signAs: peer('hmi-code'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'code-1',
+        body: 3,
+        sentCode: 'Unauthorized'
+    })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    t.deepEqual(asked, [], 'a frame whose code was added after signing must not be acted on')
+
+    await client.endAsync()
+    await server.close()
 })

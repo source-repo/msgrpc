@@ -14,6 +14,7 @@ import {
     fromInboundFrame,
     MR,
     readControlProperties,
+    SUPPORTED_FRAME_VERSIONS,
     toOutboundFrame
 } from './Mqtt5Frame.js'
 
@@ -452,11 +453,18 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.rejected, { source, reason: 'missing or unsafe peer name' })
             return
         }
+        // An unknown content type used to fall back to msgpack, which is a guess about how to read
+        // bytes somebody else chose - and the guess decides what the values mean.
+        const declared = properties?.contentType
+        if (declared && declared !== msgPackCodec.contentType && declared !== jsonCodec.contentType) {
+            this.emit(TransportEvent.rejected, { source, reason: `unknown content type '${declared}'` })
+            return
+        }
         const body = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
         const correlation = correlationToString(properties?.correlationData)
 
         if (this.verify) {
-            const rejection = await this.verifyV5(topic, values, correlation, body)
+            const rejection = await this.verifyV5(topic, values, correlation, body, properties?.contentType)
             if (rejection) {
                 this.emit(TransportEvent.rejected, { source, reason: rejection })
                 return
@@ -609,11 +617,19 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         return this.codec
     }
 
-    private async verifyV5(topic: string, values: { [key: string]: string }, correlation: string | undefined, body: Uint8Array) {
+    private async verifyV5(topic: string, values: { [key: string]: string }, correlation: string | undefined, body: Uint8Array, contentType?: string) {
         const signature = values[MR.signature]
         const nonce = values[MR.nonce]
         const timestamp = Number(values[MR.timestamp])
         if (!signature || !nonce) return 'unsigned'
+        // The version gate belongs here rather than on the receive path, and the distinction is the
+        // whole design of this change. An unsigned frame's version says nothing about security, and
+        // refusing one would break plain MQTT 5 peers written against version 1 - which is a feature
+        // worth keeping. A *signed* frame announcing version 1 is different: version 1 left the
+        // content type, the error code and the contract version out of the signature, so accepting
+        // one would leave exactly the hole this closes, and let a sender choose the weaker form.
+        const announced = values[MR.version] ?? FRAME_VERSION
+        if (!SUPPORTED_FRAME_VERSIONS.has(announced)) return `signed frame version '${announced}', which this build does not accept`
         if (!this.replayGuard.accept(nonce, timestamp)) return 'stale or replayed'
         const source = values[MR.source]
         const canonical = canonicalSignedBytesV5({
@@ -624,6 +640,11 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             path: values[MR.path] ?? '',
             methodOrEvent: values[MR.method] ?? values[MR.event] ?? '',
             correlation: correlation ?? '',
+            // Rebuilt from what arrived, so tampering with any of them fails the signature rather
+            // than changing how the payload is read or what the caller does about a failure.
+            contentType: contentType ?? '',
+            code: values[MR.code] ?? '',
+            contractVersion: values[MR.contractVersion] ?? '',
             timestamp,
             nonce,
             payload: body
@@ -737,6 +758,9 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 path: frame.path ?? '',
                 methodOrEvent: frame.method ?? frame.event ?? '',
                 correlation: frame.correlation ?? '',
+                contentType: codec.contentType,
+                code: frame.code ?? '',
+                contractVersion: frame.version ?? '',
                 timestamp,
                 nonce,
                 payload: body

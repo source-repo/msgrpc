@@ -16,6 +16,27 @@ existing projects have on disk, and a rename would break their `--against` for t
 Both packages go to 3.0.0 together, since a renamed package is a breaking change however compatible
 the code is.
 
+### Security
+
+- **A signed MQTT 5 frame's content type was not covered by its signature**, and altering it could
+  change what the frame said while the signature stayed valid. The reasoning written into the code
+  was that content type only says how to read bytes that are themselves signed, so changing it could
+  make a payload fail to parse but never change what was authorised. That is wrong, and the
+  counterexample is one byte long: `0x31` is the JSON text `"1"`, the number 1, and is also a
+  MsgPack positive fixint, the number 49. Both parse. Both verified. Flipping one unsigned property
+  therefore turned a signed `write(1)` into a signed `write(49)`.
+  - The **error code** and the **declared contract version** were uncovered for the same reason and
+    are now signed too. The code is what a caller acts on when a call fails, and the contract version
+    decides whether the call is accepted at all - neither is merely transported.
+  - **Signed frame version 2.** A frame signed under version 1 no longer verifies, which is
+    deliberate: accepting either would let a sender choose the weaker form. The gate is on the
+    *signing* path only, so **plain MQTT 5 peers written against version 1 keep working** - an
+    unsigned frame's version says nothing about security, and the interop that makes this a protocol
+    rather than a library is worth keeping. A peer that signs must be upgraded.
+  - **An unknown content type is refused** rather than falling back to MsgPack. Guessing how to read
+    somebody else's bytes decides what the values mean.
+  - Found in the OpenAI review of 2.3.0, whose reasoning was right in every particular.
+
 ### Fixed
 
 - **Piping a verb into `head` printed a stack trace.** Closing stdout early makes Node emit an

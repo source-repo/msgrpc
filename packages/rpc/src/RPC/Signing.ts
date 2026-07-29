@@ -52,6 +52,15 @@ export interface SignedFrameV5 {
     path: string
     methodOrEvent: string
     correlation: string
+    /**
+     * How the payload is to be read. Signed, for the reason set out below - it was left out of
+     * frame version 1 on reasoning that turned out to be wrong.
+     */
+    contentType: string
+    /** The RPC error code on a failure frame, which is what the caller acts on. */
+    code: string
+    /** The contract version the sender declares, which decides compatibility at the far end. */
+    contractVersion: string
     timestamp: number
     nonce: string
     payload: Uint8Array
@@ -59,9 +68,18 @@ export interface SignedFrameV5 {
 
 /**
  * The MQTT 5 canonical form. The topic is signed rather than a target field, because under this
- * layout the topic is what carries the addressing. contentType is deliberately absent: it says how
- * to read bytes that are themselves covered, so altering it can only make the payload fail to
- * parse, never change what was authorised.
+ * layout the topic is what carries the addressing.
+ *
+ * Frame version 1 deliberately left contentType out, on the reasoning that it only says how to read
+ * bytes that are themselves covered - so altering it could make the payload fail to parse but never
+ * change what was authorised. **That reasoning is wrong**, and the counterexample is one byte long:
+ * `0x31` decodes as the JSON text `"1"`, which is the number 1, and as a MsgPack positive fixint,
+ * which is the number 49. Both parse. Both verify. Flipping one unsigned property therefore changed
+ * a signed setpoint from 1 to 49 with the signature still good.
+ *
+ * The same argument applies to anything else the receiver acts on rather than merely transports: the
+ * error code decides what a caller does about a failure, and the declared contract version decides
+ * whether the call is accepted at all. Both are now covered.
  */
 export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
     const preamble = stringToUint8Array(
@@ -73,6 +91,9 @@ export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
             frame.path,
             frame.methodOrEvent,
             frame.correlation,
+            frame.contentType,
+            frame.code,
+            frame.contractVersion,
             frame.timestamp,
             frame.nonce
         ])

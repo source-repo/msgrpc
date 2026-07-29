@@ -2,6 +2,12 @@
   The wire identifiers in this document are deliberately unchanged by the 3.0 rename: the packages
   and the command became Source RPC, the protocol stayed msgrpc. A peer deployed against v1 or v2
   keeps working, which is the whole point of writing the format down.
+
+  What did change in 3.0 is the signed frame version, `mr-v`, which went 1 -> 2. Version 2 covers the
+  content type, the error code and the declared contract version in the signature; version 1 did not,
+  and a frame signed under version 1 no longer verifies. That gate applies only to signed frames -
+  an unsigned plain-MQTT peer sending `mr-v: 1` is still accepted, because its version says nothing
+  about security and interop is the point. See the Security section of the changelog.
 -->
 
 # msgrpc over MQTT 5 — frame layout

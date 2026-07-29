@@ -36,7 +36,15 @@ export const MR = {
     contractVersion: 'mr-ver'
 } as const
 
-export const FRAME_VERSION = '1'
+/**
+ * Version 2 covers contentType, the error code and the declared contract version in the signature;
+ * version 1 did not, and a frame signed under one cannot verify under the other. Bumped rather than
+ * negotiated: a receiver that quietly accepted either would let an attacker choose the weaker.
+ */
+export const FRAME_VERSION = '2'
+
+/** Frame versions this build will accept. A frame announcing anything else is refused, not guessed at. */
+export const SUPPORTED_FRAME_VERSIONS = new Set([FRAME_VERSION])
 
 export type FrameKind = 'call' | 'subscribe' | 'unsubscribe' | 'result' | 'error' | 'event'
 
