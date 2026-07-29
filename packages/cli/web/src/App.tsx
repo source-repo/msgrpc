@@ -100,6 +100,20 @@ const useConsole = () => {
     return { service, status, me, events, peerChange, said, frames, problems, peer }
 }
 
+/**
+ * Saves what is on screen as jsonl, which is the shape `msgrpc record` writes and `jq` reads. Built
+ * here rather than fetched, so it works on a plant network with no route to anywhere.
+ */
+const download = (rows: unknown[], filename: string) => {
+    const blob = new Blob([rows.map((row) => JSON.stringify(row)).join('\n') + '\n'], { type: 'application/x-ndjson' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = filename
+    link.click()
+    URL.revokeObjectURL(url)
+}
+
 /** Which of the side panel's three views is showing. */
 type SideTab = 'chat' | 'events' | 'traffic' | 'problems'
 
@@ -117,6 +131,9 @@ export const App = () => {
     const [trafficPaused, setTrafficPaused] = useState(false)
     const [trouble, setTrouble] = useState<NetworkProblem[]>([])
     const [links, setLinks] = useState<{ [peer: string]: string }>({})
+    const [network, setNetwork] = useState<{ broker?: string; hub?: string; prefix?: string }>({})
+    const [eventFilter, setEventFilter] = useState('')
+    const [eventsPaused, setEventsPaused] = useState(false)
 
     const refreshPeers = useCallback(async () => {
         if (!service) return
@@ -124,6 +141,7 @@ export const App = () => {
         setPeers(state.peers)
         setWatching(new Set(state.watching))
         setLinks(state.links ?? {})
+        setNetwork(state.network ?? {})
     }, [service])
 
     // The tab is where two consoles are told apart when both are open, so it carries the peer name
@@ -153,7 +171,12 @@ export const App = () => {
 
     useEffect(() => {
         void refreshPeers()
-        events.current = (event) => setStream((current) => [event, ...current].slice(0, 200))
+        // Paused stops the buffer filling rather than only the list rendering, the same way the
+        // traffic tab does - a paused pane on a busy network should stay as it was.
+        events.current = (event) => {
+            if (eventsPaused) return
+            setStream((current) => [event, ...current].slice(0, 500))
+        }
         peerChange.current = (peer, state) => {
             setOffline((current) => {
                 const next = new Set(current)
@@ -163,7 +186,7 @@ export const App = () => {
             })
             void refreshPeers()
         }
-    }, [service, refreshPeers, events, peerChange])
+    }, [service, refreshPeers, events, peerChange, eventsPaused])
 
     useEffect(() => {
         // Pausing stops the buffer filling rather than only the list rendering, so a paused tab on a
@@ -187,6 +210,17 @@ export const App = () => {
         if (!service) return
         setDescribed(await service.describe(peer))
         await refreshPeers()
+    }
+
+    /** Every event in one namespace, in one click - the usual first move on an unfamiliar peer. */
+    const watchAll = async (namespace: string, events: DescribedEvent[]) => {
+        if (!service || !selected) return
+        for (const event of events) {
+            if (watching.has(`${selected}/${namespace}/${event.name}`)) continue
+            const answer = await service.watch(selected, namespace, event.name)
+            if (answer.watching) setWatching((current) => new Set(current).add(`${selected}/${namespace}/${event.name}`))
+        }
+        setDescribed(await service.describe(selected))
     }
 
     const toggleWatch = async (namespace: string, event: DescribedEvent) => {
@@ -274,11 +308,19 @@ export const App = () => {
                                         method={method}
                                         types={description.types}
                                         service={service!}
+                                        network={network}
                                     />
                                 ))}
                                 {namespace.events.length > 0 && (
                                     <div className="events">
-                                        <h3>events</h3>
+                                        <h3>
+                                            events
+                                            {namespace.events.some((event) => !watching.has(`${selected}/${namespace.name}/${event.name}`)) && (
+                                                <button className="toggle" onClick={() => void watchAll(namespace.name, namespace.events)}>
+                                                    watch all
+                                                </button>
+                                            )}
+                                        </h3>
                                         {namespace.events.map((event) => {
                                             const on = watching.has(`${selected}/${namespace.name}/${event.name}`)
                                             return (
@@ -338,22 +380,40 @@ export const App = () => {
                     <div className="stream">
                         <header>
                             <h1>Events</h1>
-                            {stream.length > 0 && (
-                                <button className="toggle" onClick={() => setStream([])}>
-                                    clear
+                            <div className="traffic-actions">
+                                {stream.length > 0 && (
+                                    <button className="toggle" onClick={() => download(stream, 'events.jsonl')} title="save what is here as jsonl">
+                                        export
+                                    </button>
+                                )}
+                                {stream.length > 0 && (
+                                    <button className="toggle" onClick={() => setStream([])}>
+                                        clear
+                                    </button>
+                                )}
+                                <button className={eventsPaused ? 'toggle on' : 'toggle'} onClick={() => setEventsPaused(!eventsPaused)}>
+                                    {eventsPaused ? 'paused' : 'pause'}
                                 </button>
-                            )}
-                        </header>
-                        {stream.length === 0 && <p className="muted">Watch an event to see it here.</p>}
-                        {stream.map((event, index) => (
-                            <div key={`${event.at}-${index}`} className="streamed">
-                                <time>{new Date(event.at).toLocaleTimeString()}</time>
-                                <code>
-                                    {event.peer}/{event.namespace}.{event.event}
-                                </code>
-                                <pre>{JSON.stringify(event.args)}</pre>
                             </div>
-                        ))}
+                        </header>
+                        {stream.length > 0 && (
+                            <input className="control" placeholder="filter by peer, event or payload" value={eventFilter} onChange={(e) => setEventFilter(e.target.value)} />
+                        )}
+                        {stream.length === 0 && <p className="muted">Watch an event to see it here.</p>}
+                        {stream
+                            .filter((event) => {
+                                const search = eventFilter.trim().toLowerCase()
+                                return !search || `${event.peer} ${event.namespace}.${event.event} ${JSON.stringify(event.args)}`.toLowerCase().includes(search)
+                            })
+                            .map((event, index) => (
+                                <div key={`${event.at}-${index}`} className="streamed">
+                                    <time>{new Date(event.at).toLocaleTimeString()}</time>
+                                    <code>
+                                        {event.peer}/{event.namespace}.{event.event}
+                                    </code>
+                                    <pre>{JSON.stringify(event.args)}</pre>
+                                </div>
+                            ))}
                     </div>
                 )}
             </section>

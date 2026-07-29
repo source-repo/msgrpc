@@ -1312,6 +1312,31 @@
                   "kind": "number"
                 }
               },
+              "network": {
+                "type": {
+                  "kind": "object",
+                  "fields": {
+                    "broker": {
+                      "type": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    },
+                    "hub": {
+                      "type": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    },
+                    "prefix": {
+                      "type": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    }
+                  }
+                }
+              },
               "links": {
                 "type": {
                   "kind": "record",

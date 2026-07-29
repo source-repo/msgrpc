@@ -144,6 +144,13 @@ export class ConsoleService extends EventEmitter {
     /** Which link each peer was last seen on, written by startConsole as they arrive. */
     readonly links = new Map<string, string>()
 
+    /**
+     * The flags this console was started with, so the page can render a command line that actually
+     * runs. A call worth making in the browser is usually one worth putting in a script, and
+     * retyping `--hub http://…` from memory is where that stops happening.
+     */
+    startedWith: { broker?: string; hub?: string; prefix?: string } = {}
+
     /** What has gone wrong on the links, newest first and bounded. */
     private readonly seen: NetworkProblem[] = []
 
@@ -181,6 +188,7 @@ export class ConsoleService extends EventEmitter {
             peers: [...this.online].sort(),
             watching: [...this.watching.keys()],
             callTimeout: this.callTimeout,
+            network: this.startedWith,
             // Which link each peer was found on. The console holds the browser's, the broker's and
             // the hub's at once, and on a plant where the devices are on one and the HMIs on
             // another that is the first thing worth knowing about a peer.
@@ -534,6 +542,11 @@ export const startConsole = async (options: ConsoleOptions) => {
         ]
     })
     service.useNetwork(network)
+    service.startedWith = {
+        ...(options.broker ? { broker: options.broker } : {}),
+        ...(options.hub ? { hub: options.hub } : {}),
+        ...(options.prefix ? { prefix: options.prefix } : {})
+    }
     network.exposeClassInstance(service)
     // The console's own tap, exposed like any other so `msgrpc call <console> bus.tap` works and
     // another console can watch this one's MQTT link.

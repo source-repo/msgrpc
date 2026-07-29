@@ -10,6 +10,7 @@ import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
 import { checkPeer, diffPeers } from './conform.js'
+import { bench, benchArguments } from './bench.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -28,6 +29,7 @@ const usage = `msgrpc <command> [options]
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
 
+  bench     call one method over and over and report what it cost
   diff      compare what two live peers expose, when one of them behaves differently
   serve     stand a peer up from a contract: answers every method, refuses what it would refuse
   record    write what the network is carrying to a file, until Ctrl-C
@@ -45,6 +47,14 @@ const usage = `msgrpc <command> [options]
     --keep-history              move the previous contract into history before writing
     --peer <name>               (check) ask a live peer what it serves instead of reading source
                                 needs --broker or --hub
+
+  bench <peer> <ns.method> [args…]
+    --rate <n>                  calls per second to aim for, default 10
+    --for <ms>                  how long to keep going, default 10000
+    --concurrency <n>           calls outstanding at once before the rest count as fallen behind
+                                default 50
+    --json                      machine-readable report
+                                exits 1 if any call failed
 
   diff <peerA> <peerB>
     --broker / --hub / --prefix / --timeout / --name / --sign as above
@@ -249,7 +259,9 @@ const VALUE_FLAGS = new Set([
     '--for',
     '--against',
     '--speed',
-    '--contracts'
+    '--contracts',
+    '--rate',
+    '--concurrency'
 ])
 
 const positionals = (argv: string[]) => {
@@ -521,6 +533,63 @@ const runDiff = async (argv: string[]) => {
     return 1
 }
 
+/** One method, over and over, with percentiles - the script everybody writes, written once. */
+const runBench = async (argv: string[]) => {
+    const words = positionals(argv)
+    const peer = words[1]
+    const target = words[2]
+    if (!peer || !target) {
+        process.stderr.write('msgrpc bench: give it a peer and <namespace>.<method>\n')
+        return 1
+    }
+    const dot = target.lastIndexOf('.')
+    if (dot <= 0 || dot === target.length - 1) {
+        process.stderr.write(`msgrpc bench: '${target}' should be <namespace>.<method>\n`)
+        return 1
+    }
+    const namespace = target.slice(0, dot)
+    const method = target.slice(dot + 1)
+    const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'bench', 'bench')
+
+    let args: unknown[]
+    try {
+        args = await benchArguments({ ...network, peer, namespace, method, texts: words.slice(3) })
+    } catch (e) {
+        process.stderr.write(`msgrpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
+        return 1
+    }
+
+    let report
+    try {
+        report = await bench({
+            ...network,
+            peer,
+            namespace,
+            method,
+            args,
+            rate: Number(argument(argv, '--rate', '10')),
+            forMs: Number(argument(argv, '--for', '10000')),
+            concurrency: Number(argument(argv, '--concurrency', '50')),
+            wait: Number(argument(argv, '--wait', '5000'))
+        })
+    } catch (e) {
+        process.stderr.write(`msgrpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
+        return 1
+    }
+
+    if (argv.includes('--json')) process.stdout.write(JSON.stringify(report, null, 2) + '\n')
+    else {
+        process.stdout.write(`${report.peer} ${report.method}  ${report.calls} calls in ${(report.ranForMs / 1000).toFixed(1)}s at ${report.rate.achieved}/s\n`)
+        process.stdout.write(
+            `  ms   min ${report.ms.min}  p50 ${report.ms.p50}  p90 ${report.ms.p90}  p95 ${report.ms.p95}  p99 ${report.ms.p99}  max ${report.ms.max}\n`
+        )
+        process.stdout.write(`  ok   ${report.ok}   failed ${report.failed}${report.behind ? `   fell behind ${report.behind}` : ''}\n`)
+        for (const [code, count] of Object.entries(report.codes)) process.stdout.write(`       ${code}: ${count}\n`)
+    }
+    // Errors under load are the finding, so they fail the command.
+    return report.failed ? 1 : 0
+}
+
 const runBroker = async (argv: string[]) => {
     const port = Number(argument(argv, '--port', '8080'))
     const upstream = argumentList(argv, '--upstream')
@@ -630,6 +699,12 @@ const main = () => {
     }
     if (command === 'serve') {
         void runFake(argv).catch(fail)
+        return
+    }
+    if (command === 'bench') {
+        void runBench(argv)
+            .then((code) => process.exit(code))
+            .catch(fail)
         return
     }
     if (command === 'diff') {

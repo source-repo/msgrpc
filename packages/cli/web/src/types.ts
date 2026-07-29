@@ -102,7 +102,14 @@ export interface NetworkProblem {
 
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {
-    peers(): Promise<{ peers: string[]; watching: string[]; callTimeout: number; links: { [peer: string]: string } }>
+    peers(): Promise<{
+        peers: string[]
+        watching: string[]
+        callTimeout: number
+        links: { [peer: string]: string }
+        /** What this console was started with, so the page can render a command line that runs. */
+        network: { broker?: string; hub?: string; prefix?: string }
+    }>
     /** What has gone wrong on the links, newest first — including before this page was opened. */
     problems(): Promise<{ problems: NetworkProblem[] }>
     describe(peer: string): Promise<ServerDescription | { error: string; code?: string }>

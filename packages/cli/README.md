@@ -18,6 +18,7 @@ msgrpc console   browse a live network: peers, what they expose, calls and event
 msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 msgrpc mcp       serve the network to an MCP client over stdio
 msgrpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
+msgrpc bench     call one method over and over and report what it cost
 msgrpc diff      compare what two live peers expose
 msgrpc record    write what the network is carrying to a file
 msgrpc replay    send a recording's calls at a peer and compare the answers
@@ -54,6 +55,9 @@ msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--for <ms>` | record | — | stop after this long, instead of waiting for Ctrl-C |
 | `--against <peer>` | replay | the original addressee | send every call here instead |
 | `--speed <n>` | replay | `1` | higher is faster; `0` sends with no waiting |
+| `--rate <n>` | bench | `10` | calls per second to aim for |
+| `--for <ms>` | bench | `10000` | how long to keep going |
+| `--concurrency <n>` | bench | `50` | calls outstanding before the rest count as fallen behind |
 | `--name <peer>` | mcp | `mcp-<three words>` | how it identifies itself to the network |
 | `--name <peer>` | verbs | `cli-<three words>` | how it identifies itself to the network |
 | `--wait <ms>` | verbs | `5000` | how long to wait for the peer to appear before giving up |
@@ -565,6 +569,42 @@ supplies them — the receiving half of an HMI otherwise has nothing to receive.
 **It says it is a fake** on startup and in the class name a console shows, because a stand-in
 mistaken for the device is worse than no stand-in at all.
 
+## bench
+
+A device is fine at one call a second. What does it do at twenty? Finding that out is ordinarily
+done by writing a script, and it is always the same script.
+
+```
+$ msgrpc bench plantServer plant.read --rate 40 --for 3000 --hub http://bus:8080
+plantServer plant.read  120 calls in 3.0s at 40/s
+  ms   min 1  p50 3  p90 4  p95 4  p99 5  max 5
+  ok   120   failed 0
+```
+
+**Percentiles rather than an average**, because an average hides exactly the calls worth knowing
+about: a device answering in 2 ms with one reply in four seconds averages out to something that
+looks healthy.
+
+Failures are counted by code, since a device refusing arguments and a device that stopped answering
+are different findings with the same shape:
+
+```
+$ msgrpc bench plantServer plant.writeSetpoint 9999 --rate 20 --for 1500
+plantServer plant.writeSetpoint  30 calls in 1.5s at 20/s
+  ok   0   failed 30
+       InvalidParams: 30
+$ echo $?
+1
+```
+
+Errors under load are the finding, so any failure exits 1. Arguments are coerced from the peer's own
+contract, exactly as `call` does.
+
+`--concurrency` bounds how many calls may be outstanding at once; past that they are **not sent and
+counted as fallen behind**. Piling calls onto a device that is already behind measures the queue
+rather than the device, and a run that did it would report healthy latencies for a device that is
+drowning.
+
 ## record and replay
 
 The question a plant asks constantly and no test framework answers: *this new device is supposed to
@@ -789,6 +829,17 @@ namespace called `chat` rather than the minified class name, and what `extract` 
 write the contract in the first place.
 
 ### Watching events
+
+**Watch all** takes every event in a namespace in one click, which is the usual first move on an
+unfamiliar peer. The events pane has a filter, a pause and an **export** that saves what is on screen
+as jsonl — the same shape `msgrpc record` writes and `jq` reads. Pausing stops the buffer filling
+rather than only the list rendering, so a paused pane on a busy network stays as it was.
+
+Each method keeps its timings: **×20** calls it repeatedly and reports `20 calls · p50 1 ms · last
+1 ms` next to the button, which is `msgrpc bench` in miniature for when the question is smaller than
+a benchmark. **copy as CLI** puts the equivalent `msgrpc call …` on the clipboard, complete with the
+network flags this console was started with — a call worth making in a browser is usually one worth
+putting in a script, and retyping `--hub http://…` from memory is where that stops happening.
 
 The watch button toggles, and unwatching drops the server's subscription too rather than only
 silencing the browser — the subscriber count next to the event moves with it. Closing the console

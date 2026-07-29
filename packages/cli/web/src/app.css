@@ -814,3 +814,25 @@ textarea.control {
     white-space: nowrap;
     max-width: 45%;
 }
+
+/* The timing a method has collected, next to the buttons that produced it. */
+.actions {
+    flex-wrap: wrap;
+}
+
+.actions .timing {
+    font-size: 11px;
+    font-family: var(--mono);
+    margin-left: auto;
+}
+
+/* "watch all", sitting on the events heading it applies to. */
+.events h3 {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+}
+
+.stream .control {
+    margin-bottom: 10px;
+}

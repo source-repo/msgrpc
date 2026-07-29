@@ -55,6 +55,25 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **`msgrpc bench`** calls one method over and over and reports what it cost. A device is fine at one
+  call a second; what it does at twenty is the question, and answering it is ordinarily done with a
+  script that is always the same script. **Percentiles rather than an average**, because an average
+  hides exactly the calls worth knowing about - a device answering in 2 ms with one reply in four
+  seconds averages out to something that looks healthy. Failures are counted by code, since a device
+  refusing arguments and a device that stopped answering are different findings with the same shape,
+  and any failure exits 1 because errors under load are the finding.
+  - `--concurrency` bounds what may be outstanding; past that calls are **not sent and counted as
+    fallen behind**. Piling them onto a device that is already behind measures the queue rather than
+    the device, and would report healthy latencies for a device that is drowning.
+- **Console polish.** The events pane gained the filter, pause and export the traffic tab already
+  had - pausing stops the buffer filling rather than only the list rendering, and export writes the
+  jsonl `msgrpc record` writes and `jq` reads. **Watch all** takes every event in a namespace in one
+  click, which is the usual first move on an unfamiliar peer. Each method keeps its timings, with
+  **×20** to call it repeatedly and report `20 calls · p50 1 ms · last 1 ms` - `bench` in miniature,
+  for when the question is smaller than a benchmark. **copy as CLI** puts the equivalent `msgrpc
+  call …` on the clipboard with the network flags this console was started with, because a call
+  worth making in a browser is usually one worth putting in a script and retyping `--hub http://…`
+  from memory is where that stops happening.
 - **The MCP server can stand a peer up, and reaches the rest of this release.** Asking a model to
   test a device runs into the device having to exist first, and the steps that closed that gap -
   write a JSON file somewhere, open a second terminal, start the CLI - are exactly the ones a
