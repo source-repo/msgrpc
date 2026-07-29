@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * The dependencies a script directory is allowed to import.
@@ -73,17 +73,45 @@ export const listPackages = (directory: string) =>
  */
 const SAFE_SPEC = /^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.^~*><=|\s-]+)?$/i
 
+/**
+ * npm's own JavaScript entry point, run by the Node already running this - not the `npm` shim.
+ *
+ * On Windows the shim is `npm.cmd`, and since the fix for CVE-2024-27980 Node refuses to spawn a
+ * `.cmd` without `shell: true`. Turning the shell on would be worse than the problem: a version
+ * range is a legitimate part of a package spec and `>`, `<`, `|` and `^` are all permitted in one,
+ * which is ordinary text to `execFile` and metacharacters to `cmd.exe`. Reaching past the shim to
+ * the script it would have run keeps arguments as argv on every platform, which is the only version
+ * of this that is safe by construction rather than by quoting.
+ *
+ * Exported for the test, which checks both layouts without needing the other operating system.
+ */
+export const npmEntryPoint = (execPath = process.execPath, platform: NodeJS.Platform = process.platform) => {
+    const here = dirname(execPath)
+    // Windows keeps npm beside node; the POSIX layout puts it under ../lib. Both are the standard
+    // install, and nvm, Volta and the Alpine image all follow whichever one their platform uses.
+    const candidates =
+        platform === 'win32'
+            ? [join(here, 'node_modules', 'npm', 'bin', 'npm-cli.js')]
+            : [join(here, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'), join(here, '..', 'npm', 'bin', 'npm-cli.js')]
+    return candidates.find((candidate) => existsSync(candidate))
+}
+
 const npm = (directory: string, args: string[]) =>
     new Promise<{ ok: boolean; output: string }>((done) => {
+        const entry = npmEntryPoint()
+        if (!entry)
+            return done({
+                ok: false,
+                output: 'npm could not be found next to this Node, so packages cannot be managed from here. Install one alongside the other, or add the dependency by hand.'
+            })
         execFile(
-            process.platform === 'win32' ? 'npm.cmd' : 'npm',
-            args,
+            process.execPath,
+            [entry, ...args],
             { cwd: resolve(directory), timeout: INSTALL_BUDGET_MS, maxBuffer: 8 * 1024 * 1024 },
             (error, stdout, stderr) => {
                 const output = `${stdout}${stderr}`.trim()
                 if (!error) return done({ ok: true, output })
-                const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
-                done({ ok: false, output: missing ? 'npm is not on PATH, so packages cannot be managed from here.' : output || error.message })
+                done({ ok: false, output: output || error.message })
             }
         )
     })

@@ -1,5 +1,5 @@
 import { createContext, runInContext } from 'node:vm'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFileSync, spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { createInterface } from 'node:readline'
 
 /**
@@ -138,7 +138,42 @@ def _serve():
             print(json.dumps({"id": call.get("id"), "error": str(e)}), flush=True)
 `
 
-export const pythonRuntime = async (program: string, targets: string[], interpreter = 'python3'): Promise<HandlerRuntime> => {
+/**
+ * What to try when a script did not name an interpreter, in the order worth trying.
+ *
+ * `python3` is the name on Linux and macOS and is usually absent on Windows, where the python.org
+ * installer provides the `py` launcher and the executable is `python`. Getting this wrong is not a
+ * subtle failure - a fake simply refuses to start on the platform where the PLC is - so the list is
+ * per platform rather than one name and a hope.
+ *
+ * Exported for the test, which checks both without needing the other operating system.
+ */
+export const pythonCandidates = (platform: NodeJS.Platform = process.platform) =>
+    platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python']
+
+/**
+ * The first candidate that answers. Probed rather than assumed, because Windows also ships a
+ * `python` that is a Microsoft Store stub rather than an interpreter, and it fails this the same way
+ * a missing one does.
+ */
+export const findPython = (candidates = pythonCandidates()) => {
+    for (const candidate of candidates) {
+        try {
+            execFileSync(candidate, ['-c', 'pass'], { stdio: 'ignore' })
+            return candidate
+        } catch {
+            // Not this one. The error is worth nothing here; naming all of them if none works is.
+        }
+    }
+    return undefined
+}
+
+export const pythonRuntime = async (program: string, targets: string[], requested?: string): Promise<HandlerRuntime> => {
+    const interpreter = requested ?? findPython()
+    if (!interpreter)
+        throw new Error(
+            `no python interpreter found - tried ${pythonCandidates().join(', ')}. Install one, or name it in the script as python.interpreter.`
+        )
     let child: ChildProcessWithoutNullStreams
     try {
         // `-u` because a buffered interpreter answers the first call when the second arrives.

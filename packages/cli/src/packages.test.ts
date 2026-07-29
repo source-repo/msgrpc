@@ -2,7 +2,7 @@ import test from 'ava'
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addPackage, ensureManifest, listPackages, removePackage } from './packages.js'
+import { addPackage, ensureManifest, listPackages, npmEntryPoint, removePackage } from './packages.js'
 import { saveScript } from './scripts.js'
 
 /**
@@ -48,6 +48,22 @@ test('saving a script creates the manifest on the way past', (t) => {
     const dir = directory()
     saveScript(dir, 'first', 'console.log(1)')
     t.true(existsSync(join(dir, 'package.json')))
+})
+
+test("npm is reached through its own script, so Windows never spawns a .cmd", (t) => {
+    // Node refuses to spawn a .cmd without a shell since the fix for CVE-2024-27980, and turning the
+    // shell on would be worse: `>`, `<`, `|` and `^` are all legal in a version range and all
+    // metacharacters to cmd.exe. Running npm-cli.js with this Node keeps every argument as argv.
+    const windows = npmEntryPoint('C:\\Program Files\\nodejs\\node.exe', 'win32')
+    // Nothing is on disk at that path here, so the lookup finds nothing - what matters is that the
+    // candidate it would use is the script and not the shim.
+    t.is(windows, undefined)
+
+    // On this machine there is a real one, and it is a .js rather than a shell wrapper.
+    const found = npmEntryPoint()
+    t.truthy(found, 'npm should be resolvable next to the node running these tests')
+    t.regex(String(found), /npm-cli\.js$/)
+    t.notRegex(String(found), /\.cmd$/)
 })
 
 test('anything that is not a package name is refused', async (t) => {

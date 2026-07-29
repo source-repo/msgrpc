@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { execFileSync } from 'node:child_process'
 import { RpcClient, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { startFake } from './fake.js'
-import { javascriptRuntime, pythonRuntime } from './handlers.js'
+import { findPython, javascriptRuntime, pythonCandidates, pythonRuntime } from './handlers.js'
 
 /**
  * A fake that reacts, rather than repeating a canned answer.
@@ -151,6 +151,21 @@ test('a handler that does not compile is a startup failure, not a call that fail
         }),
         { message: /did not compile/ }
     )
+})
+
+test('the interpreter to try is chosen per platform, since python3 is not the Windows name', (t) => {
+    // A Windows Embedded PLC has `py` from the python.org installer and `python`, and generally no
+    // `python3` at all. Trying one name and hoping is how a fake refuses to start on the platform
+    // the device is actually on.
+    t.deepEqual(pythonCandidates('linux'), ['python3', 'python'])
+    t.deepEqual(pythonCandidates('darwin'), ['python3', 'python'])
+    t.is(pythonCandidates('win32')[0], 'py')
+    t.true(pythonCandidates('win32').includes('python'))
+
+    // Probed rather than assumed: Windows also ships a `python` that is a Store stub rather than an
+    // interpreter, and it fails this the same way a missing one does.
+    t.is(findPython(['definitely-not-an-interpreter']), undefined)
+    if (havePython) t.truthy(findPython())
 })
 
 test('a python program answers, and keeps its own state', async (t) => {

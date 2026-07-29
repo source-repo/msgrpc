@@ -73,3 +73,29 @@ jobs:
               run: npm run check:contract --workspace=@source-repo/rpc-cli
 
             - run: npm test
+
+    # The platform some of the devices are, which is the only reason this is here: there are Windows
+    # Embedded PLCs that would run a peer, and "it probably works" is not something a plant should
+    # find out at commissioning.
+    #
+    # No broker. Service containers are Linux-only on GitHub's runners, so the MQTT tests skip here
+    # and SOURCE_RPC_REQUIRE_BROKER is deliberately *not* set - the Linux job above is what proves
+    # those, and this one proves everything that is not MQTT actually runs on Windows: the paths, the
+    # socket.io transports, the child processes, and the two places that spawn one.
+    windows:
+        runs-on: windows-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 22
+                  cache: npm
+
+            - run: npm ci
+
+            - run: npm run build
+
+            - run: npm run typecheck
+
+            - run: npm test
