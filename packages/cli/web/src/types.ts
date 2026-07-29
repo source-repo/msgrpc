@@ -49,16 +49,42 @@ export interface ServerDescription {
 }
 
 /**
+ * Where this page was served from, ending in `/`.
+ *
+ * Everything the page fetches or connects to hangs off this rather than off the origin, so a reverse
+ * proxy can publish the console under a path - `https://plant.example/tools/console/` - and it still
+ * finds its own files. The origin alone would send it to `https://plant.example/console.json`, which
+ * belongs to whatever else is published there.
+ *
+ * It reads `document.baseURI` rather than `location.pathname` so that a deep link inside the app
+ * resolves to the mount point and not to the route the user happens to be on. The build already
+ * depends on the same thing: `base: './'` in vite.config.ts emits `./app.js`, which resolves this
+ * way too. Both need the published path to end in a slash, so a proxy rule must be written
+ * `location /tools/console/` and not `/tools/console`.
+ */
+export const mountUrl = () => new URL('.', document.baseURI)
+
+/**
  * The console's peer name is its name on the network, not a constant, so the page asks for it
  * before connecting. This is the one thing that cannot be an RPC call: you need a name to address.
  */
-export const consoleIdentityPath = '/console.json'
+export const consoleIdentityFile = 'console.json'
 
 export const fetchConsoleName = async () => {
-    const response = await fetch(consoleIdentityPath)
+    const response = await fetch(new URL(consoleIdentityFile, mountUrl()))
     if (!response.ok) throw new Error(`the console did not say who it is (${response.status})`)
     return ((await response.json()) as { name: string }).name
 }
+
+/**
+ * The socket.io path for this mount point.
+ *
+ * socket.io takes the prefix as an option and not as part of the url, because a path in the url is
+ * read as a *namespace* instead - `io('https://host/tools/console/')` connects to namespace
+ * `/tools/console/` on the default path and reaches nothing. So the origin goes in the url and the
+ * prefix goes here.
+ */
+export const socketPath = () => `${mountUrl().pathname}socket.io`
 
 /** What a tap asks to be shown. Mirrored from the CLI's bus.ts, like the rest of this file. */
 export interface TapFilter {

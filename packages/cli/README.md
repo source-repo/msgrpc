@@ -54,14 +54,16 @@ source-rpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--peer <name>` | check | — | ask a live peer what it serves instead of reading source; needs `--broker`/`--hub` |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
 | `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883` |
-| `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:8080`. One of `--broker`/`--hub` is required; both watches both |
+| `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:7843`. One of `--broker`/`--hub` is required; both watches both |
 | `--prefix <topic>` | console, mcp, verbs | the transport's own | must match the network you are watching |
-| `--port <n>` | console | `7300` | |
+| `--port <n>` | console | `7844`, or `8844` with `--cert` | |
 | `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
+| `--base-path <path>` | console | `/` | publish under a path, for a reverse proxy that forwards the prefix instead of stripping it. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
 | `--sign <keyfile>` | console, mcp, verbs, serve | — | HMAC keys, so it can talk to a signed network |
 | `--insecure-tls` | console, mcp, verbs, serve | off | accept any certificate on an `https`/`wss`/`mqtts` link. Unsafe by design: for a development bus with a self-signed certificate, never a plant |
+| `--cert <file>` `--key <file>` | console, broker | — | serve TLS. Together they make the console HTTPS and the bus WSS, and move the default port to 8844 / 8843 |
 | `--contracts <dir>` | mcp | — | let it save and load contracts here; without it those tools are not offered |
 | `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
 | `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
@@ -81,10 +83,30 @@ source-rpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--wait <ms>` | verbs | `5000` | how long to wait for the peer to appear before giving up |
 | `--json` | verbs | off | machine-readable output |
 | `--args <json>` | call | — | the whole argument list as a JSON array, instead of words |
-| `--port <n>` | broker | `8080` | listens on every interface |
+| `--port <n>` | broker | `7843`, or `8843` with `--cert` | listens on every interface |
 | `--name <peer>` | broker | `broker-<three words>` | how the broker identifies itself |
 | `--upstream <url>` | broker | — | join another broker; repeatable |
+| `--auth <file>` | broker, console, mcp, verbs, serve | — | bearer tokens: which to accept, and which to present. See [Authenticating the bus](#authenticating-the-bus) |
 | `--quiet` | broker | off | stop logging peers arriving and leaving |
+
+## Ports
+
+`7843` is the Source RPC port and `7844` is the web port. Both are defaults, so neither has to be
+typed. They are deliberately not in the 80xx range, which is where everything else on a developer's
+machine already is — a default that collides with whatever is on 8080 today is a default nobody
+keeps.
+
+| | |
+| --- | --- |
+| `1883` | MQTT |
+| `8083` | MQTT over WebSocket |
+| `7843` | `source-rpc broker` |
+| `7844` | `source-rpc console` |
+
+**A process needs only one of them.** The console serves its page and its RPC on the same listener —
+socket.io answers `/socket.io` and everything else is the static app — so `7844` is one port, not a
+pair. The second number exists because a bus and a console usually run on the same host, not because
+either needs two.
 
 ## Declaring the contract
 
@@ -188,7 +210,7 @@ on site: the contract says this device offers `writeSetpoint(value, mode?)` — 
 the wall is actually running?
 
 ```
-$ source-rpc check --peer plantServer --against plant.types.json --hub http://bus:8080
+$ source-rpc check --peer plantServer --against plant.types.json --hub http://bus:7843
   plant.writeSetpoint argument 0 narrowed, so a value the caller may send is no longer accepted
   plant.read no longer exists
   plant.event alarm is no longer emitted, so a subscription to it would never fire
@@ -212,7 +234,7 @@ Why does cell 3 behave differently from cell 2? Usually because one of them is r
 firmware.
 
 ```
-$ source-rpc diff cell2 plantServer --hub http://bus:8080
+$ source-rpc diff cell2 plantServer --hub http://bus:7843
 cell2  vs  plantServer
 
   plant contract version
@@ -239,7 +261,7 @@ can assert that two cells match; `--json` gives the same as data.
 ## broker
 
 ```
-source-rpc broker --port 8080
+source-rpc broker --port 7843
 ```
 
 A bus for networks that have no MQTT broker to share. It runs until Ctrl-C, relaying between the
@@ -247,16 +269,16 @@ peers that connect to it and telling each of them who else is there — which is
 through retained presence and per-peer topics, over one WebSocket port instead.
 
 ```
-source-rpc broker plantBus on port 8085
-  + cellBus (:8085)
-  + panel1 (:8085)
-  + hmi (:8085)
+source-rpc broker plantBus on port 7843
+  + cellBus (:7843)
+  + panel1 (:7843)
+  + hmi (:7843)
 ```
 
 Peers join it by dialling out, which is also the only thing a browser page can do:
 
 ```typescript
-const panel = new RpcServer({ name: 'panel1', transports: [{ connect: 'http://bus:8080' }] })
+const panel = new RpcServer({ name: 'panel1', transports: [{ connect: 'http://bus:7843' }] })
 panel.exposeClassInstance(new Panel(), 'panel')      // now callable by anything else on the bus
 ```
 
@@ -270,14 +292,83 @@ it is a switchboard, not a service.
 to the other, and a call crosses without either end knowing there was a hop:
 
 ```
-source-rpc broker --port 8085 --name plantBus
-source-rpc broker --port 8086 --name cellBus --upstream http://plant:8085
+source-rpc broker --port 7843 --name plantBus
+source-rpc broker --port 8086 --name cellBus --upstream http://plant:7843
 ```
 
 A peer on `cellBus` is then callable from `plantBus` and the other way round. Repeat `--upstream` to
 join more than one. Loops are handled — a peer is never advertised back along the link it came from,
 and frames carry a hop count and are dropped after 8 relays — so brokers dialling each other in a
 ring settle rather than storm.
+
+### Authenticating the bus
+
+Without `--auth` the broker relays for anything that can reach the port, and every peer name on it
+is an unchecked claim. It says so on startup. `--auth` is what changes that: a file of bearer
+tokens, each naming the one peer it admits.
+
+```json
+{
+    "token": "the-one-this-broker-presents-upstream",
+    "tokens": {
+        "3f9a…": "plantServer",
+        "c710…": { "name": "hmi", "roles": ["operator"] }
+    }
+}
+```
+
+```
+source-rpc broker --auth /run/secrets/bus.json
+source-rpc broker plantBus on port 7843, authenticating
+```
+
+`tokens` is what this broker accepts. `token` is what it presents when it dials an `--upstream`, so
+a broker joining another needs both: it is a bus to one side and a peer to the other. Every other
+command takes `--auth` too, and uses the `token` to join a hub that authenticates.
+
+**One token per peer.** A token that maps to a name is evidence of who is calling; a single token
+everyone shares proves only that the caller got inside the fence. The peer presents it as its
+`credentials`, and its `--name` has to be the name the token was issued for — the bus drops frames
+claiming any other source, so a mismatch reads as every call timing out rather than as a refusal.
+
+The flag names a path, never a secret, because `ps` is readable by everyone on the box. For a
+container there are `SOURCE_RPC_TOKEN` and `SOURCE_RPC_TOKENS`, which say the same two things.
+
+Two consequences worth knowing. The tap is gated with everything else, so `bus.tap()` is reachable
+only by a peer this broker admits. And an upstream broker is a peer of this one, not an operator of
+it: frames relay across the join as before, but a call to this broker's own `bus` namespace from
+across it is refused, because a connection this broker dialled is not one it authenticated.
+
+### In a container
+
+The broker is the piece of Source RPC that is infrastructure rather than a tool someone is holding,
+which is what makes it worth an image. [`Dockerfile`](Dockerfile) builds one whose entrypoint is the
+whole CLI, so a single image is a bus, a console, an MCP server or a recorder depending on the
+command:
+
+```
+docker run -d -p 7843:7843 \
+    -e SOURCE_RPC_TOKENS='{"3f9a…":"plantServer"}' \
+    sourcerepo/rpc-cli:3                                  # no command: the default is broker
+
+docker run --rm -e SOURCE_RPC_TOKEN=3f9a… sourcerepo/rpc-cli:3 \
+    peers --hub http://bus:7843 --name plantServer        # any other command, same image
+```
+
+[`docker-compose/network.yml`](../../docker-compose/network.yml) runs the whole thing — an MQTT
+broker, the bus, and a console watching both — which is the shape a plant deploys:
+
+```
+echo "CONSOLE_TOKEN=$(openssl rand -hex 32)" > docker-compose/.env
+docker compose -f docker-compose/network.yml up -d
+open http://localhost:7844
+```
+
+Note what the compose file does with the console, because it is the part that is easy to get wrong.
+`--host 0.0.0.0` is needed for the page to be reachable from outside the container at all, and it
+means anything that can reach the published port can call whatever the console is allowed to call —
+so the port is published to `127.0.0.1` rather than to every interface. The bus is not: peers have
+to reach it, and `--auth` is what makes that safe rather than the firewall.
 
 ### The traffic tap
 
@@ -288,10 +379,10 @@ plant bus that has to be restarted before it can be watched will not be watched,
 looking at is the one already going wrong.
 
 ```
-$ source-rpc call plantBus bus.tap '{"peer":"plantServer","payloads":true}' --hub http://bus:8080
+$ source-rpc call plantBus bus.tap '{"peer":"plantServer","payloads":true}' --hub http://bus:7843
 { "token": "tap-1", "expires": 1785272777436, "filter": { … } }
 
-$ source-rpc watch plantBus bus.frame --hub http://bus:8080
+$ source-rpc watch plantBus bus.frame --hub http://bus:7843
 →  hmi-3 -> plantServer  plant.writeSetpoint[1200,"auto"]
 ⇒  plantServer -> hmi-3  plant.alarm["setpoint moved",1]
 ←  plantServer -> hmi-3  plant.writeSetpoint  2ms
@@ -450,14 +541,14 @@ The console's verbs for a shell rather than a browser. Same network flags as `co
 each, and an exit code:
 
 ```
-source-rpc peers --hub http://bus:8080
-source-rpc describe plantServer --hub http://bus:8080
-source-rpc call plantServer plant.writeSetpoint 1200 auto --hub http://bus:8080
-source-rpc watch plantServer plant.alarm --hub http://bus:8080
+source-rpc peers --hub http://bus:7843
+source-rpc describe plantServer --hub http://bus:7843
+source-rpc call plantServer plant.writeSetpoint 1200 auto --hub http://bus:7843
+source-rpc watch plantServer plant.alarm --hub http://bus:7843
 ```
 
 ```
-$ source-rpc describe plantServer --hub http://bus:8080
+$ source-rpc describe plantServer --hub http://bus:7843
 plantServer (contract 3) — arguments checked
 
 plant@3  Plant
@@ -470,7 +561,7 @@ plant@3  Plant
 rather than a program that parses output.
 
 ```
-$ source-rpc call plantServer plant.writeSetpoint 3000 --hub http://bus:8080
+$ source-rpc call plantServer plant.writeSetpoint 3000 --hub http://bus:7843
 msgrpc: plantServer.plant.writeSetpoint failed: InvalidParams: argument 0 is above the maximum 2000
 $ echo $?
 1
@@ -505,7 +596,7 @@ in CI.
 else while a person still sees what it cost:
 
 ```
-$ source-rpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
+$ source-rpc call plantServer plant.read --hub http://bus:7843 | jq .celsius
 84
 ```
 
@@ -513,7 +604,7 @@ $ source-rpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
 and a stream that is pleasant to read is a stream nothing can parse:
 
 ```
-$ source-rpc watch plantServer plant.alarm --hub http://bus:8080
+$ source-rpc watch plantServer plant.alarm --hub http://bus:7843
 msgrpc: watching plantServer.plant.alarm. Ctrl-C to stop.
 {"at":1749047112004,"peer":"plantServer","namespace":"plant","event":"alarm","args":["pressure high",2]}
 ```
@@ -529,7 +620,7 @@ become addressable and then says so plainly, rather than failing intermittently 
 can reproduce:
 
 ```
-$ source-rpc call plantServr plant.read --hub http://bus:8080
+$ source-rpc call plantServr plant.read --hub http://bus:7843
 msgrpc: plantServr did not appear within 5000 ms. Run 'source-rpc peers' to see who is there.
 ```
 
@@ -539,11 +630,11 @@ A peer built from a contract rather than from code, so an HMI has something to t
 has a device willing to fail on request — which a real one is not.
 
 ```
-source-rpc serve --contract plant.types.json --hub http://bus:8080 --name fakePlant
+source-rpc serve --contract plant.types.json --hub http://bus:7843 --name fakePlant
 ```
 
 ```
-$ source-rpc describe fakePlant --hub http://bus:8080
+$ source-rpc describe fakePlant --hub http://bus:7843
 fakePlant — arguments checked
 
 plant@3  Fake
@@ -557,7 +648,7 @@ It answers every method with a value of the declared shape, and **refuses what t
 refuse** — it is given the same schema, so the same validator runs:
 
 ```
-$ source-rpc call fakePlant plant.writeSetpoint 3000 --hub http://bus:8080
+$ source-rpc call fakePlant plant.writeSetpoint 3000 --hub http://bus:7843
 msgrpc: fakePlant.plant.writeSetpoint failed: InvalidParams: argument 0: 3000 is above the maximum 2000
 ```
 
@@ -586,7 +677,7 @@ descending forever.
 ### Scripting it
 
 ```
-source-rpc serve --contract plant.types.json --script fake.json --fail plant.halt=Unauthorized --hub http://bus:8080
+source-rpc serve --contract plant.types.json --script fake.json --fail plant.halt=Unauthorized --hub http://bus:7843
 ```
 
 ```json
@@ -617,7 +708,7 @@ A device is fine at one call a second. What does it do at twenty? Finding that o
 done by writing a script, and it is always the same script.
 
 ```
-$ source-rpc bench plantServer plant.read --rate 40 --for 3000 --hub http://bus:8080
+$ source-rpc bench plantServer plant.read --rate 40 --for 3000 --hub http://bus:7843
 plantServer plant.read  120 calls in 3.0s at 40/s
   ms   min 1  p50 3  p90 4  p95 4  p99 5  max 5
   ok   120   failed 0
@@ -654,8 +745,8 @@ behave like the old one — does it?* Capture a session from the working plant, 
 replacement, and compare the answers.
 
 ```
-source-rpc record --out session.jsonl --hub http://bus:8080
-source-rpc replay session.jsonl --against newPlant --hub http://bus:8080
+source-rpc record --out session.jsonl --hub http://bus:7843
+source-rpc replay session.jsonl --against newPlant --hub http://bus:7843
 ```
 
 `record` opens a tap wherever it can — a broker's `bus` over socket.io, its own subscription over
@@ -681,7 +772,7 @@ results cannot be replayed, which is the only reason to make one. `--no-payloads
 one that was recorded:
 
 ```
-$ source-rpc replay session.jsonl --hub http://bus:8080
+$ source-rpc replay session.jsonl --hub http://bus:7843
   ≠ plantServer plant.read: expected {"celsius":84,"bar":3.2}, got {"celsius":12,"bar":3.2}
 source-rpc replay: 12 calls, 9 matched, 3 differed, 0 failed, 0 uncompared
 $ echo $?
@@ -712,7 +803,7 @@ thing entirely.
 
 ```
 source-rpc mcp --broker mqtt://localhost:1883
-source-rpc mcp --hub http://hub:8080
+source-rpc mcp --hub http://hub:7843
 ```
 
 Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can
@@ -804,11 +895,11 @@ the one capability that stays off unless asked for: no `--contracts`, no tools t
 
 ```
 source-rpc console --broker mqtt://localhost:1883      # an MQTT network
-source-rpc console --hub http://hub:8080               # a socket.io network
+source-rpc console --hub http://hub:7843               # a socket.io network
 source-rpc console --broker mqtt://... --hub http://... # both at once
 ```
 
-Opens a console at `http://127.0.0.1:7300` listing every peer that is up, what each one exposes, a
+Opens a console at `http://127.0.0.1:7844` listing every peer that is up, what each one exposes, a
 form to call it, and a live stream of its events.
 
 **Discovery costs nothing.** Every peer announces itself, so the console is handed everyone already
@@ -822,6 +913,48 @@ call.
 
 A peer only appears in detail if its server was started with `exposeIntrospection`; otherwise the
 console says so rather than guessing.
+
+**One port.** The page, `console.json` and the RPC link all arrive on 7844: socket.io answers
+`/socket.io` on the same listener the static app is served from. There is no second port to open and
+no CORS to configure, because the page and its server share an origin.
+
+### Behind a reverse proxy
+
+The console can be published under a path. Nothing needs configuring — the page works out where it
+was served from and hangs everything off that, so its assets, `console.json` and its socket all land
+back on the same mount:
+
+```nginx
+location /tools/console/ {
+    proxy_pass http://console:7844/;      # the trailing slashes matter, on both lines
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection "upgrade";
+}
+```
+
+Two things that will bite otherwise. **Both paths must end in `/`** — the page resolves everything
+relative to its mount point, and `/tools/console` without the slash resolves one level up, so the
+app asks `/tools/` for its files. And the `Upgrade` headers are what let socket.io leave long
+polling for a WebSocket; without them it still works, and quietly costs a round trip per frame.
+
+That rule **strips** the prefix, which is what the trailing slash on `proxy_pass` does. For a proxy
+that forwards it through unchanged — `proxy_pass http://console:7844;`, no slash, or an ingress that
+does not rewrite — tell the console where it is published:
+
+```
+source-rpc console --hub http://bus:7843 --base-path /tools/console
+source-rpc console on http://127.0.0.1:7844/tools/console/, watching http://bus:7843 as console-…
+```
+
+The page, its assets, `console.json` and socket.io then all answer under that path and nowhere else:
+a request to `/` gets a 404 rather than the app, because the rest of that origin belongs to whatever
+the proxy publishes beside it. `/tools/console` without the slash redirects to `/tools/console/`,
+since that is the only place the relative paths come out right.
+
+Both ends of the same idea: the page always asks relative to where it was served, and `--base-path`
+tells the *server* to expect the prefix. Use it only when the proxy keeps the prefix — with a
+stripping rule it would put the console one level deeper than the proxy is looking.
 
 ### Calling a method
 
@@ -927,7 +1060,7 @@ has no route to the internet, and a page that fetches from one renders blank exa
 needed.
 
 `npm run dev:web` in the package serves the app with hot reload against a console started
-separately on port 7300.
+separately on port 7844.
 
 ### Signed networks
 

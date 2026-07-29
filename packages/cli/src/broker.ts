@@ -1,4 +1,5 @@
-import { RpcServer, TransportEvent, type RelayedFrame, type RpcSchema, type Transport } from '@source-repo/rpc'
+import { RpcServer, TransportEvent, type RelayedFrame, type RpcAuthenticator, type RpcSchema, type Transport } from '@source-repo/rpc'
+import type { ServerOptions as TlsServerOptions } from 'node:https'
 import { BusService } from './bus.js'
 // Extracted from bus.ts by `npm run contract` and committed, so a console pointed at a broker gets
 // argument fields for tap() rather than `tap(…)`.
@@ -20,6 +21,11 @@ import contract from './bus.types.json' with { type: 'json' }
  * now mirror everything crossing it - which they could always have done by impersonating a peer,
  * but not this conveniently. `authenticate` and `relay` are what gate it.
  *
+ * With `authenticate` it gates the whole bus rather than just the tap: a peer that presents no
+ * token this broker knows never reaches the RPC layer, and one that does may only claim the name
+ * its token was issued for. That is the difference between a bus behind a trusted network and a bus
+ * that can be put on one that is not.
+ *
  * With `upstream` it dials another broker as well, which makes the two one network: each side's
  * peers are advertised to the other, and a call crosses without either end knowing there was a hop.
  */
@@ -30,6 +36,22 @@ export interface BrokerOptions {
     name: string
     /** Brokers to join. Peers here become reachable from there, and the other way round. */
     upstream?: string[]
+    /**
+     * Certificate and key, which is what makes this bus wss:// rather than ws://. Absent means
+     * plaintext, which is right on a segment that is already isolated or behind a terminating proxy.
+     */
+    tls?: TlsServerOptions
+    /**
+     * Verify what a peer presents when it dials in. Without it the broker relays for anyone who can
+     * reach the port, and every peer name on it is an unchecked claim.
+     */
+    authenticate?: RpcAuthenticator
+    /**
+     * Presented to each upstream, for joining a broker that authenticates. One value for all of
+     * them: a token names the peer that holds it, and this broker is one peer however many brokers
+     * it joins, so the same token is the right thing to send to each.
+     */
+    upstreamCredentials?: unknown
     /** Called for every arrival and departure, so a command line can show the network filling up. */
     onPeer?: (peer: string, state: 'online' | 'offline', where: string) => void
 }
@@ -39,7 +61,11 @@ export const startBroker = async (options: BrokerOptions) => {
     const bus = new BusService(options.name)
     const server = new RpcServer({
         name: options.name,
-        transports: [{ port: options.port }, ...upstream.map((url) => ({ connect: url }))],
+        transports: [
+            { port: options.port, ...(options.tls ? { tls: options.tls } : {}) },
+            ...upstream.map((url) => ({ connect: url, ...(options.upstreamCredentials ? { credentials: options.upstreamCredentials } : {}) }))
+        ],
+        ...(options.authenticate ? { authenticate: options.authenticate } : {}),
         // The tap is the only thing here, and it describes itself: a console pointed at a broker
         // used to be told ClassNotFound, which is indistinguishable from a device whose server was
         // started without exposeIntrospection.

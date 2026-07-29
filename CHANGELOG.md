@@ -2,8 +2,8 @@
 
 ## Source RPC 3.0.0
 
-**Renamed.** `msgrpc` is now Source RPC: `@source-repo/msgrpc` → `@source-repo/rpc`,
-`@source-repo/msgrpc-cli` → `@source-repo/rpc-cli`, and the command `msgrpc` → `source-rpc`. `msg`
+**Renamed.** `msgrpc` is now Source RPC: `@source-repo/rpc` → `@source-repo/rpc`,
+`@source-repo/rpc-cli` → `@source-repo/rpc-cli`, and the command `msgrpc` → `source-rpc`. `msg`
 was always meant as *message*, which is what this is about, but it is a short word full of other
 people's abbreviations and it reads as a puzzle to anyone meeting it for the first time.
 
@@ -56,8 +56,50 @@ decides whether an operator sends a second start.
 Deliberately not built, with reasons in the README: cancellation, `online-only` delivery, a per-call
 invocation context for handlers, and global admission limits.
 
+### A bus you can deploy
+
+- **Well-known ports.** `defaultWebSocketPort` is **7843** and `defaultWebPort` is **7844**, where
+  anything serving a browser listens. `source-rpc broker` and `source-rpc console` default to them,
+  replacing 3000 for the library default, 8080 for the broker and 7300 for the console — one number
+  to remember instead of three. Deliberately clear of the 80xx range: 8080, 8081 and 8085 are taken
+  on any machine that has been worked on for a while, and a default that collides on the laptop is a
+  default nobody keeps. A single process still needs only one port, since a page and its RPC share a
+  listener; the second number is for running a bus and a console on one host.
+- **`source-rpc broker --auth <file>`**, and `authenticate` on `startBroker`. The library has had an
+  `authenticate` hook since 2.0, but nothing on the broker forwarded it and no flag reached it — so
+  the command printed *"use authenticate to gate that"*, which was advice its own user could not
+  take. A bus can now be put on a network that is not already trusted.
+  - **`createTokenAuthenticator`** packages the common case: a map from bearer token to the peer it
+    admits. One token per peer, deliberately, with no single-secret form — a token that maps to a
+    name is evidence of who is calling, and a shared one proves only that the caller is inside the
+    fence. Blank tokens, grants with no name and an empty map throw rather than construct.
+  - `--auth` names a path, never a secret; `SOURCE_RPC_TOKEN` and `SOURCE_RPC_TOKENS` say the same
+    two things for a container. The same flag gives every other command the credentials to join a
+    hub that authenticates, which `hubCredentials` previously had no way to receive.
+- **A container.** `packages/cli/Dockerfile` builds an image whose entrypoint is the whole CLI, so
+  one image is a bus, a console, an MCP server or a recorder depending on the command.
+  `docker-compose/network.yml` runs an MQTT broker, a bus and a console together.
+- **The console can be published under a path by a reverse proxy.** Its assets were already relative,
+  but two runtime paths were not: it fetched `/console.json` and connected to `window.location.origin`,
+  both of which leave the mount point behind and land on whatever else is published at the root. The
+  page now derives both from `document.baseURI`, so no configuration is needed as long as the proxy
+  strips the prefix and the published path ends in a slash.
+  - **`--base-path`** covers the proxy that forwards the prefix instead. The page, its assets,
+    `console.json` and socket.io all move to it, `/` stops answering — the rest of that origin
+    belongs to whatever is published beside the console — and the mount point without its trailing
+    slash redirects to the one with it, which is the only place relative paths can be put right.
+
 ### Security
 
+- **An authenticating socket.io transport registered peer names it had just rejected.** A frame's
+  source is recorded in the shared peer registry as the header is parsed, which is right for MQTT —
+  the broker is the authority there and there is no connection anyone could check — but on a
+  transport with an authenticator it happened before the identity check, and so applied to frames
+  that were then dropped. Sending one rejected frame was enough to have a bus advertise a peer that
+  did not exist, and to point lookups for a real peer's name at a transport where nothing answers to
+  it. Delivery was never affected — that reads a map only the post-check path writes — so the effect
+  was disruption rather than interception. Registration now happens where the trust decision is
+  made. Nothing changes without an authenticator, where a name was never evidence to begin with.
 - **A signed MQTT 5 frame's content type was not covered by its signature**, and altering it could
   change what the frame said while the signature stayed valid. The reasoning written into the code
   was that content type only says how to read bytes that are themselves signed, so changing it could

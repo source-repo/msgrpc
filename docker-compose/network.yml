@@ -1,0 +1,73 @@
+# A whole Source RPC network: an MQTT broker, a WebSocket bus, and a console watching both.
+#
+#   docker compose -f docker-compose/network.yml up -d
+#   open http://localhost:7844
+#
+# docker-compose.yml next to this runs the MQTT broker alone, which is all the test suite needs.
+# This one is the deployment shape: the pieces a plant actually runs, and the ports it runs them on.
+#
+#   1883  MQTT                    7843  Source RPC bus
+#   8083  MQTT over WebSocket    7844  Source RPC console  (the bus port + 10000)
+#   8883  MQTT over TLS          18083  EMQX dashboard      (its MQTT-over-WS port + 10000)
+#
+# CONSOLE_TOKEN has to be set - there is no default, because a default token is a published one:
+#
+#   echo "CONSOLE_TOKEN=$(openssl rand -hex 32)" > docker-compose/.env
+services:
+    emqx:
+        image: emqx/emqx:5.9.3
+        container_name: source-rpc-emqx
+        restart: unless-stopped
+        ports:
+            - '1883:1883'
+            - '8083:8083'
+            - '8883:8883'
+            - '18083:18083'
+        deploy:
+            resources:
+                limits:
+                    memory: 512M
+
+    # The bus. Peers that cannot share an MQTT broker - a browser page above all, which cannot
+    # listen at all - dial this instead and become reachable by name.
+    bus:
+        image: sourcerepo/rpc-cli:3
+        container_name: source-rpc-bus
+        restart: unless-stopped
+        command: ['broker', '--name', 'bus']
+        environment:
+            # Which tokens this bus admits, and the one peer name each one may claim. Every peer
+            # that joins needs a line here; without SOURCE_RPC_TOKENS the bus relays for anyone who
+            # can reach the port and every name on it is an unchecked claim.
+            SOURCE_RPC_TOKENS: '{"${CONSOLE_TOKEN:?set CONSOLE_TOKEN, see the header of this file}":"console"}'
+        ports:
+            - '7843:7843'
+
+    # The CLI, alive in a container with a port open. Same image as the bus, different command:
+    # it joins the bus as a peer and serves the browser console on 7844.
+    console:
+        image: sourcerepo/rpc-cli:3
+        container_name: source-rpc-console
+        restart: unless-stopped
+        depends_on: [bus, emqx]
+        # --host 0.0.0.0 because the default 127.0.0.1 would only be reachable from inside the
+        # container. That makes it reachable by anything that can reach the published port, and it
+        # can call any method it is allowed to - so publish it to localhost, as below, or put an
+        # authenticating proxy in front.
+        command:
+            - console
+            - --name
+            - console
+            - --hub
+            - http://bus:7843
+            - --broker
+            - mqtt://emqx:1883
+            - --host
+            - 0.0.0.0
+        environment:
+            # Presented to the bus, which admits it as the peer named `console` - which is why
+            # --name above has to say `console` and not something else.
+            SOURCE_RPC_TOKEN: '${CONSOLE_TOKEN:?set CONSOLE_TOKEN, see the header of this file}'
+        ports:
+            # Bound to the loopback interface, not published to the world. See the note on --host.
+            - '127.0.0.1:7844:7844'

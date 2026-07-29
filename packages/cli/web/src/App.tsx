@@ -11,7 +11,7 @@ import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
 import { Presence } from './Presence'
-import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
+import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, socketPath, typeText } from './types'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -68,7 +68,9 @@ const useConsole = () => {
 
                 server = new RpcServer({
                     name,
-                    transports: [{ connect: window.location.origin }],
+                    // Origin in the url, mount point in the path - see socketPath. Together they
+                    // are where this page came from, so a proxied console reaches its own server.
+                    transports: [{ connect: window.location.origin, path: socketPath() }],
                     readyTimeout: 10000,
                     schema: chatContract as RpcSchema,
                     // So a page can be selected in another page's console and describe itself.

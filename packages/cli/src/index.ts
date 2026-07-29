@@ -1,7 +1,21 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createHmacSigner, createHmacVerifier, namespaceProblems, readableNameFor, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/rpc'
+import {
+    createHmacSigner,
+    createHmacVerifier,
+    createTokenAuthenticator,
+    defaultSecureWebPort,
+    defaultSecureWebSocketPort,
+    defaultWebPort,
+    defaultWebSocketPort,
+    namespaceProblems,
+    readableNameFor,
+    type MessageSigner,
+    type MessageVerifier,
+    type RpcSchema,
+    type TokenGrant
+} from '@source-repo/rpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
@@ -62,7 +76,7 @@ const usage = `source-rpc <command> [options]
 
   peers / describe / call / watch
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
-    --hub <url>                 a socket.io network, e.g. http://hub:8080
+    --hub <url>                 a socket.io network, e.g. http://hub:7843
                                 one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
     --timeout <ms>              call timeout, default 10000
@@ -78,11 +92,14 @@ const usage = `source-rpc <command> [options]
 
   console
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
-    --hub <url>                 a socket.io network, e.g. http://hub:8080
+    --hub <url>                 a socket.io network, e.g. http://hub:7843
                                 one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
-    --port <n>                  default 7300
+    --port <n>                  default 7844, or 8844 with --cert
     --host <address>            default 127.0.0.1 - see the warning it prints before widening this
+    --cert <file> --key <file>  serve HTTPS, and WSS with it; moves the default port to 8844
+    --base-path <path>          publish under a path, for a reverse proxy that forwards the prefix
+                                instead of stripping it; not needed for the ordinary rule
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how the console identifies itself, default console-<three words>
     --sign <keyfile>            HMAC keys, so the console can talk to a signed network
@@ -124,10 +141,28 @@ const usage = `source-rpc <command> [options]
                                 exits 1 if any answer differed or any call failed
 
   broker
-    --port <n>                  default 8080, on every interface
+    --port <n>                  default 7843, or 8843 with --cert; on every interface
+    --cert <file> --key <file>  serve WSS rather than WS; moves the default port to 8843
     --name <peer>               how the broker identifies itself, default broker-<three words>
     --upstream <url>            join another broker, repeatable; the two become one network
+    --auth <file>               tokens to accept, and the one to present upstream; without it the
+                                bus relays for anyone that can reach the port
     --quiet                     do not log peers arriving and leaving
+
+  ports
+    7843 rpc          7844 console          the plaintext pair
+    8843 rpc-tls      8844 console-tls      the same two with a certificate
+                                --cert and --key move a server to its encrypted port on their own,
+                                so the convention holds without anyone remembering the number
+
+  --auth <file>                 bearer tokens, for every command above
+    { "token": "…",             presented when this command dials a hub that authenticates
+      "tokens": {               accepted when this command is the bus: token -> the peer it admits
+        "…": "plantServer",
+        "…": { "name": "hmi", "roles": ["operator"] } } }
+    SOURCE_RPC_TOKEN            the same "token", for a container
+    SOURCE_RPC_TOKENS           the same "tokens" as JSON, for a container
+                                never a flag: ps is readable by everyone on the box
 `
 
 const argument = (argv: string[], flag: string, fallback: string) => {
@@ -203,6 +238,101 @@ const readSigningKeys = (path: string, command: string) => {
 }
 
 /**
+ * Bearer tokens, read from a file or the environment. Never a flag, for the same reason the signing
+ * secret is not one: `ps` is readable by everyone on the box.
+ *
+ *   { "token": "…", "tokens": { "…": "plantServer", "…": { "name": "hmi", "roles": ["operator"] } } }
+ *
+ * `token` is what this command presents when it dials a bus that authenticates. `tokens` is what
+ * `broker` accepts, each mapping to the one peer name it admits. A file may carry either or both -
+ * a broker joining an upstream needs both, since it is a bus to one side and a peer to the other.
+ *
+ * `SOURCE_RPC_TOKEN` and `SOURCE_RPC_TOKENS` say the same two things, for a container where a file
+ * is a mount and an environment variable is a line in the compose file. `--auth` names a path
+ * rather than a secret, so it is explicit and wins over both.
+ */
+interface AuthFile {
+    token?: string
+    tokens?: { [token: string]: TokenGrant }
+}
+
+/**
+ * Certificate and key for a server this command opens, or undefined for plain HTTP.
+ *
+ * The material is what asks for TLS - there is no `--tls` switch, because a switch without a
+ * certificate opens a port that listens and then fails every handshake, which is the shape the
+ * library refused when `{ https: true }` was removed. Paths rather than contents: a PEM on the
+ * command line would be in `ps` and in the shell history, and both halves of a key pair belong in
+ * the same place as each other.
+ */
+const readTls = (argv: string[], command: string) => {
+    const cert = argument(argv, '--cert', '')
+    const key = argument(argv, '--key', '')
+    if (!cert && !key) return undefined
+    if (!cert || !key) {
+        process.stderr.write(`source-rpc ${command}: --cert and --key go together; got only ${cert ? '--cert' : '--key'}\n`)
+        process.exit(1)
+    }
+    try {
+        return { cert: readFileSync(cert), key: readFileSync(key) }
+    } catch (e) {
+        process.stderr.write(`source-rpc ${command}: cannot read the certificate or key: ${(e as Error).message}\n`)
+        process.exit(1)
+    }
+}
+
+/**
+ * The port to listen on: what was asked for, or the default for what is being served.
+ *
+ * A certificate moves the default from 7843/7844 to 8843/8844, so the convention holds without
+ * anyone having to remember it - `--cert`/`--key` is enough to be found where a TLS peer would look.
+ * An explicit `--port` always wins, since a plant with its own numbering has the last word.
+ */
+const listeningPort = (argv: string[], secure: boolean, plain: number, encrypted: number) =>
+    Number(argument(argv, '--port', String(secure ? encrypted : plain)))
+
+const readAuth = (argv: string[], command: string): AuthFile => {
+    const path = argument(argv, '--auth', '')
+    if (!path) {
+        const environmentTokens = process.env.SOURCE_RPC_TOKENS
+        let tokens: AuthFile['tokens']
+        if (environmentTokens) {
+            try {
+                tokens = JSON.parse(environmentTokens) as AuthFile['tokens']
+            } catch (e) {
+                process.stderr.write(`source-rpc ${command}: SOURCE_RPC_TOKENS is not JSON: ${(e as Error).message}\n`)
+                process.exit(1)
+            }
+        }
+        return {
+            ...(process.env.SOURCE_RPC_TOKEN ? { token: process.env.SOURCE_RPC_TOKEN } : {}),
+            ...(tokens ? { tokens } : {})
+        }
+    }
+
+    let auth: AuthFile
+    try {
+        auth = JSON.parse(readFileSync(path, 'utf8')) as AuthFile
+    } catch (e) {
+        process.stderr.write(`source-rpc ${command}: cannot read tokens from ${path}: ${(e as Error).message}\n`)
+        process.exit(1)
+    }
+    if (!auth.token && !auth.tokens) {
+        // An empty file is the failure that looks like success: the command starts, and the bus it
+        // meant to gate is open. Better to refuse than to run unauthenticated on request.
+        process.stderr.write(`source-rpc ${command}: ${path} has neither "token" nor "tokens"\n`)
+        process.exit(1)
+    }
+    try {
+        // Worth saying out loud: whoever can read this file can be these peers.
+        if (statSync(path).mode & 0o077) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
+    } catch {
+        // Not worth failing over if the mode cannot be read.
+    }
+    return auth
+}
+
+/**
  * The flags every command that joins a network takes, read once.
  *
  * console, mcp and the one-shot verbs all need the same six, and the two checks that go with them:
@@ -226,6 +356,9 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
         process.stderr.write(`source-rpc ${command}: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
         process.exit(1)
     }
+    // A token is presented to a hub, never to a broker: MQTT authenticates at the broker, with
+    // credentials the broker was configured with, and this has no say in it.
+    const { token } = readAuth(argv, command)
     return {
         ...(broker ? { broker } : {}),
         ...(hub ? { hub } : {}),
@@ -234,6 +367,7 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
         callTimeout: Number(argument(argv, '--timeout', '10000')),
         ...(argv.includes('--insecure-tls') ? { insecureTls: true } : {}),
         ...(signing ? { sign: signing.sign, ...(signing.verify ? { verify: signing.verify } : {}) } : {}),
+        ...(token ? { hubCredentials: { token } } : {}),
         signing
     }
 }
@@ -252,6 +386,8 @@ const VALUE_FLAGS = new Set([
     '--wait',
     '--name',
     '--sign',
+    '--auth',
+    '--base-path',
     '--args',
     '--project',
     '--out',
@@ -271,7 +407,9 @@ const VALUE_FLAGS = new Set([
     '--contracts',
     '--rate',
     '--concurrency',
-    '--idempotency-key'
+    '--idempotency-key',
+    '--cert',
+    '--key'
 ])
 
 const positionals = (argv: string[]) => {
@@ -602,28 +740,46 @@ const runBench = async (argv: string[]) => {
 }
 
 const runBroker = async (argv: string[]) => {
-    const port = Number(argument(argv, '--port', '8080'))
+    const tls = readTls(argv, 'broker')
+    const port = listeningPort(argv, !!tls, defaultWebSocketPort, defaultSecureWebSocketPort)
     const upstream = argumentList(argv, '--upstream')
     const quiet = argv.includes('--quiet')
     const name = argument(argv, '--name', readableNameFor('broker'))
+    const auth = readAuth(argv, 'broker')
+    let authenticate
+    try {
+        authenticate = auth.tokens ? createTokenAuthenticator(auth.tokens) : undefined
+    } catch (e) {
+        // Every way of getting this wrong - a blank token, a grant with no name, an empty map -
+        // would otherwise start a bus that admits more than the operator meant it to.
+        process.stderr.write(`source-rpc broker: ${(e as Error).message}\n`)
+        process.exit(1)
+    }
 
     const running = await startBroker({
         port,
         name,
+        ...(tls ? { tls } : {}),
         ...(upstream.length ? { upstream } : {}),
+        ...(authenticate ? { authenticate } : {}),
+        ...(auth.token ? { upstreamCredentials: { token: auth.token } } : {}),
         ...(quiet ? {} : { onPeer: (peer, state, where) => process.stdout.write(`  ${state === 'online' ? '+' : '-'} ${peer} (${where})\n`) })
     }).catch((e: Error) => {
         // A port already taken is the ordinary way this fails, and it deserves a sentence.
         process.stderr.write(`source-rpc broker: cannot start on port ${port}: ${e.message}\n`)
         process.exit(1)
     })
-    process.stdout.write(`source-rpc broker ${name} on port ${port}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`)
-    // It listens on every interface and forwards for whoever connects, without checking who they
-    // are. Worth saying plainly rather than leaving to be discovered.
-    process.stderr.write('source-rpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust.\n')
-    // And now it will also show them everything it relays, if they ask. They could always have read
-    // it by impersonating a peer; this is merely one call. Said out loud for the same reason.
-    process.stderr.write('source-rpc broker: bus.tap() mirrors every frame crossing this broker to whoever calls it. Use authenticate to gate that.\n')
+    process.stdout.write(
+        `source-rpc broker ${name} on ${tls ? 'wss' : 'ws'} port ${port}${authenticate ? ', authenticating' : ''}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`
+    )
+    if (!authenticate) {
+        // It listens on every interface and forwards for whoever connects, without checking who they
+        // are. Worth saying plainly rather than leaving to be discovered.
+        process.stderr.write('source-rpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust, or give it --auth.\n')
+        // And now it will also show them everything it relays, if they ask. They could always have read
+        // it by impersonating a peer; this is merely one call. Said out loud for the same reason.
+        process.stderr.write('source-rpc broker: bus.tap() mirrors every frame crossing this broker to whoever calls it. --auth is what gates that.\n')
+    }
 
     // Catching matters most here: a shutdown that fails would otherwise reject unhandled, and the
     // process would die on that instead of exiting cleanly - and print nothing about why.
@@ -661,10 +817,14 @@ const runConsole = async (argv: string[]) => {
     const { signing, ...network } = resolveNetworkFlags(argv, 'console', 'console')
     const host = argument(argv, '--host', '127.0.0.1')
 
+    const basePath = argument(argv, '--base-path', '')
+    const tls = readTls(argv, 'console')
     const running = await startConsole({
         ...network,
-        port: Number(argument(argv, '--port', '7300')),
-        host
+        port: listeningPort(argv, !!tls, defaultWebPort, defaultSecureWebPort),
+        host,
+        ...(tls ? { tls } : {}),
+        ...(basePath ? { basePath } : {})
     })
     const watching = [network.broker, network.hub].filter(Boolean).join(' and ')
     process.stdout.write(`source-rpc console on ${running.url}, watching ${watching} as ${network.name}${signing ? ', signing frames' : ''}\n`)

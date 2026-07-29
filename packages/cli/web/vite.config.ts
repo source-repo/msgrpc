@@ -25,5 +25,5 @@ export default defineConfig({
     },
     // `npm run dev:web` serves the app with hot reload and forwards the RPC link to a console
     // started separately on its default port.
-    server: { proxy: { '/socket.io': { target: 'http://localhost:7300', ws: true } } }
+    server: { proxy: { '/socket.io': { target: 'http://localhost:7844', ws: true } } }
 })

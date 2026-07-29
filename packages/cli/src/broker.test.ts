@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { RpcClient, RpcServer } from '@source-repo/rpc'
+import { RpcClient, RpcServer, createTokenAuthenticator } from '@source-repo/rpc'
 import { startBroker } from './broker.js'
 
 /** Nothing here touches MQTT: the point of a WebSocket bus is to work where there is no broker. */
@@ -75,4 +75,49 @@ test('a broker that cannot bind says so instead of claiming it started', async (
     const first = await startBroker({ port: 8074, name: peer('first') })
     await t.throwsAsync(startBroker({ port: 8074, name: peer('second') }), { message: /EADDRINUSE/ })
     await first.close()
+})
+
+test('an authenticating broker relays for the peers its tokens name, and nobody else', async (t) => {
+    const bus = await startBroker({
+        port: 8075,
+        name: peer('gatedBus'),
+        authenticate: createTokenAuthenticator({ 'panel-token': peer('panel3'), 'hmi-token': peer('hmi3') })
+    })
+
+    const panel = new RpcServer({ name: peer('panel3'), transports: [{ connect: 'http://localhost:8075', credentials: { token: 'panel-token' } }] })
+    panel.exposeClassInstance(new Panel(), 'panel')
+    await panel.ready()
+
+    const hmi = new RpcClient('http://localhost:8075', { name: peer('hmi3'), credentials: { token: 'hmi-token' }, callTimeout: 4000 })
+    await hmi.ready()
+    await waitFor(() => bus.peers().includes(peer('panel3')))
+
+    // Two authenticated peers, relaying through a bus that checked them both.
+    t.is(await (await hmi.proxy<Panel>('panel', peer('panel3'))).remote!.status(), 'the panel answered')
+
+    // Nothing without a token gets that far. ready() is what fails here, unlike the stolen-token
+    // case: with no credentials at all there is no identity, so the handshake itself is refused.
+    const intruder = new RpcClient('http://localhost:8075', { name: peer('intruder'), readyTimeout: 800 })
+    await t.throwsAsync(intruder.ready(), { message: /not ready within/ })
+    t.false(bus.peers().includes(peer('intruder')))
+    await intruder.close()
+
+    await hmi.close()
+    await panel.close()
+    await bus.close()
+})
+
+test('a token holder cannot get itself listed under another peer"s name', async (t) => {
+    const bus = await startBroker({ port: 8076, name: peer('gatedBus2'), authenticate: createTokenAuthenticator({ 'hmi-token': peer('hmi4') }) })
+
+    // A real token, the wrong name. The socket opens - the token is valid - and then nothing works:
+    // the announcement is refused, so the bus never lists it, and it never becomes addressable.
+    const impostor = new RpcClient('http://localhost:8076', { name: peer('plantServer'), credentials: { token: 'hmi-token' }, readyTimeout: 2000, callTimeout: 700 })
+    await impostor.ready()
+    await t.throwsAsync(async () => (await impostor.proxy<Panel>('panel', peer('panel4'))).remote!.status())
+
+    t.deepEqual(bus.peers(), [])
+
+    await impostor.close()
+    await bus.close()
 })

@@ -518,7 +518,7 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
             subscription: false
         }
         try {
-            return `${payload.path} ${execution(context)}`
+            return `${payload.path}\u0000${execution(context)}`
         } catch {
             // A key function that throws serialises the whole instance rather than letting the call
             // run unordered. The safe reading of "I cannot tell you which queue" is the strictest one.

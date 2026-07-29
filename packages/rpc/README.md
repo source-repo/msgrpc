@@ -50,7 +50,7 @@ export class Calculator {
 }
 ```
 
-The server. With no transports configured it listens on WebSocket (socket.io) port 3000:
+The server. With no transports configured it listens on WebSocket (socket.io) port 7843:
 
 ```typescript
 import { RpcServer } from '@source-repo/rpc'
@@ -67,7 +67,7 @@ A client, in another Node process, a browser page, or the same process for testi
 import { RpcClient } from '@source-repo/rpc'
 import type { Calculator } from './calculator.js'    // the type only - see below
 
-const client = new RpcClient('http://localhost:3000')
+const client = new RpcClient('http://localhost:7843')
 await client.ready()
 
 const calculator = await client.proxy<Calculator>('calculator')
@@ -123,10 +123,39 @@ The server's `transports` say where it listens; the client's url says where to r
 
 | server | client |
 | --- | --- |
-| `new RpcServer()` | `new RpcClient()` — socket.io on port 3000, the default on both sides |
+| `new RpcServer()` | `new RpcClient()` — socket.io on port 7843, the default on both sides |
 | `transports: [{ port: 8080 }]` (also `tls`, `path`) | `new RpcClient('http://host:8080')` |
 | `transports: [{ server: httpServer }]` | `new RpcClient(origin)` — share an `http.Server` you already have, so the page and its RPC arrive on one port |
 | `transports: [{ brokerurl: 'mqtt://broker:1883' }]` | `new RpcClient('mqtt://broker:1883', { defaultTarget: 'plantServer' })` |
+
+**7843 is the Source RPC port**, exported as `defaultWebSocketPort`, and 7844 — `defaultWebPort` —
+is where anything serving a browser puts its HTTP port. Adjacent rather than an offset apart,
+because they are read together. Both are deliberately clear of the 80xx range, where a developer's
+other work already is.
+
+| | | |
+| --- | --- | --- |
+| `1883` | | MQTT |
+| `8083` | | MQTT over WebSocket |
+| `7843` | `rpc` | Source RPC — an `RpcServer`, or `source-rpc broker` |
+| `7844` | `console` | Source RPC console, or anything else of yours serving a page |
+| `8843` | `rpc-tls` | the same, with a certificate |
+| `8844` | `console-tls` | |
+
+The encrypted pair is a thousand above rather than beside: the last two digits still match, so it is
+one number to remember with a rule attached, but **no range covers a plain port and an encrypted
+one**. `allow 7843:7846` is the firewall rule somebody writes at the end of a long day, and it must
+not be able to publish the clear-text bus by fencepost while meaning to open only the encrypted one.
+MQTT draws the same line between 1883 and 8883, so the habit transfers.
+
+These say where to *find* a service; nothing enforces them. A port carries TLS because it was given
+a certificate, never because of its number — and the CLI's `--cert`/`--key` move a server to its
+encrypted port on their own, so the convention holds without anyone having to remember it.
+
+**One process needs one port.** `{ server: httpServer }` above is how a page and its RPC arrive
+together: socket.io answers `/socket.io` on that listener and your own handler serves everything
+else. The console is built exactly this way. The second number is for running two programs on one
+host.
 
 A server may hold several at once, serving the same exposed instances to each. One server can face a
 browser over socket.io and a plant network over MQTT:
@@ -146,9 +175,9 @@ somebody else and gets forwarded. Everything else dials *it*, and gets what MQTT
 them: presence, addressing by name, and any peer able to call any other.
 
 ```typescript
-const bus = new RpcServer({ name: 'bus', transports: [{ port: 8080 }] })
+const bus = new RpcServer({ name: 'bus', transports: [{ port: 7843 }] })
 
-const cellSrv = new RpcServer({ name: 'cellSrv', transports: [{ connect: 'http://bus:8080' }] })
+const cellSrv = new RpcServer({ name: 'cellSrv', transports: [{ connect: 'http://bus:7843' }] })
 cellSrv.exposeClassInstance(new Cell(), 'cell')
 
 // The same object calls back out, over the same connection and under the same name.
@@ -718,14 +747,14 @@ socket.io middleware, before the connection is established at all.
 
 ```typescript
 const server = new RpcServer({
-    transports: [{ port: 3000 }],
+    transports: [{ port: 7843 }],
     authenticate: async (credentials) => {
         const user = await lookUpToken((credentials as { token?: string }).token)
         return user && { name: user.id, roles: user.roles }
     }
 })
 
-const client = new RpcClient('http://localhost:3000', {
+const client = new RpcClient('http://localhost:7843', {
     name: 'operator-17',              // must equal the identity's name, see below
     credentials: { token: 'a-token' }
 })
@@ -736,6 +765,38 @@ by the sender, so it is a claim, not evidence. An authenticating transport pins 
 the name it authenticated as and drops frames claiming any other source. Without that, an
 authenticated peer could address its calls as another peer and inherit its rights.
 
+It pins the peer *registry* to the same rule. A frame's source is normally learned as it is parsed,
+which is how discovery works over MQTT — the broker is the authority there and there is no
+connection to check. Where there is one, a name is registered only once the connection has been
+checked, so a rejected frame cannot leave a peer that does not exist in the routing table.
+
+### Tokens, without writing the authenticator
+
+`createTokenAuthenticator` is the common case packaged: a map from bearer token to the peer it
+admits.
+
+```typescript
+import { createTokenAuthenticator, defaultWebSocketPort, RpcServer } from '@source-repo/rpc'
+
+const server = new RpcServer({
+    transports: [{ port: defaultWebSocketPort }],
+    authenticate: createTokenAuthenticator({
+        [process.env.PLANT_TOKEN!]: 'plantServer',
+        [process.env.HMI_TOKEN!]: { name: 'hmi', roles: ['operator'] }
+    })
+})
+```
+
+**One token per peer, not one token for the bus.** A token that maps to a name is evidence of who is
+calling, and the rule above then does the rest: a holder that connects under any other name gets a
+socket and nothing else — its announcement is refused, so it is never listed, and its frames are
+dropped. A single token shared by everyone proves only that the caller is inside the fence, and any
+holder could then claim to be the peer whose commands matter. There is deliberately no
+single-secret form.
+
+Blank tokens, grants with no name and an empty map all throw rather than construct, because each one
+would quietly admit more than it looks like it does.
+
 ### Authorizing calls
 
 `authorize` runs for every call and every event subscription. Return false to reject with a
@@ -743,7 +804,7 @@ authenticated peer could address its calls as another peer and inherit its right
 
 ```typescript
 const server = new RpcServer({
-    transports: [{ port: 3000 }],
+    transports: [{ port: 7843 }],
     authenticate,
     authorize: ({ identity, instanceName, method, subscription }) => {
         if (subscription) return identity?.roles?.includes('observer') ?? false
@@ -765,7 +826,7 @@ no transport can vouch for with an `Unauthorized` error.
 `createRpcInstance`, which constructs an instance of a class already passed to `exposeClass()`:
 
 ```typescript
-const server = new RpcServer({ transports: [{ port: 3000 }], exposeManagement: true })
+const server = new RpcServer({ transports: [{ port: 7843 }], exposeManagement: true })
 ```
 
 It is still subject to `authorize`, so you can restrict who may create instances. The `expose*`
@@ -951,7 +1012,7 @@ off or absent.
 | option | default | meaning |
 | --- | --- | --- |
 | `name` | `'*'` | how this server is addressed |
-| `transports` | one socket.io server on port 3000 | see below |
+| `transports` | one socket.io server on port 7843 | see below |
 | `useMsgPack` | `true` | `false` selects JSON, which cannot carry `Uint8Array` or `Date` |
 | `readyTimeout` | `30000` | how long `ready()` waits before throwing; `0` waits forever |
 | `authenticate` / `authorize` | — | see [Authentication and authorization](#authentication-and-authorization) |
@@ -1092,7 +1153,7 @@ handler and a transport:
 ```typescript
 import { RpcServerHandler, SocketIoServerTransport } from '@source-repo/rpc'
 
-const transport = new SocketIoServerTransport('server', undefined, 3000)
+const transport = new SocketIoServerTransport('server', undefined, 7843)
 const handler = new RpcServerHandler('server', [transport])   // transport -> handler
 handler.pipe(transport)                                        // handler -> transport
 

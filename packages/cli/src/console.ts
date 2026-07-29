@@ -1,4 +1,5 @@
-import { createServer, ServerResponse } from 'node:http'
+import { createServer, type IncomingMessage, ServerResponse } from 'node:http'
+import { createServer as createSecureServer, type ServerOptions as TlsServerOptions } from 'node:https'
 import { readFile } from 'node:fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +46,33 @@ export const consoleIdentityPath = '/console.json'
 export interface ConsoleOptions extends NetworkOptions {
     port: number
     host: string
+    /**
+     * Certificate and key, which is what makes this console HTTPS - and its socket.io link WSS,
+     * since both ride the same listener. Absent means plain HTTP, which is right behind a proxy
+     * that has already terminated TLS.
+     */
+    tls?: TlsServerOptions
+    /**
+     * The path this console is published under, when a reverse proxy forwards the prefix instead of
+     * stripping it. `/tools/console` makes the page, its assets and socket.io all answer there.
+     *
+     * Not needed for the ordinary `proxy_pass http://console:7844/` rule, whose trailing slash
+     * strips the prefix before the console sees it - the page already resolves everything relative
+     * to where it was served, so that case needs no configuration at either end. This is for the
+     * proxy that passes `/tools/console/socket.io` through unchanged.
+     */
+    basePath?: string
+}
+
+/**
+ * A mount point as `/tools/console/`, or `/` for none: one leading slash, one trailing slash.
+ *
+ * The trailing slash is the load-bearing part. Everything the page asks for is relative to its
+ * mount, so the app has to be reached at a path ending in one or its requests resolve a level up.
+ */
+export const normaliseBasePath = (basePath?: string) => {
+    const trimmed = (basePath ?? '').trim().replace(/^\/+/, '').replace(/\/+$/, '')
+    return trimmed ? `/${trimmed}/` : '/'
 }
 
 type Subscribable = {
@@ -574,14 +602,37 @@ export const startConsole = async (options: ConsoleOptions) => {
         service.useLocalTap(localBus)
     }
 
-    const http = createServer((request, response) => {
+    const base = normaliseBasePath(options.basePath)
+    // One handler either way: an https.Server is an http.Server with a certificate in front, and
+    // socket.io attaches to it identically.
+    const serve = (request: IncomingMessage, response: ServerResponse) => {
+        const pathname = new URL(request.url ?? '/', 'http://console').pathname
+        if (base !== '/') {
+            // The mount point without its trailing slash. Redirected rather than served, because
+            // the page that would come back resolves its assets, console.json and socket.io path
+            // relative to where it was served - and from `/tools/console` that is `/tools/`, so
+            // every one of them would miss. This is the only place that can be put right.
+            if (pathname === base.slice(0, -1)) {
+                response.writeHead(301, { location: base })
+                response.end()
+                return
+            }
+            if (!pathname.startsWith(base)) {
+                // Not a route of this app. Answered plainly rather than with the index, which would
+                // claim the whole origin from whatever else the proxy publishes beside it.
+                response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+                response.end(`The console is published under ${base}\n`)
+                return
+            }
+        }
         // serveAsset handles its own failures, so reaching this catch means the response itself
         // could not be written. Answering is still better than rejecting into nowhere.
-        void serveAsset(new URL(request.url ?? '/', 'http://console').pathname, response, { name: options.name }).catch(() => {
+        void serveAsset(base === '/' ? pathname : `/${pathname.slice(base.length)}`, response, { name: options.name }).catch(() => {
             if (!response.headersSent) response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
             response.end('The console could not serve this request.\n')
         })
-    })
+    }
+    const http = options.tls ? createSecureServer(options.tls, serve) : createServer(serve)
     // One server, one graph. The browsers, the broker and the hub are transports of the same
     // RpcServer, so its peer registry spans all of them: a page is a peer of the network rather
     // than something behind a separate client, and the console relays between the two the way any
@@ -598,8 +649,10 @@ export const startConsole = async (options: ConsoleOptions) => {
         exposeIntrospection: true,
         transports: [
             // socket.io attaches to the same http server and answers /socket.io before the static
-            // handler sees it, so the console is one port: page and RPC over the same origin.
-            { server: http },
+            // handler sees it, so the console is one port: page and RPC over the same origin. Under
+            // a base path it moves with the rest of the app, which is what the page will ask for -
+            // it derives the same path from where the document was served.
+            { server: http, ...(base === '/' ? {} : { path: `${base}socket.io` }) },
             ...networkTransports(options)
         ]
     })
@@ -680,7 +733,7 @@ export const startConsole = async (options: ConsoleOptions) => {
     await new Promise<void>((resolve) => http.listen(options.port, options.host, resolve))
 
     return {
-        url: `http://${options.host}:${options.port}`,
+        url: `${options.tls ? 'https' : 'http'}://${options.host}:${options.port}${base === '/' ? '' : base}`,
         service,
         close: async () => {
             await service.releaseAll()

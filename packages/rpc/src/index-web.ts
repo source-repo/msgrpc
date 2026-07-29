@@ -11,6 +11,7 @@ export * from './Transports/SocketIoClientTransport.js'
 
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'
+export * from './RPC/Tokens.js'
 export * from './RPC/Messages.js'
 export * from './RPC/Expose.js'
 export * from './RPC/Introspection.js'

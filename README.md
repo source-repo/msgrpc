@@ -20,3 +20,16 @@ npm install          # installs both workspaces
 npm run build
 npm test             # the MQTT tests need a broker; see packages/rpc/README.md
 ```
+
+Source RPC listens on **7843** (`rpc`), and anything of its serving a browser on **7844**
+(`console`) — adjacent, and clear of the 80xx range where everything else on a developer's machine
+already is. One process needs one of them: a page and its RPC share a listener.
+
+With a certificate they become **8843** (`rpc-tls`) and **8844** (`console-tls`): a thousand above
+rather than beside, so no firewall range can open a clear-text port while meaning to publish only
+the encrypted one. `source-rpc broker --cert … --key …` moves itself there without being told.
+
+```
+docker compose -f docker-compose/docker-compose.yml up -d   # the MQTT broker the tests need
+docker compose -f docker-compose/network.yml up -d          # a whole network: MQTT, a bus, a console
+```

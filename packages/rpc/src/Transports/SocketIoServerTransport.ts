@@ -311,6 +311,27 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
     }
 
     /**
+     * Refuse to register a peer name this transport has not yet decided to trust.
+     *
+     * GenericModule registers a frame's source as it parses the header, which is right for MQTT -
+     * the broker is the authority there, and there is no connection anyone could have checked. Here
+     * there is one, and the header is a claim until it has been checked against it. Registering on
+     * parse let a peer put any name it liked into the registry this server shares with its other
+     * transports, just by sending one frame that was then rejected: enough to have the bus advertise
+     * a peer that does not exist, and to point lookups for a real peer's name at this transport,
+     * where nothing answers to it. The frame never went anywhere - peerSockets is what delivery uses
+     * and only learnPeer writes it - but the routing table had already been told.
+     *
+     * So registration happens where the trust decision is made, in learnPeer and forgetPeer, which
+     * call `super` to say they are past this point. Nothing changes for a transport with no
+     * authenticator: without one, a name was never evidence of anything to begin with.
+     */
+    override setKnownSource(source: string) {
+        if (this.authenticate) return
+        super.setKnownSource(source)
+    }
+
+    /**
      * Record a peer against the socket that reaches it and tell everyone else it is here.
      *
      * A peer announcing itself owns its name and takes the route over. One merely carried by a
@@ -331,8 +352,9 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         if (known && known.connected) this.warnAboutDisplacement(name)
         this.peerSockets.set(name, socket)
         // Registered as well as recorded: the shared registry is what the switch routes on, and
-        // what a server reads to work out which peers it can advertise onwards.
-        this.setKnownSource(name)
+        // what a server reads to work out which peers it can advertise onwards. `super`, because
+        // this is the point the name stops being a claim - see setKnownSource above.
+        super.setKnownSource(name)
         this.emit(TransportEvent.peerOnline, name)
         this.broadcastPresence({ peer: name, state: 'online' })
     }
@@ -346,7 +368,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             if (other === socket || !carried.has(name)) continue
             // Still reachable the other way, so nothing above this needs to hear about it.
             this.peerSockets.set(name, other)
-            this.setKnownSource(name)
+            super.setKnownSource(name)
             return
         }
         this.emit(TransportEvent.peerGone, name)
