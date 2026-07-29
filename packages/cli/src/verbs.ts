@@ -237,15 +237,25 @@ export const runDescribe = (peer: string, options: VerbOptions, io: Output = pro
         }
         io.out(`${description.name}${description.version ? ` (contract ${description.version})` : ''} — arguments ${description.validating ? 'checked' : 'not checked'}\n`)
         for (const namespace of description.namespaces) {
-            io.out(`\n${namespace.name}${namespace.version ? `@${namespace.version}` : ''}${namespace.className ? `  ${namespace.className}` : ''}${namespace.created ? ' (created at runtime)' : ''}\n`)
-            for (const method of namespace.methods) io.out(`  ${signatureOf(method)}\n`)
+            io.out(
+                `\n${namespace.name}${namespace.version ? `@${namespace.version}` : ''}${namespace.className ? `  ${namespace.className}` : ''}${namespace.created ? ' (created at runtime)' : ''}${namespace.serialised ? ' (one call at a time)' : ''}\n`
+            )
+            // What a repeat costs is the thing worth knowing before calling something on a plant,
+            // so it goes on the line with the signature rather than behind --json.
+            for (const method of namespace.methods) io.out(`  ${signatureOf(method)}${method.semantics ? `   [${method.semantics}]` : ''}\n`)
             for (const event of namespace.events)
                 io.out(`  event ${event.name}(${event.params ? event.params.map(typeText).join(', ') : '…'})  ${event.subscribers} subscriber${event.subscribers === 1 ? '' : 's'}\n`)
         }
         return 0
     })
 
-export const runCall = (peer: string, target: string, argumentTexts: string[], options: VerbOptions & { rawArgs?: string }, io: Output = processOutput) =>
+export const runCall = (
+    peer: string,
+    target: string,
+    argumentTexts: string[],
+    options: VerbOptions & { rawArgs?: string; idempotencyKey?: string },
+    io: Output = processOutput
+) =>
     withNetwork(options, io, async (connected) => {
         const split = splitTarget(target)
         if (!split) {
@@ -286,7 +296,10 @@ export const runCall = (peer: string, target: string, argumentTexts: string[], o
         const started = Date.now()
         try {
             const proxy = await connected.network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(split.namespace, peer)
-            const result = await proxy.remote![split.member](...args)
+            // With a key, two runs of this command are two attempts at one command - which is how a
+            // durable idempotency store is checked from a shell: call it twice, see it run once.
+            const remote = options.idempotencyKey ? proxy.remote!.$with({ idempotencyKey: options.idempotencyKey }) : proxy.remote!
+            const result = await remote[split.member](...args)
             const ms = Date.now() - started
             if (options.json) io.out(JSON.stringify({ result, ms }, null, 2) + '\n')
             else {

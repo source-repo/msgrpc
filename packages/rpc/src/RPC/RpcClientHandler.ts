@@ -55,6 +55,26 @@ function isErrorResponse(payload: RpcMessage): payload is RpcErrorPayload {
 
 export type PromiseResolver<T> = { resolve: (result: T) => void; reject: (reason?: unknown) => void }
 
+/** What a caller can say about one call that the library cannot work out for itself. */
+export interface RpcCallOptions {
+    /**
+     * Names the command, so a second attempt at it is recognised as the same one.
+     *
+     * The case this exists for: an operator presses "start pump", the answer is `UnknownOutcome`,
+     * and they press it again. Without a key those are two commands and a server with a durable
+     * idempotency store will run both. With one they are two attempts at a command that runs once,
+     * and the second gets the first's answer.
+     *
+     * It has to come from whatever identifies the operator's intent - a work order, a batch step, a
+     * button press id. A value generated per attempt would defeat the purpose, since that is what
+     * the request id already is.
+     */
+    idempotencyKey?: string
+}
+
+/** A proxy with per-call options attached. See `$with` on a proxy. */
+export type WithOptions<T> = { $with(options: RpcCallOptions): T }
+
 export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMessage, Message<RpcMessage>, RpcMessage> implements RpcClientEmitter {
     responsePromiseMap = new Map<string, PromiseResolver<unknown>>()
     responseTimeoutMap = new Map<string, NodeJS.Timeout>()
@@ -150,16 +170,38 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
     /**
      * Reject every in-flight call. A reply to a call that was in flight when the link dropped can
      * no longer reach us, so failing now beats making every caller wait out the full timeout.
+     *
+     * How it failed depends on whether the request got out. One that never left cannot have run, and
+     * `TransportError` says so; one that was published and never answered may have run, and only
+     * `UnknownOutcome` is true of it. Reporting both the same way was the library telling callers
+     * that a command had failed when what it knew was that it had lost track of it.
      */
     failPendingCalls(reason: string) {
-        for (const id of [...this.responsePromiseMap.keys()]) this.takePending(id)?.reject(new RpcError('TransportError', reason))
+        for (const id of [...this.responsePromiseMap.keys()]) {
+            const sent = this.sentRequests.has(id)
+            this.sentRequests.delete(id)
+            this.takePending(id)?.reject(
+                sent
+                    ? new RpcError('UnknownOutcome', `${reason}, after the request was sent - it may or may not have run`)
+                    : new RpcError('TransportError', `${reason}, before the request was sent`)
+            )
+        }
     }
+
+    /**
+     * Requests this client handed to a transport without it complaining.
+     *
+     * Not proof of delivery - nothing here can have that - but proof that the frame left, which is
+     * the line between a command that certainly did not run and one that might have.
+     */
+    private sentRequests = new Set<string>()
 
     /** Detach a pending call and cancel its timeout. Returns undefined if it already settled. */
     private takePending(id: string | undefined) {
         if (id === undefined) return undefined
         const promise = this.responsePromiseMap.get(id)
         this.responsePromiseMap.delete(id)
+        this.sentRequests.delete(id)
         const timeout = this.responseTimeoutMap.get(id)
         if (timeout !== undefined) {
             clearTimeout(timeout)
@@ -175,6 +217,17 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * @param params
      */
     public call(remote: string | undefined, instanceName: string, method: string, ...params: unknown[]): Promise<unknown> {
+        return this.callWith({}, remote, instanceName, method, ...params)
+    }
+
+    /**
+     * Call with per-call options. `call` is this with none.
+     *
+     * The only option so far is the idempotency key, which is the one thing a caller can say that
+     * the library cannot work out for itself: whether this is a new command or another go at one it
+     * has already sent.
+     */
+    public callWith(options: RpcCallOptions, remote: string | undefined, instanceName: string, method: string, ...params: unknown[]): Promise<unknown> {
         const payload: RpcCallInstanceMethodPayload = {
             id: uuidv4(),
             type: RpcMessageType.CallInstanceMethod,
@@ -185,7 +238,8 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             // The same number that arms the timer below, so what the far end is told is exactly
             // what this caller is going to do. A request carrying no ttl is one with no deadline,
             // which is what a caller that has disabled its own timeout is asking for.
-            ttl: this.callTimeout > 0 ? this.callTimeout : undefined
+            ttl: this.callTimeout > 0 ? this.callTimeout : undefined,
+            ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {})
         }
         return new Promise((resolve, reject) => {
             // Registered before sending: a response can arrive before sendPayload's promise settles.
@@ -193,12 +247,24 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             this.responseTimeoutMap.set(
                 payload.id,
                 setTimeout(() => {
+                    // A timeout is an unknown outcome by definition: the request went out, and
+                    // nothing came back. Kept as Timeout because that names *why* nothing is known,
+                    // which is more use than the general case - but a caller reading it should treat
+                    // a command as possibly done. There is a note about this in the README.
                     this.takePending(payload.id)?.reject(new RpcError('Timeout', `no response to ${instanceName}.${method} within ${this.callTimeout} ms`))
                 }, this.callTimeout)
             )
-            this.sendPayload(payload, MessageType.RequestMessage, this.name, remote).catch((e) => {
-                this.takePending(payload.id)?.reject(new RpcError('TransportError', e instanceof Error ? e.message : String(e)))
-            })
+            this.sendPayload(payload, MessageType.RequestMessage, this.name, remote).then(
+                () => {
+                    // Recorded only once the transport has accepted it, and only while the call is
+                    // still pending - a reply may well have arrived and settled it already.
+                    if (this.responsePromiseMap.has(payload.id)) this.sentRequests.add(payload.id)
+                },
+                (e) => {
+                    // It never left, so whatever it would have done, it did not.
+                    this.takePending(payload.id)?.reject(new RpcError('TransportError', e instanceof Error ? e.message : String(e)))
+                }
+            )
         })
     }
 
@@ -207,7 +273,7 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * @param name Name of an existing instance on the server instance. If in the form "name: Class" an instance of type Class will be created
      * on the server if it does not already exist.
      */
-    proxy<T>(name: string, remote?: string) {
+    proxy<T>(name: string, remote?: string, options: RpcCallOptions = {}): T & WithOptions<T> {
         const proxyObj: { [index: string]: unknown } = {}
         return new Proxy(proxyObj, {
             get: (target, prop) => {
@@ -215,6 +281,12 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 if (typeof prop === 'string') {
                     if (target[prop]) {
                         return target[prop]
+                    } else if (prop === '$with') {
+                        // The one name on a proxy that is not a remote method: it returns another
+                        // proxy for the same instance whose calls carry these options. Prefixed with
+                        // `$` because everything else here is whatever the far end happens to expose,
+                        // and a collision would silently shadow a real method.
+                        target[prop] = (callOptions: RpcCallOptions) => this.proxy<T>(name, remote, { ...options, ...callOptions })
                     } else if (isEventFunction(prop)) {
                         target[prop] = (...args: unknown[]) => {
                             const event = args[0]
@@ -234,12 +306,12 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                             return this.call(remote, name, prop, args[0])
                         }
                     } else {
-                        target[prop] = (...args: unknown[]) => this.call(remote, name, prop as string, ...args)
+                        target[prop] = (...args: unknown[]) => this.callWith(options, remote, name, prop as string, ...args)
                     }
                     result = target[prop]
                 }
                 return result
             }
-        }) as T
+        }) as T & WithOptions<T>
     }
 }

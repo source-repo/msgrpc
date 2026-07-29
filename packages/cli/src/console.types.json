@@ -160,6 +160,12 @@
             "kind": "boolean"
           }
         },
+        "serialised": {
+          "type": {
+            "kind": "boolean"
+          },
+          "optional": true
+        },
         "methods": {
           "type": {
             "kind": "array",
@@ -796,6 +802,26 @@
                     }
                   }
                 }
+              }
+            ]
+          },
+          "optional": true
+        },
+        "semantics": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "query"
+              },
+              {
+                "kind": "literal",
+                "value": "idempotent-command"
+              },
+              {
+                "kind": "literal",
+                "value": "non-repeatable-command"
               }
             ]
           },

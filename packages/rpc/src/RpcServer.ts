@@ -2,7 +2,8 @@ import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Co
 import { RpcAuthenticator, RpcAuthorizer } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, withIntrospection } from './RPC/Introspection.js'
-import { RpcServerHandler } from './RPC/RpcServerHandler.js'
+import { ExposeOptions, RpcServerHandler } from './RPC/RpcServerHandler.js'
+import type { RpcIdempotencyStore } from './RPC/Idempotency.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import { RpcProxy } from './RpcClient.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
@@ -85,6 +86,14 @@ export interface RpcServerOptions {
     /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
     unknownVersion?: 'allow' | 'reject'
     /**
+     * Where to record what a non-repeatable command did, so a request redelivered after this
+     * process died is answered from the record instead of run a second time.
+     *
+     * Without one, delivery and execution are at least once - which is the honest description of
+     * every RPC system that has no such store. See RPC/Idempotency.ts for what exactly it closes.
+     */
+    idempotency?: RpcIdempotencyStore
+    /**
      * Publish msgrpc.describe(), which reports the exposed namespaces, their methods and events,
      * and which instances are live. Off by default: listing all of that is reconnaissance, and it
      * is subject to authorize() like any other call.
@@ -141,6 +150,7 @@ export class RpcServerBase implements IManageRpc {
         this.rpc.validation = this.options.validation ?? (this.options.schema ? 'described' : 'off')
         this.rpc.validateResults = this.options.validateResults ?? false
         this.rpc.unknownVersion = this.options.unknownVersion ?? 'allow'
+        this.rpc.idempotency = this.options.idempotency
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false
         if (this.options.exposeManagement) this.rpc.manageRpc.exposeManagement()
         if (this.options.exposeIntrospection) {
@@ -313,8 +323,8 @@ export class RpcServerBase implements IManageRpc {
         this.transports = []
         this.peers.clear()
     }
-    exposeClassInstance(instance: object, name?: string, prototypeSteps?: number): void {
-        this.rpc.manageRpc.exposeClassInstance(instance, name, prototypeSteps)
+    exposeClassInstance(instance: object, name?: string, options?: number | ExposeOptions): void {
+        this.rpc.manageRpc.exposeClassInstance(instance, name, options)
     }
     exposeClass<T>(constructor: new (...args: unknown[]) => T, aliasName?: string): void {
         this.rpc.manageRpc.exposeClass(constructor, aliasName)

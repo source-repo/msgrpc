@@ -6,6 +6,7 @@ import {
     RpcEventPayload,
     RpcMessage,
     RpcMessageType,
+    RpcMethodSemantics,
     RpcSuccessPayload,
     toRemoteError
 } from './Messages.js'
@@ -13,9 +14,10 @@ export * from './Messages.js'
 import { v4 as uuidv4 } from 'uuid'
 import { IManageRpc } from './Rpc.js'
 import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
+import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredNamespace, markedMethods } from './Expose.js'
+import { declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
 import { RpcSchema, validateParams, validateValue } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
 
@@ -59,6 +61,20 @@ export type BindObject = {
 
 export type ObjectByString = { [index: string]: unknown }
 
+/** How one instance is exposed, beyond the name it answers to. */
+export interface ExposeOptions {
+    /**
+     * How far up the prototype chain to publish methods from. The old third argument, which was
+     * this number on its own; a number is still accepted so existing calls keep working.
+     */
+    prototypeSteps?: number
+    /**
+     * Whether calls into this instance may overlap. Overrides what the class declares, since the
+     * call site knows how this particular instance is used.
+     */
+    execution?: RpcExecution
+}
+
 const isRpcCallInstanceMethodPayload = (payload: RpcMessage): payload is RpcCallInstanceMethodPayload => {
     return payload.type === RpcMessageType.CallInstanceMethod
 }
@@ -72,7 +88,20 @@ const isRpcCallInstanceMethodPayload = (payload: RpcMessage): payload is RpcCall
  * protocol already defines, so an error carrying an unrelated `code` - a Node `ENOENT`, say - is
  * still reported as the exception it is.
  */
-const CHOSEN_CODES = new Set<string>(['Unauthorized', 'Forbidden', 'InvalidParams', 'IncompatibleVersion', 'ClassNotFound', 'MethodNotFound', 'TransportError', 'Timeout'])
+const CHOSEN_CODES = new Set<string>([
+    'Unauthorized',
+    'Forbidden',
+    'InvalidParams',
+    'IncompatibleVersion',
+    'ClassNotFound',
+    'MethodNotFound',
+    'TransportError',
+    'Timeout',
+    // A method that talked to something else and did not learn the answer may say so. It is the
+    // honest reply from a gateway whose own downstream call timed out, and inventing a result or
+    // reporting a plain exception would both claim more than is known.
+    'UnknownOutcome'
+])
 
 const chosenCode = (e: unknown): RpcErrorCode => {
     const code = (e as { code?: unknown } | null)?.code
@@ -107,6 +136,12 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * failed call it replaces.
      */
     refuseExpiredCalls = true
+    /**
+     * Where to record what a non-repeatable command did, so a redelivery after a crash is answered
+     * rather than executed a second time. Unset means execution is at least once - see
+     * RPC/Idempotency.ts, which spells out exactly what that leaves open.
+     */
+    idempotency?: RpcIdempotencyStore
     /** Describes what exposed methods accept. Absent means nothing is checked. */
     schema?: RpcSchema
     /**
@@ -348,38 +383,166 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 return
             }
 
-            // Checked here rather than on arrival, and last of all the checks: the queue this is
-            // meant to catch is the one in front of the method itself, so the budget has to be
-            // read at the moment of invoking and not before the checks that precede it.
-            const spent = this.expiredBy(payload, arrived)
-            if (spent !== undefined) {
+            // The queue, when this instance asked for one, wraps everything from here on: the
+            // deadline has to be read after waiting in it, since that wait is exactly what it
+            // exists to catch, and a duplicate has to be recognised before a sibling call can start
+            // running the same command alongside it.
+            const key = this.executionKey(payload, source)
+            if (key === undefined) await this.invoke(payload, source, arrived, handler)
+            else await this.serialise(key, () => this.invoke(payload, source, arrived, handler))
+        }
+    }
+
+    /**
+     * Run one call: check the budget, claim the command, invoke it, answer.
+     *
+     * Split out of dispatch because it is what a serial instance runs one at a time, and because
+     * the order of these four is the whole of the delivery semantics.
+     */
+    private async invoke(payload: RpcCallInstanceMethodPayload, source: string, arrived: number, handler: (...args: unknown[]) => unknown) {
+        const spent = this.expiredBy(payload, arrived)
+        if (spent !== undefined) {
+            await this.sendError(payload.id, source, 'Timeout', `${payload.path}.${payload.method} was not run: its caller stopped waiting ${spent} ms ago`)
+            return
+        }
+
+        const invocation = this.invocationFor(payload, source)
+        let claimed = false
+        if (invocation) {
+            let claim
+            try {
+                claim = await this.idempotency!.begin(invocation)
+            } catch (e) {
+                // Refused rather than run. A store that cannot be reached is the one condition under
+                // which running would risk the double execution it was installed to prevent, and an
+                // operator would rather see a command refused than a pump started twice.
                 await this.sendError(
                     payload.id,
                     source,
-                    'Timeout',
-                    `${payload.path}.${payload.method} was not run: its caller stopped waiting ${spent} ms ago`
+                    'UnknownOutcome',
+                    `${payload.path}.${payload.method} was not run: its idempotency store could not be reached (${e instanceof Error ? e.message : String(e)})`
                 )
                 return
             }
-
-            const params = [...payload.params]
-            let result
-            try {
-                result = await handler(...params)
-                const badResult = this.checkResult(payload, result)
-                if (badResult) {
-                    await this.sendError(payload.id, source, 'InvalidParams', badResult)
-                    return
-                }
-                await this.respond(payload.id, source, { type: RpcMessageType.success, id: payload.id, result } as RpcSuccessPayload, MessageType.ResponseMessage)
-            } catch (e) {
-                await this.respond(
-                    payload.id,
-                    source,
-                    { type: RpcMessageType.error, id: payload.id, code: chosenCode(e), error: toRemoteError(e) } as RpcErrorPayload,
-                    MessageType.ErrorMessage
-                )
+            // Somebody else holds this command. They will answer the caller, and two answers to one
+            // request would be worse than waiting for theirs.
+            if (claim === 'in-progress') {
+                this.inFlightRequests.delete(payload.id)
+                return
             }
+            if (claim !== 'acquired') {
+                // It already ran. This is what it answered, sent again without running anything.
+                const stored = isFailedOutcome(claim)
+                    ? ({ type: RpcMessageType.error, id: payload.id, code: claim.code, error: claim.error } as RpcErrorPayload)
+                    : ({ type: RpcMessageType.success, id: payload.id, result: claim.result } as RpcSuccessPayload)
+                await this.respond(payload.id, source, stored, stored.type === RpcMessageType.error ? MessageType.ErrorMessage : MessageType.ResponseMessage)
+                return
+            }
+            claimed = true
+        }
+
+        const params = [...payload.params]
+        let result
+        try {
+            result = await handler(...params)
+            const badResult = this.checkResult(payload, result)
+            if (badResult) {
+                // Recorded as the failure it is: the method ran, so a redelivery must not run it
+                // again just because this server disliked what it returned.
+                await this.settle(invocation, claimed, { code: 'InvalidParams', error: { name: 'RpcError', message: badResult } })
+                await this.sendError(payload.id, source, 'InvalidParams', badResult)
+                return
+            }
+            await this.settle(invocation, claimed, { result })
+            await this.respond(payload.id, source, { type: RpcMessageType.success, id: payload.id, result } as RpcSuccessPayload, MessageType.ResponseMessage)
+        } catch (e) {
+            const code = chosenCode(e)
+            await this.settle(invocation, claimed, { code, error: toRemoteError(e) })
+            await this.respond(payload.id, source, { type: RpcMessageType.error, id: payload.id, code, error: toRemoteError(e) } as RpcErrorPayload, MessageType.ErrorMessage)
+        }
+    }
+
+    /**
+     * Write down what the command did, before its answer is sent.
+     *
+     * This order is the one that matters. Recording after answering would leave a window in which
+     * the caller has the result and the store does not, so a redelivery arriving in that window
+     * runs the command again - which is the whole failure this is here to prevent. A store that
+     * cannot record it is reported and the answer still goes out: the command has already run, and
+     * withholding the result would not un-run it.
+     */
+    private async settle(invocation: RpcInvocation | undefined, claimed: boolean, outcome: StoredRpcOutcome) {
+        if (!invocation || !claimed) return
+        try {
+            await this.idempotency!.complete(invocation, outcome)
+        } catch (e) {
+            this.emit('idempotencyError', { invocation, outcome, error: e })
+        }
+    }
+
+    /** The command a call is an attempt at, or undefined when nothing here needs to know. */
+    private invocationFor(payload: RpcCallInstanceMethodPayload, source: string): RpcInvocation | undefined {
+        // Only where a repeat would cost something. A store round trip on every read would be paid
+        // by the calls that least need it.
+        if (!this.idempotency || this.semanticsOf(payload) !== 'non-repeatable-command') return undefined
+        return {
+            idempotencyKey: payload.idempotencyKey ?? payload.id,
+            requestId: payload.id,
+            scope: `${payload.path}.${payload.method}`,
+            source,
+            ...(payload.ttl !== undefined ? { ttl: payload.ttl } : {})
+        }
+    }
+
+    /**
+     * What a method says it does to the world: the running class first, then the schema.
+     *
+     * The class wins because it is what will actually run. A schema is a description, and a server
+     * whose description has drifted from its code should act on the code.
+     */
+    semanticsOf(payload: { path: string; method: string }): RpcMethodSemantics | undefined {
+        return this.manageRpc.exposedSemantics[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.semantics
+    }
+
+    /** The queue a call belongs in, or undefined when this instance lets calls overlap. */
+    private executionKey(payload: RpcCallInstanceMethodPayload, source: string): string | undefined {
+        const execution = this.manageRpc.exposedExecution[payload.path]
+        if (!execution || execution === 'parallel') return undefined
+        if (execution === 'serial') return payload.path
+        const context: RpcCallContext = {
+            identity: this.resolveIdentity?.(source),
+            source,
+            instanceName: payload.path,
+            method: payload.method,
+            params: payload.params,
+            subscription: false
+        }
+        try {
+            return `${payload.path} ${execution(context)}`
+        } catch {
+            // A key function that throws serialises the whole instance rather than letting the call
+            // run unordered. The safe reading of "I cannot tell you which queue" is the strictest one.
+            return payload.path
+        }
+    }
+
+    /** One promise chain per key. Entries go away once nothing is waiting, so idle costs nothing. */
+    private executionQueues = new Map<string, Promise<void>>()
+
+    private async serialise<T>(key: string, run: () => Promise<T>): Promise<T> {
+        const ahead = this.executionQueues.get(key) ?? Promise.resolve()
+        let release!: () => void
+        const mine = new Promise<void>((resolve) => (release = resolve))
+        // The tail is what the next arrival waits behind. It only ever resolves - release() is in a
+        // finally - so a method that throws cannot leave the queue permanently rejected.
+        const tail = ahead.then(() => mine)
+        this.executionQueues.set(key, tail)
+        await ahead
+        try {
+            return await run()
+        } finally {
+            release()
+            if (this.executionQueues.get(key) === tail) this.executionQueues.delete(key)
         }
     }
 
@@ -440,6 +603,10 @@ export class ManageRpc implements IManageRpc {
     exposedNameSpaceInstances: { [nameSpace: string]: object } = {}
     exposedClasses: { [className: string]: new (...args: unknown[]) => unknown } = {}
     createdInstances = new Map<string, object>()
+    /** What each exposed namespace's methods declare about repeating them. */
+    exposedSemantics: { [nameSpace: string]: Map<string, RpcMethodSemantics> } = {}
+    /** How each exposed namespace lets its calls overlap. Absent is `parallel`. */
+    exposedExecution: { [nameSpace: string]: RpcExecution } = {}
 
     constructor(public logger?: ILogger) {}
 
@@ -475,15 +642,25 @@ export class ManageRpc implements IManageRpc {
     /** Set by RpcServer: refuse to expose a class that marks nothing. */
     requireExplicitExposure = false
 
-    exposeClassInstance(instance: object, name?: string, prototypeSteps?: number) {
-        const namespace = name ?? declaredNamespace(instance)?.name
+    exposeClassInstance(instance: object, name?: string, options?: number | ExposeOptions) {
+        const declared = declaredNamespace(instance)
+        const namespace = name ?? declared?.name
         if (!namespace) throw new Error(`exposeClassInstance: ${instance.constructor.name} declares no @rpcNamespace, so a name is required`)
+        // A bare number is the old third argument, which was prototypeSteps and nothing else.
+        const settings: ExposeOptions = typeof options === 'number' ? { prototypeSteps: options } : (options ?? {})
+        let prototypeSteps = settings.prototypeSteps
         // Marked methods are an allow-list. Without marks every function on the prototype chain is
         // published, including helpers the class never meant to offer.
         const allowed = markedMethods(instance)
         if (!allowed && this.requireExplicitExposure)
             throw new Error(`exposeClassInstance: ${instance.constructor.name} marks no @rpc methods and requireExplicitExposure is on`)
         this.exposedNameSpaceInstances[namespace] = instance
+        // The call site wins over the class, since it is the one that knows how this particular
+        // instance is being used - the same class may front one device here and a pool there.
+        const execution = settings.execution ?? declared?.execution
+        if (execution) this.exposedExecution[namespace] = execution
+        const semantics = declaredSemantics(instance)
+        if (semantics.size) this.exposedSemantics[namespace] = semantics
         // Iterate upwards to find all the methods within the prototype chain.
         let props = Object.getOwnPropertyNames(instance.constructor.prototype)
         let parent = Object.getPrototypeOf(instance.constructor.prototype)

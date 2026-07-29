@@ -91,6 +91,7 @@ refusing, not resolving.
 | `mr-code` | error | `RpcErrorCode` |
 | `mr-ver` | call, subscribe | contract version the caller declares |
 | `mr-ttl` | call, subscribe | milliseconds the caller will still wait, counted from sending |
+| `mr-idem` | call | names the command this is an attempt at, when the caller distinguishes the two |
 | `mr-nonce`, `mr-ts`, `mr-sig` | signed frames | replay and signature fields |
 
 ### Why `mr-ttl` as well as `messageExpiryInterval`
@@ -197,7 +198,7 @@ topic now carries the addressing, it is signed rather than a `target` field:
 ```
 signedInput = utf8(JSON.stringify([
     v, topic, responseTopic, src, kind, path, methodOrEvent, correlation,
-    contentType, code, contractVersion, ttl, ts, nonce
+    contentType, code, contractVersion, ttl, idempotencyKey, ts, nonce
 ])) || payload
 ```
 
@@ -216,7 +217,8 @@ fixint, which is 49. Both parse. Both verified. Flipping one unsigned property t
 
 The same argument covers the rest of what version 2 added: `code` decides what a caller does about a
 failure, `contractVersion` decides whether the call is accepted at all, `responseTopic` decides where
-the answer is published, and `ttl` decides whether a command that is already too late still runs.
+the answer is published, `ttl` decides whether a command that is already too late still runs, and
+`mr-idem` decides whether a command that has already run runs again.
 
 `messageExpiryInterval` is deliberately **not** signed, because the broker is required to decrement
 it in flight and a signature over it would break on the first queued message. Nothing is lost: it
@@ -260,6 +262,8 @@ A responder serving one namespace:
 3. If `mr-ttl` is present, stop and answer `mr-code=Timeout` when more than that many milliseconds
    have passed since the message arrived — less whatever the broker already deducted from
    `messageExpiryInterval`. Check it just before running the method, not on arrival.
+   If `mr-idem` is present and the method is one a repeat would change something with, look the key
+   up before running and answer from the recorded outcome if it is there.
 4. Publish the result to the packet's `responseTopic`, echoing `correlationData`, with
    `mr-kind=result` and the same `contentType`.
 

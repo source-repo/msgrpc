@@ -16,6 +16,46 @@ existing projects have on disk, and a rename would break their `--against` for t
 Both packages go to 3.0.0 together, since a renamed package is a breaking change however compatible
 the code is.
 
+### Industrial command semantics
+
+Most RPC libraries make it easy to call a function. Rather fewer distinguish *the call failed* from
+*I lost the answer to a command that may well have run*, and on a plant that is the distinction that
+decides whether an operator sends a second start.
+
+- **A method can say what calling it does to the world**: `@rpc({ semantics: 'query' })`,
+  `'idempotent-command'` or `'non-repeatable-command'`. It is part of the contract rather than a
+  comment - `extract` reads it off the decorator, `describe()` reports it, and `check` calls it a
+  breaking change when a method becomes *more* dangerous to repeat than the version a caller was
+  built against. Every type still lines up in that case, which is why nothing else catches it.
+  Undeclared stays undeclared: the library will not guess that a method is safe to repeat.
+- **`UnknownOutcome`**, a new error code, for a request that was sent and whose fate is not known.
+  `TransportError` now means the request never left, so the command certainly did not run. Both used
+  to be reported the same way, which told a caller that a command had failed when what the library
+  knew was that it had lost track of it.
+- **A durable idempotency hook.** `RpcIdempotencyStore` given to `RpcServer` records what a
+  non-repeatable command did, so a redelivery after the process died is answered from the record
+  rather than executed again - the one failure an in-memory duplicate cache cannot cover, since the
+  memory is what died. No database ships with it; the seam is the deliverable. The outcome is
+  recorded *before* the answer goes out, and a store that cannot be reached refuses the command
+  rather than running it - failing open would produce exactly the double execution it prevents.
+  - Consulted only for non-repeatable commands, so reads pay nothing for it.
+  - `proxy.$with({ idempotencyKey })` lets a caller say that two attempts are one command, which is
+    the case the request id cannot cover: an operator pressing the button again is a new request but
+    the same intent. Carried as `mr-idem` on MQTT 5 and signed like everything else acted on.
+- **An execution policy per exposed instance.** `@rpcNamespace('cell', { execution: 'serial' })`
+  runs one call at a time; a key function runs one at a time per key, which is how a server fronting
+  many devices orders each device without serialising itself behind the slowest. Calls into one
+  mutable instance could otherwise interleave and leave a machine in a state neither caller asked
+  for. `parallel` stays the default because a serial instance that calls back into itself deadlocks,
+  and changing the default would break re-entrant designs silently and only under load.
+  - The deadline is read *after* waiting in that queue, so a command that queued until its caller
+    gave up is refused rather than run late.
+- Stated plainly in the README, because it is true and usually unwritten: **delivery and execution
+  are at least once unless the method is guarded by a durable idempotency store.**
+
+Deliberately not built, with reasons in the README: cancellation, `online-only` delivery, a per-call
+invocation context for handlers, and global admission limits.
+
 ### Security
 
 - **A signed MQTT 5 frame's content type was not covered by its signature**, and altering it could

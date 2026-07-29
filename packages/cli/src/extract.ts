@@ -1,6 +1,6 @@
 import { resolve as resolvePath, dirname } from 'node:path'
 import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
-import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from '@source-repo/rpc'
+import type { MethodSchema, NamespaceSchema, RpcMethodSemantics, RpcSchema, TypeNode } from '@source-repo/rpc'
 
 /**
  * Reads a contract out of TypeScript source.
@@ -143,6 +143,41 @@ const objectToNode = (type: Type, context: Context, depth: number): TypeNode => 
 const hasDecorator = (node: MethodDeclaration | ClassDeclaration, name: string) =>
     node.getDecorators().some((decorator) => decorator.getName() === name)
 
+/** A string property of an object literal passed to a decorator, when it is written as a literal. */
+const literalOption = (argument: Node | undefined, option: string) => {
+    if (!Node.isObjectLiteralExpression(argument)) return undefined
+    const property = argument.getProperty(option)
+    if (!Node.isPropertyAssignment(property)) return undefined
+    const initializer = property.getInitializer()
+    return Node.isStringLiteral(initializer) ? initializer.getLiteralValue() : undefined
+}
+
+const SEMANTICS = new Set<string>(['query', 'idempotent-command', 'non-repeatable-command'])
+
+/**
+ * What `@rpc({ semantics: '…' })` declares, if anything.
+ *
+ * Part of the contract rather than of the implementation: it is a promise about whether a caller
+ * may repeat the call, and `check` compares it between versions like any other part of the shape.
+ */
+const declaredSemantics = (method: MethodDeclaration, context: Context): RpcMethodSemantics | undefined => {
+    const decorator = method.getDecorators().find((candidate) => candidate.getName() === 'rpc')
+    const declared = literalOption(decorator?.getArguments()[0], 'semantics')
+    if (declared === undefined) return undefined
+    if (!SEMANTICS.has(declared)) {
+        // Named rather than dropped: a typo here would quietly publish a contract saying nothing
+        // about a method whose author thought they had said something about it.
+        context.diagnostics.push({
+            where: context.where,
+            reason: `declares semantics '${declared}', which is not one of ${[...SEMANTICS].join(', ')}`,
+            file: method.getSourceFile().getFilePath(),
+            line: method.getStartLineNumber()
+        })
+        return undefined
+    }
+    return declared as RpcMethodSemantics
+}
+
 const namespaceDeclaration = (declaration: ClassDeclaration) => {
     const decorator = declaration.getDecorators().find((candidate) => candidate.getName() === 'rpcNamespace')
     if (!decorator) return undefined
@@ -182,7 +217,14 @@ const methodToSchema = (method: MethodDeclaration, context: Context): MethodSche
     if (isPromise(returnType)) returnType = returnType.getTypeArguments()[0] ?? returnType
     const returns = returnType.isVoid() || returnType.isUndefined() ? undefined : typeToNode(returnType, { ...context, where: `${context.where} return` })
 
-    return { params, ...(paramNames.length ? { paramNames } : {}), ...(rest ? { rest } : {}), ...(returns ? { returns } : {}) }
+    const semantics = declaredSemantics(method, context)
+    return {
+        params,
+        ...(paramNames.length ? { paramNames } : {}),
+        ...(rest ? { rest } : {}),
+        ...(returns ? { returns } : {}),
+        ...(semantics ? { semantics } : {})
+    }
 }
 
 /**

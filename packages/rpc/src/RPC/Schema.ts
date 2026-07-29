@@ -11,6 +11,8 @@
  * the document.
  */
 
+import type { RpcMethodSemantics } from './Messages.js'
+
 export type TypeNode =
     /** Accepts anything. Use sparingly: it is the hole every other check is trying to close. */
     | { kind: 'any' }
@@ -57,6 +59,13 @@ export interface MethodSchema {
     rest?: TypeNode
     /** Checked only when result validation is on. */
     returns?: TypeNode
+    /**
+     * What calling this does to the world: `query`, `idempotent-command` or
+     * `non-repeatable-command`. Part of the contract because it is a promise to the caller, not an
+     * implementation detail - it decides whether an uncertain answer may be retried, and a server
+     * that quietly stopped being repeatable would break callers that were told it was.
+     */
+    semantics?: RpcMethodSemantics
 }
 
 export interface NamespaceSchema {

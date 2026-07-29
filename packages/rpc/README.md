@@ -359,6 +359,10 @@ which makes the discipline enforceable across a project.
 `@rpcNamespace` also tells the extraction CLI which namespace a class belongs to, since the name
 would otherwise exist only at the `exposeClassInstance` call site.
 
+Both decorators take options: `@rpc({ semantics: 'non-repeatable-command' })` says what calling a
+method does to the world, and `@rpcNamespace('cell', { execution: 'serial' })` says whether calls
+into the instance may overlap. Both are in [Commands](#commands), which is where they matter.
+
 ### More than one, and without a class
 
 A server exposes as many namespaces as you like, and a client takes a proxy per namespace:
@@ -401,6 +405,7 @@ try {
 | `Forbidden` | the caller is authenticated but not permitted this call |
 | `InvalidParams` | the arguments do not match the schema for that method |
 | `IncompatibleVersion` | the caller's contract cannot be served by this one |
+| `UnknownOutcome` | the request was sent and its fate is not known - it may have run |
 
 **A call that timed out will not run afterwards.** Every request carries the time its caller will
 still wait, so a server that reaches the method late answers `Timeout` instead of running it, and an
@@ -412,6 +417,136 @@ machine moving when nobody expects it to.
 It is a duration on the wire rather than a moment, so no two peers ever have to agree what time it
 is - a browser page's clock belongs to whoever is sitting at it. `refuseExpiredCalls` on the server
 handler turns the refusal off.
+
+## Commands
+
+Most RPC libraries make it easy to call a function. Rather fewer distinguish *the call failed* from
+*I lost the answer to a command that may well have run*, and on a plant that is the distinction that
+matters: retrying a read costs a round trip, and retrying a start costs a second start.
+
+### The honest statement
+
+> **Delivery and execution are at least once, unless the method is guarded by a durable idempotency
+> store.**
+
+That is true of every RPC system without such a store; the difference is whether it is written down.
+QoS 1 is at-least-once by definition, the in-memory duplicate cache dies with the process that holds
+it, and a server can change something physical and then fail before it says so.
+
+### What a method does to the world
+
+```typescript
+class Pump {
+    @rpc({ semantics: 'query' })                    async pressure() { … }
+    @rpc({ semantics: 'idempotent-command' })       async setSetpoint(bar: number) { … }
+    @rpc({ semantics: 'non-repeatable-command' })   async dispense() { … }
+}
+```
+
+| semantics | repeating it | example |
+| --- | --- | --- |
+| `query` | costs a round trip | a reading, a status, a list |
+| `idempotent-command` | leaves the same state as doing it once | `setSetpoint(1200)`, `close()` |
+| `non-repeatable-command` | does it again | `dispense()`, `advanceBatch()` |
+
+It is part of the contract, not a comment: `extract` reads it out of the decorator, `describe()`
+reports it, and `check` calls it a **breaking change** when a method becomes more dangerous to
+repeat than the version a caller was built against. Every type still lines up in that case, which is
+exactly why nothing else would catch it.
+
+Undeclared stays undeclared. The library will not guess that a method is safe to repeat.
+
+### Not knowing
+
+```typescript
+try {
+    await pump.remote!.dispense()
+} catch (e) {
+    if (e instanceof RpcError && e.code === 'UnknownOutcome') {
+        // The request went out. It may have run. Go and look before sending it again.
+    }
+}
+```
+
+`TransportError` now means the request never left - a failed encode, a closed link, a broker that
+refused the publish - so the command certainly did not run. `UnknownOutcome` means it did leave and
+nothing came back. `Timeout` is the same uncertainty with a more specific cause, and should be read
+the same way for a command.
+
+### Running a command once
+
+Give a server somewhere durable to record what a non-repeatable command did, and a redelivery after
+a crash is answered from the record instead of run again:
+
+```typescript
+const server = new RpcServer({ idempotency: myRedisStore })      // RpcIdempotencyStore
+```
+
+The library ships the interface and a `MemoryIdempotencyStore` for tests - deliberately no database,
+and the memory one is not an answer to the problem, since it dies exactly when the durable one would
+earn its keep.
+
+The store is consulted only for `non-repeatable-command` methods, so reads pay nothing. What it
+records is keyed by the **request id**, which makes a redelivered packet the same command. An
+operator pressing the button again is a *different* request, and only the caller knows the two are
+one intent:
+
+```typescript
+await pump.remote!.$with({ idempotencyKey: workOrder }).dispense()
+```
+
+`$with` returns another proxy for the same instance, so the key never leaks into calls that did not
+ask for it. The outcome is recorded **before** the answer is sent - the other order leaves a window
+where the caller has the result and the store does not.
+
+A store that cannot be reached refuses the command with `UnknownOutcome` rather than running it.
+Failing open would turn an unreachable guard into exactly the double execution it was installed to
+prevent.
+
+### Calls that overlap
+
+Calls run side by side, which is right for stateless services and unrelated devices, and wrong for
+one long-lived object holding mutable state - where
+
+```
+setMode('manual'); start(); setSetpoint(80)
+```
+
+from one caller can interleave with `stop(); setMode('automatic')` from another and leave a machine
+in a combination neither asked for.
+
+```typescript
+@rpcNamespace('cell', { execution: 'serial' })                     // one call at a time
+class Cell { … }
+
+server.exposeClassInstance(fleet, 'fleet', {                       // one call at a time per device
+    execution: (call) => String(call.params[0])
+})
+```
+
+A key function is how a server fronting many devices keeps each device's commands in order without
+serialising itself behind the slowest of them.
+
+**`parallel` stays the default**, despite `serial` being the safer-sounding choice. A serial
+instance that calls back into itself over RPC deadlocks - the second call queues behind the first,
+which is waiting for it - so serialising by default would break re-entrant designs that work today,
+silently and only under load. It is one line to opt in, and the class that needs it knows.
+
+The queue is also where the deadline is read: a command that waited behind others until its caller
+gave up is refused rather than run late.
+
+### Not built
+
+- **Cancellation.** A deadline bounds a call, but nothing tells a running method to stop. Doing it
+  properly needs a cancel frame *and* handler cooperation, and a library cannot supply the second.
+- **`online-only` delivery.** Now that the broker's expiry is the caller's own timeout, a request
+  for an absent peer already dies when the caller stops waiting; failing immediately instead would
+  save the wait and little else.
+- **A per-call invocation context.** Handlers are plain methods, and threading a context through
+  every signature costs more than it returns. The store gets the full invocation; a method that
+  needs its own idempotency has the arguments it was called with.
+- **Global admission limits.** Concurrency caps and message-size bounds are about availability
+  rather than correctness, and belong with a production profile.
 
 ## Events and reconnection
 
@@ -825,6 +960,7 @@ off or absent.
 | `validation` | `'described'` when a schema is given | `'required'` refuses anything undescribed; `'off'` disables |
 | `validateResults` | `false` | check what handlers return too |
 | `unknownVersion` | `'allow'` | `'reject'` refuses a caller whose version has no stored history |
+| `idempotency` | — | where to record what a non-repeatable command did, so a redelivery is answered rather than run again |
 | `requireExplicitExposure` | `false` | refuse a class that marks no `@rpc` methods |
 | `exposeManagement` | `false` | publish `manageRpc.createRpcInstance` |
 | `exposeIntrospection` | `false` | publish `msgrpc.describe()` |

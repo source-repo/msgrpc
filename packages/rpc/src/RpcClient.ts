@@ -3,7 +3,7 @@ import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Co
 import { MessageSigner } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
-import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
+import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { codecFor } from './RPC/Codec.js'
@@ -53,7 +53,12 @@ export interface RpcClientOptions {
 export interface RpcProxy<T> {
     name: string
     target?: string
-    remote?: T
+    /**
+     * The remote instance, plus `$with` for the options a caller can attach to a call - an
+     * idempotency key, so far. `$with` returns another proxy for the same instance rather than
+     * changing this one, so options never leak into calls that did not ask for them.
+     */
+    remote?: T & WithOptions<T>
 }
 
 /**

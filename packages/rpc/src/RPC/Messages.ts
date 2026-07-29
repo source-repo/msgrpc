@@ -39,9 +39,63 @@ export interface RpcCallInstanceMethodPayload extends RpcMessage {
      * and on MQTT 5 the broker's own expiry accounts for the part of the journey it queued.
      */
     ttl?: number
+    /**
+     * Names the command this call *is*, as opposed to `id`, which names this attempt at it.
+     *
+     * Two attempts at one command carry one key, which is what lets a server with a durable
+     * idempotency store answer the second from the first's outcome instead of running it again.
+     * Absent means the request id is the key, which still covers a redelivery of the same packet
+     * but not an operator pressing the button a second time - those are different attempts.
+     */
+    idempotencyKey?: string
 }
 
-export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden' | 'InvalidParams' | 'IncompatibleVersion'
+export type RpcErrorCode =
+    | 'ClassNotFound'
+    | 'MethodNotFound'
+    | 'Exception'
+    | 'Timeout'
+    | 'TransportError'
+    | 'Unauthorized'
+    | 'Forbidden'
+    | 'InvalidParams'
+    | 'IncompatibleVersion'
+    /**
+     * The call was sent and its outcome is not known: it may have run, it may not, and nothing here
+     * can tell which.
+     *
+     * Distinct from `TransportError`, which is the honest answer when a request never left - a
+     * failed encode, a closed link, a broker that refused the publish. The difference is the whole
+     * point. "It failed" invites a retry; "I do not know" says to go and look, and for a
+     * non-repeatable command that distinction is the difference between one pump start and two.
+     */
+    | 'UnknownOutcome'
+
+/**
+ * What a method does to the world, which decides what a caller may do about an uncertain answer.
+ *
+ * Most RPC systems make it easy to call a function and leave this to prose. On a plant it is the
+ * distinction that matters: retrying a read costs a round trip, and retrying a start costs a second
+ * start.
+ *
+ * - `query` changes nothing, so it can be repeated at will.
+ * - `idempotent-command` changes something, but arriving twice leaves the same state as arriving
+ *   once - `setSetpoint(1200)`, `close()`, anything that assigns rather than accumulates.
+ * - `non-repeatable-command` must not be sent again on an uncertain answer, because a second
+ *   arrival is a second effect - `dispense()`, `advanceBatch()`, `resetTotaliser()`.
+ *
+ * Undeclared means undeclared. The library will not guess a method is safe to repeat, and will not
+ * pretend a read is dangerous either; what it does instead is refuse to *silently* do anything that
+ * depends on knowing.
+ */
+export type RpcMethodSemantics = 'query' | 'idempotent-command' | 'non-repeatable-command'
+
+/** Increasing order of what a repeat costs, so a contract change can be judged against it. */
+export const SEMANTICS_RISK: { [semantics in RpcMethodSemantics]: number } = {
+    query: 0,
+    'idempotent-command': 1,
+    'non-repeatable-command': 2
+}
 
 /**
  * A remote error flattened into something that survives MsgPack/JSON encoding.

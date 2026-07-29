@@ -73,6 +73,8 @@ const usage = `source-rpc <command> [options]
                                 unsafe by design: for a development bus, never a plant
     --json                      machine-readable output
     --args <json>               (call) the whole argument list as a JSON array, instead of words
+    --idempotency-key <key>     (call) names the command, so calling twice with one key is two
+                                attempts at one command rather than two commands
 
   console
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
@@ -268,7 +270,8 @@ const VALUE_FLAGS = new Set([
     '--speed',
     '--contracts',
     '--rate',
-    '--concurrency'
+    '--concurrency',
+    '--idempotency-key'
 ])
 
 const positionals = (argv: string[]) => {
@@ -295,7 +298,8 @@ const runVerb = async (command: string, argv: string[]) => {
     const options = {
         ...flags,
         json: argv.includes('--json'),
-        wait: Number(argument(argv, '--wait', '5000'))
+        wait: Number(argument(argv, '--wait', '5000')),
+        ...(argument(argv, '--idempotency-key', '') ? { idempotencyKey: argument(argv, '--idempotency-key', '') } : {})
     }
     // The command itself is the first word, and every verb takes at least a peer after it.
     const [, peer, target] = positionals(argv)

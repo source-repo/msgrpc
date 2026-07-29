@@ -76,6 +76,12 @@ export interface SignedFrameV5 {
      * anybody else's. See RpcServerHandler for what is done with it.
      */
     ttl: string
+    /**
+     * Names the command a request is an attempt at, empty when the caller did not distinguish the
+     * two. Signed because a receiver with an idempotency store acts on it: rewriting it could turn
+     * a retry into a fresh command, or one command into a repeat of somebody else's.
+     */
+    idempotencyKey: string
     timestamp: number
     nonce: string
     payload: Uint8Array
@@ -94,8 +100,9 @@ export interface SignedFrameV5 {
  *
  * The same argument applies to anything else the receiver acts on rather than merely transports: the
  * error code decides what a caller does about a failure, the declared contract version decides
- * whether the call is accepted at all, the response topic decides where the answer is published, and
- * the ttl decides whether the method runs at all. All four are covered.
+ * whether the call is accepted at all, the response topic decides where the answer is published, the
+ * ttl decides whether the method runs at all, and the idempotency key decides whether it runs again.
+ * All five are covered.
  *
  * The MQTT message expiry is deliberately **not** covered, because the broker is meant to decrement
  * it in flight and a signature over it would break on the first queued message. Nothing is lost:
@@ -117,6 +124,7 @@ export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
             frame.code,
             frame.contractVersion,
             frame.ttl,
+            frame.idempotencyKey,
             frame.timestamp,
             frame.nonce
         ])

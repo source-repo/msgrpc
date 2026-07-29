@@ -331,6 +331,22 @@ test('removed methods, added required arguments and dropped events are reported'
     t.regex(namespaceProblems(withEvent, v1)[0]?.reason ?? '', /no longer emitted/)
 })
 
+test('a method that becomes more dangerous to repeat is a breaking change', (t) => {
+    // The one incompatibility no type comparison can see: every argument and return still lines up,
+    // and code written against the old promise now retries something that must not be retried.
+    const asQuery: NamespaceSchema = { version: '1', methods: { start: { params: [], semantics: 'query' } } }
+    const asCommand: NamespaceSchema = { version: '2', methods: { start: { params: [], semantics: 'non-repeatable-command' } } }
+
+    t.regex(namespaceProblems(asQuery, asCommand)[0]?.reason ?? '', /no longer safe/)
+    // The other direction is a promise being strengthened, which strands nobody: a caller that was
+    // careful with a command loses nothing by the command becoming a query.
+    t.deepEqual(namespaceProblems(asCommand, asQuery), [])
+    // Dropping the declaration altogether takes the promise away, which is also breaking.
+    t.regex(namespaceProblems(asQuery, { version: '2', methods: { start: { params: [] } } })[0]?.reason ?? '', /nothing to rely on/)
+    // Undeclared to declared adds one, and breaks nobody.
+    t.deepEqual(namespaceProblems({ version: '1', methods: { start: { params: [] } } }, asCommand), [])
+})
+
 test('a caller declaring an incompatible version is refused with the reason', async (t) => {
     // v2 narrows writeSetpoint, so a v1 caller can no longer be served safely.
     const served: RpcSchema = {

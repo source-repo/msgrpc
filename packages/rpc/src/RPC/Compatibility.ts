@@ -1,3 +1,4 @@
+import { SEMANTICS_RISK } from './Messages.js'
 import { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from './Schema.js'
 
 /**
@@ -151,6 +152,17 @@ const methodProblems = (name: string, caller: MethodSchema, current: MethodSchem
     // Returns are covariant: what this contract returns must still be understood.
     if (caller.returns && current.returns && !assignable(current.returns, caller.returns, types))
         problems.push({ where: `${name} return`, reason: 'widened, so a value this contract may return is not one the caller expects' })
+
+    // Semantics may become safer to repeat but not more dangerous. A caller told it was calling a
+    // query is entitled to have retried freely, and code written on that promise is still out there
+    // - so a method quietly becoming a command is a breaking change even though every type still
+    // lines up. This is the one incompatibility a type comparison cannot see.
+    const was = caller.semantics
+    const now = current.semantics
+    if (was && now && SEMANTICS_RISK[now] > SEMANTICS_RISK[was])
+        problems.push({ where: name, reason: `is now ${now} where the caller was told ${was}, so a retry the caller may already make is no longer safe` })
+    if (was && !now && SEMANTICS_RISK[was] < SEMANTICS_RISK['non-repeatable-command'])
+        problems.push({ where: name, reason: `no longer declares that it is ${was}, so a caller relying on that promise has nothing to rely on` })
 
     return problems
 }

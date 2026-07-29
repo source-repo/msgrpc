@@ -437,6 +437,8 @@ const publishSignedV5 = async (
         sentResponseTopic?: string
         ttl?: number
         sentTtl?: number
+        idempotencyKey?: string
+        sentIdempotencyKey?: string
     }
 ) => {
     const body = opts.rawBody ?? new Uint8Array(msgPackEncode(opts.body))
@@ -460,6 +462,7 @@ const publishSignedV5 = async (
         code: opts.code ?? '',
         contractVersion: '',
         ttl,
+        idempotencyKey: opts.idempotencyKey ?? '',
         timestamp,
         nonce,
         payload: body
@@ -480,6 +483,7 @@ const publishSignedV5 = async (
                 ...(opts.method ? { [MR.method]: opts.method } : {}),
                 ...(opts.sentCode ?? opts.code ? { [MR.code]: (opts.sentCode ?? opts.code)! } : {}),
                 ...(sentTtl !== undefined ? { [MR.ttl]: String(sentTtl) } : {}),
+                ...((opts.sentIdempotencyKey ?? opts.idempotencyKey) ? { [MR.idempotencyKey]: (opts.sentIdempotencyKey ?? opts.idempotencyKey)! } : {}),
                 [MR.nonce]: nonce,
                 [MR.timestamp]: String(timestamp),
                 [MR.signature]: signature

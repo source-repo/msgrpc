@@ -41,13 +41,19 @@ export const MR = {
      * sat in the receiving process. This is the caller's own statement, signed, and it survives
      * relaying through a transport that does not speak MQTT at all.
      */
-    ttl: 'mr-ttl'
+    ttl: 'mr-ttl',
+    /**
+     * Names the command a request is an attempt at, when the caller distinguishes the two. Absent
+     * means the correlation data is the name, so a redelivered packet is the same command and a
+     * fresh attempt is a different one.
+     */
+    idempotencyKey: 'mr-idem'
 } as const
 
 /**
- * Version 2 covers contentType, the error code, the declared contract version, the response topic
- * and the ttl in the signature; version 1 covered none of them, and a frame signed under one cannot
- * verify under the other. Bumped rather than negotiated: a receiver that quietly accepted either
+ * Version 2 covers contentType, the error code, the declared contract version, the response topic,
+ * the ttl and the idempotency key in the signature; version 1 covered none of them, and a frame
+ * signed under one cannot verify under the other. Bumped rather than negotiated: a receiver that quietly accepted either
  * would let an attacker choose the weaker.
  */
 export const FRAME_VERSION = '2'
@@ -73,6 +79,8 @@ export interface OutboundFrame {
     version?: string
     /** Milliseconds the caller will still wait. Drives the MQTT message expiry as well. */
     ttl?: number
+    /** Names the command rather than this attempt at it, when the caller says so. */
+    idempotencyKey?: string
     /** Encoded as the packet payload: arguments for a request, the value for a result. */
     body: unknown
 }
@@ -98,6 +106,7 @@ export const toOutboundFrame = (message: Message): OutboundFrame | undefined => 
                 method: call.method,
                 version: call.version,
                 ttl: call.ttl,
+                idempotencyKey: call.idempotencyKey,
                 body: call.params
             }
         }
@@ -128,6 +137,7 @@ export interface InboundFrame {
     version?: string
     /** What the caller said it would still wait, already narrowed by anything the broker reported. */
     ttl?: number
+    idempotencyKey?: string
     body: unknown
 }
 
@@ -145,6 +155,7 @@ export const fromInboundFrame = (frame: InboundFrame): Message | undefined => {
                 method: frame.method,
                 version: frame.version,
                 ttl: frame.ttl,
+                idempotencyKey: frame.idempotencyKey,
                 // A caller that sends no payload means no arguments.
                 params: Array.isArray(frame.body) ? frame.body : frame.body === undefined || frame.body === null ? [] : [frame.body]
             }

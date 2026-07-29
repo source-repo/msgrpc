@@ -55,6 +55,21 @@ export class Plant {
     async labels(): Promise<Record<string, string>> {
         return {}
     }
+    /** Repeating this is free, and a caller may retry it as often as it likes. */
+    @rpc({ semantics: 'query' })
+    async readSetpoint() {
+        return 1200
+    }
+    /** Assigns rather than accumulates, so arriving twice leaves the same state as arriving once. */
+    @rpc({ semantics: 'idempotent-command' })
+    async setMode(mode: 'auto' | 'manual') {
+        return mode
+    }
+    /** Each call moves the batch on by one, so a repeat is a second batch. */
+    @rpc({ semantics: 'non-repeatable-command' })
+    async advanceBatch() {
+        return 'advanced'
+    }
     /** Unmarked, so it must not appear in the contract. */
     async internalOnly() {
         return 'secret'

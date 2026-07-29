@@ -546,6 +546,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             code: values[MR.code],
             version: values[MR.contractVersion],
             ttl: this.remainingTtl(values[MR.ttl], properties?.messageExpiryInterval),
+            idempotencyKey: values[MR.idempotencyKey],
             body: decoded
         })
         if (!message) {
@@ -761,6 +762,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             code: values[MR.code] ?? '',
             contractVersion: values[MR.contractVersion] ?? '',
             ttl: values[MR.ttl] ?? '',
+            idempotencyKey: values[MR.idempotencyKey] ?? '',
             timestamp,
             nonce,
             payload: body
@@ -867,6 +869,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (frame.code) userProperties[MR.code] = frame.code
         if (frame.version) userProperties[MR.contractVersion] = frame.version
         if (frame.ttl !== undefined) userProperties[MR.ttl] = String(frame.ttl)
+        if (frame.idempotencyKey) userProperties[MR.idempotencyKey] = frame.idempotencyKey
 
         if (this.sign) {
             const nonce = createNonce()
@@ -884,6 +887,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 code: frame.code ?? '',
                 contractVersion: frame.version ?? '',
                 ttl: frame.ttl !== undefined ? String(frame.ttl) : '',
+                idempotencyKey: frame.idempotencyKey ?? '',
                 timestamp,
                 nonce,
                 payload: body

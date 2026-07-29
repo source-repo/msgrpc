@@ -2,6 +2,7 @@ import EventEmitter from 'events'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from './Schema.js'
+import type { RpcMethodSemantics } from './Messages.js'
 // Extracted from this file by `npm run contract` in the CLI package and committed, so building
 // msgrpc never needs the extractor that reads it. A test there asserts it still matches this source.
 import extracted from './Introspection.types.json' with { type: 'json' }
@@ -23,6 +24,12 @@ export interface DescribedMethod {
     paramNames?: string[]
     rest?: TypeNode
     returns?: TypeNode
+    /**
+     * What calling it does to the world, when the method says: `query`, `idempotent-command` or
+     * `non-repeatable-command`. Absent means it does not say, which a person reading a list of
+     * methods should treat as "ask before pressing this".
+     */
+    semantics?: RpcMethodSemantics
 }
 
 export interface DescribedEvent {
@@ -41,6 +48,8 @@ export interface DescribedNamespace {
     created: boolean
     /** True when the instance can emit events at all. */
     emitter: boolean
+    /** True when calls into this instance run one at a time rather than side by side. */
+    serialised?: boolean
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }
@@ -149,7 +158,12 @@ export class Introspection {
             const methodNames = [...(manage.findNameSpaceMethodMap(name)?.keys() ?? [])].sort()
             const methods: DescribedMethod[] = methodNames.map((method) => {
                 const signature = described?.methods[method]
-                return { name: method, ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}) }
+                const semantics = this.handler.semanticsOf({ path: name, method })
+                return {
+                    name: method,
+                    ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}),
+                    ...(semantics ? { semantics } : {})
+                }
             })
 
             // Declared events plus any a peer is currently subscribed to, since a server without a
@@ -162,9 +176,14 @@ export class Introspection {
                 subscribers: [...this.handler.eventProxies.values()].filter((proxy) => proxy.instanceName === name && proxy.event === event).length
             }))
 
+            const execution = manage.exposedExecution[name]
             return {
                 name,
                 ...(described?.version ? { version: described.version } : {}),
+                // Worth reporting because it changes what a caller should expect: on a serialised
+                // instance a slow method delays every other call into it, and that is a property of
+                // the server rather than of the network.
+                ...(execution && execution !== 'parallel' ? { serialised: true } : {}),
                 className: instance.constructor?.name,
                 created: created.has(name),
                 emitter: instance instanceof EventEmitter,

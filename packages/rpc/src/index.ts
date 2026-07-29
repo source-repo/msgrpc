@@ -21,6 +21,7 @@ export * from './RPC/Schema.js'
 export * from './RPC/Compatibility.js'
 export * from './RPC/Codec.js'
 export * from './RPC/Signing.js'
+export * from './RPC/Idempotency.js'
 export * from './RPC/RpcClientHandler.js'
 export * from './RPC/RpcServerHandler.js'
 

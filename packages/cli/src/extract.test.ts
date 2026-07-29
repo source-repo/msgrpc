@@ -17,8 +17,33 @@ test('a marked class becomes a namespace, and unmarked methods stay out of it', 
     const plant = schema.namespaces.plant
     t.truthy(plant)
     t.is(plant.version, '2')
-    t.deepEqual(Object.keys(plant.methods).sort(), ['blob', 'byId', 'configure', 'counts', 'labels', 'readings', 'tree', 'writeSetpoint'])
+    t.deepEqual(Object.keys(plant.methods).sort(), [
+        'advanceBatch',
+        'blob',
+        'byId',
+        'configure',
+        'counts',
+        'labels',
+        'readSetpoint',
+        'readings',
+        'setMode',
+        'tree',
+        'writeSetpoint'
+    ])
     t.false('internalOnly' in plant.methods, 'an unmarked method reached the contract')
+})
+
+test('what a method does to the world is read off the decorator and into the contract', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('tsconfig.json'))
+    t.deepEqual(diagnostics, [], 'the fixture should describe cleanly')
+    const plant = schema.namespaces.plant
+
+    t.is(plant.methods.readSetpoint.semantics, 'query')
+    t.is(plant.methods.setMode.semantics, 'idempotent-command')
+    t.is(plant.methods.advanceBatch.semantics, 'non-repeatable-command')
+    // Undeclared stays undeclared. Guessing that an unmarked method is safe to repeat is the one
+    // mistake this feature exists to stop anybody making.
+    t.is(plant.methods.writeSetpoint.semantics, undefined)
 })
 
 test('parameters, optionals and rest arguments are described', (t) => {
