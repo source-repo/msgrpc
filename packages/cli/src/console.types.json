@@ -1,6 +1,31 @@
 {
   "schema": 1,
   "types": {
+    "PeerRole": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "literal",
+          "value": "broker"
+        },
+        {
+          "kind": "literal",
+          "value": "console"
+        },
+        {
+          "kind": "literal",
+          "value": "page"
+        },
+        {
+          "kind": "literal",
+          "value": "device"
+        },
+        {
+          "kind": "literal",
+          "value": "undescribed"
+        }
+      ]
+    },
     "NetworkProblem": {
       "kind": "object",
       "fields": {
@@ -32,6 +57,32 @@
           "optional": true
         },
         "reason": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
+    "PeerChange": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "state": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "at": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "link": {
           "type": {
             "kind": "string"
           },
@@ -1177,21 +1228,6 @@
         }
       }
     },
-    "PeerChange": {
-      "kind": "object",
-      "fields": {
-        "peer": {
-          "type": {
-            "kind": "string"
-          }
-        },
-        "state": {
-          "type": {
-            "kind": "string"
-          }
-        }
-      }
-    },
     "TappedFrame": {
       "kind": "object",
       "fields": {
@@ -1337,6 +1373,15 @@
                   }
                 }
               },
+              "roles": {
+                "type": {
+                  "kind": "record",
+                  "values": {
+                    "kind": "ref",
+                    "name": "PeerRole"
+                  }
+                }
+              },
               "links": {
                 "type": {
                   "kind": "record",
@@ -1359,6 +1404,23 @@
                   "items": {
                     "kind": "ref",
                     "name": "NetworkProblem"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "presence": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "changes": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "ref",
+                    "name": "PeerChange"
                   }
                 }
               }

@@ -65,7 +65,20 @@ export interface StreamedEvent {
 export interface PeerChange {
     peer: string
     state: string
+    at: number
+    /** The link it arrived on or left from, when the console knows it. */
+    link?: string
 }
+
+/**
+ * What a peer turned out to be, learned from a description the console had already made.
+ *
+ * Deliberately not discovered by describing every peer on sight: that is a round trip each on a
+ * network where the peer list is the cheap part. The console describes a peer when someone selects
+ * it, and when it goes looking for a bus to tap - so the labels fill in as the network is used, and
+ * cost nothing that was not already being spent.
+ */
+export type PeerRole = 'broker' | 'console' | 'page' | 'device' | 'undescribed'
 
 /** A tap the console holds, and where it holds it. */
 export interface ConsoleTap {
@@ -95,8 +108,22 @@ export interface NetworkProblem {
     reason?: string
 }
 
-/** How much history the console keeps. These arrive unasked, so the buffer is bounded. */
+/** How much history the console keeps. These arrive unasked, so the buffers are bounded. */
 const PROBLEM_HISTORY = 200
+
+/**
+ * What a description says the peer is. A broker exposes the tap and nothing else; a console has its
+ * own namespace; a page hosts the chat service the console app ships. Anything else answering for
+ * itself is a device, and one that cannot be described is worth distinguishing from one that has
+ * not been described yet.
+ */
+const roleFrom = (description: ServerDescription): PeerRole => {
+    const namespaces = description.namespaces.map((namespace) => namespace.name)
+    if (namespaces.includes('bus') && !namespaces.includes('console')) return 'broker'
+    if (namespaces.includes('console')) return 'console'
+    if (namespaces.includes('chat')) return 'page'
+    return 'device'
+}
 
 /** What a browser may ask this console to do. Everything else on the class stays local. */
 @rpcNamespace('console')
@@ -154,6 +181,24 @@ export class ConsoleService extends EventEmitter {
     /** What has gone wrong on the links, newest first and bounded. */
     private readonly seen: NetworkProblem[] = []
 
+    /**
+     * Peers arriving and leaving, newest first and bounded.
+     *
+     * Kept because a peer that comes and goes is one of the commonest faults on a plant and the
+     * hardest to catch in the act: the console showed it as a dot that changed colour and forgot,
+     * so a device flapping every thirty seconds looked exactly like one that was simply up.
+     */
+    private readonly comings: PeerChange[] = []
+
+    /** What each peer turned out to be, from descriptions already made. */
+    private readonly roles = new Map<string, PeerRole>()
+
+    notePresence(change: PeerChange) {
+        this.comings.unshift(change)
+        if (this.comings.length > PROBLEM_HISTORY) this.comings.length = PROBLEM_HISTORY
+        this.emit('peer', change)
+    }
+
     /** Records a problem and passes it on, so a page open now sees it and one opened later still can. */
     noteProblem(problem: NetworkProblem) {
         this.seen.unshift(problem)
@@ -189,6 +234,8 @@ export class ConsoleService extends EventEmitter {
             watching: [...this.watching.keys()],
             callTimeout: this.callTimeout,
             network: this.startedWith,
+            // Filled in as peers are described for other reasons, so this costs no extra traffic.
+            roles: Object.fromEntries(this.roles),
             // Which link each peer was found on. The console holds the browser's, the broker's and
             // the hub's at once, and on a plant where the devices are on one and the HMIs on
             // another that is the first thing worth knowing about a peer.
@@ -207,13 +254,27 @@ export class ConsoleService extends EventEmitter {
         return { problems: [...this.seen] }
     }
 
+    /**
+     * Peers arriving and leaving, newest first - including before this page was opened, which is
+     * the half that matters when the question is whether something has been flapping.
+     */
+    @rpc
+    async presence(): Promise<{ changes: PeerChange[] }> {
+        return { changes: [...this.comings] }
+    }
+
     @rpc
     async describe(peer: string): Promise<ServerDescription | { error: string; code?: string }> {
         try {
             const proxy = await this.reach(peer).proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc', peer)
-            return await proxy.remote!.describe()
+            const description = await proxy.remote!.describe()
+            // Every description teaches what the peer is, whoever asked for it and why.
+            this.roles.set(peer, roleFrom(description))
+            return description
         } catch (e) {
-            return asFailure(e)
+            const failure = asFailure(e)
+            if (failure.code === 'ClassNotFound') this.roles.set(peer, 'undescribed')
+            return failure
         }
     }
 
@@ -278,6 +339,7 @@ export class ConsoleService extends EventEmitter {
     /** A peer that has gone is worth asking about again if it comes back under new software. */
     forgetBus(peer: string) {
         this.knownBuses.delete(peer)
+        this.roles.delete(peer)
     }
 
     /**
@@ -579,14 +641,14 @@ export const startConsole = async (options: ConsoleOptions) => {
             service.links.set(peer, link)
             if (online.has(peer)) return
             online.add(peer)
-            service.emit('peer', { peer, state: 'online' })
+            service.notePresence({ peer, state: 'online', at: Date.now(), link })
         })
         transport.on(TransportEvent.peerGone, (peer: string) => {
             // Asked again if it returns: a broker restarted with a tap is a different answer.
             service.forgetBus(peer)
             service.links.delete(peer)
             if (!online.delete(peer)) return
-            service.emit('peer', { peer, state: 'offline' })
+            service.notePresence({ peer, state: 'offline', at: Date.now(), link })
         })
         // The four the transports have always emitted and nothing ever listened to. Between them
         // they cover every way a call disappears without an answer: refused before the RPC layer,

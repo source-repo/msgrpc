@@ -836,3 +836,124 @@ textarea.control {
 .stream .control {
     margin-bottom: 10px;
 }
+
+/* Who came and went. A peer that flaps is a fault; one that arrived once is a Tuesday. */
+.presence {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 14px;
+}
+
+.presence header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.flapping {
+    margin-bottom: 12px;
+    padding: 8px 10px;
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--warn);
+    border-radius: 6px;
+}
+
+.flapping p {
+    margin: 2px 0;
+    font-size: 12px;
+    color: var(--text);
+}
+
+.coming {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 0;
+    border-bottom: 1px solid rgba(38, 46, 58, 0.6);
+    font-size: 12px;
+}
+
+.coming time {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.coming .mark {
+    font-family: var(--mono);
+    width: 10px;
+}
+
+.coming.online .mark {
+    color: var(--ok);
+}
+
+.coming.offline .mark {
+    color: var(--bad);
+}
+
+.coming .link {
+    margin-left: auto;
+    font-size: 10px;
+    font-family: var(--mono);
+}
+
+/* What a peer turned out to be, from a description already made. */
+.peer .role {
+    margin-left: 8px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-family: var(--mono);
+    background: var(--panel-2);
+    color: var(--muted);
+}
+
+.peer .role.broker {
+    color: #cfe6ff;
+    background: var(--accent-dim);
+}
+
+.peer .role.undescribed {
+    color: var(--warn);
+}
+
+/* Argument sets worth keeping. */
+.presets {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin: 10px 0 4px;
+}
+
+.preset {
+    display: inline-flex;
+    align-items: center;
+}
+
+.preset .toggle {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    max-width: 260px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.forget {
+    padding: 3px 7px;
+    border: 1px solid var(--line);
+    border-left: none;
+    border-radius: 0 999px 999px 0;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.forget:hover {
+    color: var(--bad);
+    border-color: var(--bad);
+}

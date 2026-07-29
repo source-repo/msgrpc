@@ -355,6 +355,30 @@ colour-coded by kind, with the reply carrying the method it answers and the time
 The tab stays tapping while you look at another tab; the count on the tab label is what arrived
 while you were away.
 
+## Presence
+
+A peer that flaps is one of the commonest faults on a plant and the hardest to catch in the act. The
+console used to show it as a dot that changed colour and then forgot, so a device dropping every
+thirty seconds looked exactly like one that was simply up.
+
+```
+flakyCell has arrived 4 times
+
+3:36:43 AM  −  flakyCell   http://localhost:8090
+3:36:41 AM  +  flakyCell   http://localhost:8090
+3:36:38 AM  +  polish-2
+3:36:38 AM  −  flakyCell   http://localhost:8090
+```
+
+Kept by the console and handed over when a page connects, so **opening the console after the trouble
+still shows it** — and anything that has arrived three times or more in the window is called out by
+name, because that is the fault and the rest is a Tuesday.
+
+Each peer in the list also says **what it is** — broker, console, page, device, or served without a
+contract. That is learned from descriptions the console was already making when you select a peer or
+when it goes looking for a bus to tap, so the labels fill in as the network is used and an idle
+console costs exactly what it did before.
+
 ## Problems
 
 The **Problems** tab is where a call that never comes back says why. Four things the transports have
@@ -834,6 +858,11 @@ write the contract in the first place.
 unfamiliar peer. The events pane has a filter, a pause and an **export** that saves what is on screen
 as jsonl — the same shape `msgrpc record` writes and `jq` reads. Pausing stops the buffer filling
 rather than only the list rendering, so a paused pane on a busy network stays as it was.
+
+Arguments worth keeping get a **save** button. Presets are stored in the browser and keyed by
+namespace and method rather than by peer, so a set saved against one cell is offered on the next —
+the reason to save a setpoint sequence usually being that five more cabinets are coming. They are
+named by what they hold, so there is nothing to type.
 
 Each method keeps its timings: **×20** calls it repeatedly and reports `20 calls · p50 1 ms · last
 1 ms` next to the button, which is `msgrpc bench` in miniature for when the question is smaller than

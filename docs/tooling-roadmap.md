@@ -172,7 +172,7 @@ msgrpc bench plantServer plant.read --rate 20 --for 60s
 p50/p95/p99 and an error breakdown. `call()` already returns `ms`; the console shows it once and
 discards it. Finding the device that falls over at 10 calls a second is a real plant problem.
 
-## 8. Console polish — mostly done in msgrpc-cli 2.5.0
+## 8. Console polish — done in msgrpc-cli 2.5.0
 
 Mostly the feature set MQTT monitors have converged on, and mostly missing:
 
@@ -186,13 +186,18 @@ Mostly the feature set MQTT monitors have converged on, and mostly missing:
 - **Peer role labels** — broker / console / page / device — so a switchboard does not read as a
   broken node. A broker could advertise itself in presence; failing that, infer it from `describe`
   failing while the peer demonstrably relays.
-- **Presence timeline.** Arrivals and departures with timestamps. A flapping device is a classic
-  field problem and the console renders it as a dot that changes colour and forgets. **Not built.**
-- **Saved argument presets** per method. **Not built** - the timings a method keeps survive only
-  until the peer is reselected, and presets would want the same storage.
-- **Peer role labels** - broker / console / page / device. **Not built**: telling them apart needs a
-  describe per peer, which is a round trip each on a network where the peer list is the cheap part.
-  The link each peer arrived on is shown instead, which answers the question that gets asked more.
+- **Presence timeline.** A Presence tab, kept by the console and handed over on connect, so a page
+  opened after the flapping still sees it. A peer that has arrived three times or more in the window
+  is called out by name, since that is the fault and the rest is a Tuesday.
+- **Saved argument presets** per method, in the browser. Keyed by namespace and method rather than by
+  peer, so a set saved against one cell is offered on the next - which is the case that matters, the
+  reason to save a setpoint sequence usually being that five more cabinets are coming. Named by what
+  they hold, so there is no dialog to name them in.
+- **Peer role labels** - broker / console / page / device. The worry was that telling them apart
+  needs a describe per peer, a round trip each on a network where the peer list is the cheap part.
+  It does not: the console already describes a peer when someone selects it and when it goes looking
+  for a bus to tap, so the label is recorded from descriptions already being made. Peers name
+  themselves as the network is used, and an idle console still costs what it always did.
 
 ## 9. Somewhere to put a contract, and something to start from it — done in msgrpc-cli 2.5.0
 

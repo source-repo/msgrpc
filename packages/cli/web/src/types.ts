@@ -100,6 +100,17 @@ export interface NetworkProblem {
     reason?: string
 }
 
+/** A peer arriving or leaving, with when and on which link. */
+export interface PeerChange {
+    peer: string
+    state: string
+    at: number
+    link?: string
+}
+
+/** What a peer turned out to be, from a description the console had already made. */
+export type PeerRole = 'broker' | 'console' | 'page' | 'device' | 'undescribed'
+
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {
     peers(): Promise<{
@@ -109,7 +120,11 @@ export interface ConsoleService {
         links: { [peer: string]: string }
         /** What this console was started with, so the page can render a command line that runs. */
         network: { broker?: string; hub?: string; prefix?: string }
+        /** Filled in as peers are described for other reasons, so it costs no extra traffic. */
+        roles: { [peer: string]: PeerRole }
     }>
+    /** Who has come and gone, newest first — including before this page was opened. */
+    presence(): Promise<{ changes: PeerChange[] }>
     /** What has gone wrong on the links, newest first — including before this page was opened. */
     problems(): Promise<{ problems: NetworkProblem[] }>
     describe(peer: string): Promise<ServerDescription | { error: string; code?: string }>

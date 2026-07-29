@@ -10,7 +10,8 @@ import chatContract from './chat.types.json'
 import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
-import { ConsoleService, DescribedEvent, NetworkProblem, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
+import { Presence } from './Presence'
+import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, typeText } from './types'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -32,7 +33,7 @@ const useConsole = () => {
     const [me, setMe] = useState('')
     const [status, setStatus] = useState('connecting')
     const events = useRef<((event: StreamedEvent) => void) | null>(null)
-    const peerChange = useRef<((peer: string, state: string) => void) | null>(null)
+    const peerChange = useRef<((peer: string, state: string, change: PeerChange) => void) | null>(null)
     const said = useRef<((from: string, text: string) => void) | null>(null)
     const frames = useRef<((frame: TappedFrame) => void) | null>(null)
     const problems = useRef<((problem: NetworkProblem) => void) | null>(null)
@@ -92,8 +93,8 @@ const useConsole = () => {
                 const proxy = await server.proxy<ConsoleService & { on: (e: string, h: (...a: unknown[]) => void) => Promise<unknown> }>('console', consoleName)
                 await proxy.remote!.on('event', (event: unknown) => events.current?.(event as StreamedEvent))
                 await proxy.remote!.on('peer', (change: unknown) => {
-                    const { peer: name, state } = change as { peer: string; state: string }
-                    peerChange.current?.(name, state)
+                    const coming = change as PeerChange
+                    peerChange.current?.(coming.peer, coming.state, coming)
                 })
                 // Subscribed once, whether or not anything is tapping: the console emits nothing
                 // here until a tap is started, and re-subscribing per tap would drop frames in the
@@ -151,7 +152,7 @@ const download = (rows: unknown[], filename: string) => {
 }
 
 /** Which of the side panel's three views is showing. */
-type SideTab = 'chat' | 'events' | 'traffic' | 'problems'
+type SideTab = 'chat' | 'events' | 'traffic' | 'problems' | 'presence'
 
 export const App = () => {
     const { service, status, me, events, peerChange, said, frames, problems, peer } = useConsole()
@@ -168,6 +169,8 @@ export const App = () => {
     const [trouble, setTrouble] = useState<NetworkProblem[]>([])
     const [links, setLinks] = useState<{ [peer: string]: string }>({})
     const [network, setNetwork] = useState<{ broker?: string; hub?: string; prefix?: string }>({})
+    const [roles, setRoles] = useState<{ [peer: string]: PeerRole }>({})
+    const [comings, setComings] = useState<PeerChange[]>([])
     const [eventFilter, setEventFilter] = useState('')
     const [eventsPaused, setEventsPaused] = useState(false)
 
@@ -178,6 +181,7 @@ export const App = () => {
         setWatching(new Set(state.watching))
         setLinks(state.links ?? {})
         setNetwork(state.network ?? {})
+        setRoles(state.roles ?? {})
     }, [service])
 
     // The tab is where two consoles are told apart when both are open, so it carries the peer name
@@ -213,13 +217,14 @@ export const App = () => {
             if (eventsPaused) return
             setStream((current) => [event, ...current].slice(0, 500))
         }
-        peerChange.current = (peer, state) => {
+        peerChange.current = (peer, state, change) => {
             setOffline((current) => {
                 const next = new Set(current)
                 if (state === 'offline') next.add(peer)
                 else next.delete(peer)
                 return next
             })
+            setComings((current) => [change, ...current].slice(0, 200))
             void refreshPeers()
         }
     }, [service, refreshPeers, events, peerChange, eventsPaused])
@@ -238,6 +243,7 @@ export const App = () => {
         // Fetched as well as streamed: the console keeps what happened before this page was opened,
         // and on a network that is already misbehaving that is the part worth reading.
         if (service) void service.problems().then(({ problems: history }) => setTrouble(history)).catch(() => undefined)
+        if (service) void service.presence().then(({ changes }) => setComings(changes)).catch(() => undefined)
     }, [service, problems])
 
     const select = async (peer: string) => {
@@ -302,6 +308,9 @@ export const App = () => {
                         {peer === me && <span className="you">you</span>}
                         {/* Which link it was found on. On a plant with the devices on a broker and
                             the HMIs on a hub, that is the first thing worth knowing about a peer. */}
+                        {/* Learned from a description already made, so peers label themselves as
+                            the network is used rather than by describing everything on sight. */}
+                        {roles[peer] && <span className={`role ${roles[peer]}`}>{roles[peer] === 'undescribed' ? 'no contract' : roles[peer]}</span>}
                         {links[peer] && links[peer] !== 'this console' && <span className="link">{links[peer]}</span>}
                     </button>
                 ))}
@@ -388,7 +397,7 @@ export const App = () => {
                  * where it matters most.
                  */}
                 <nav className="tabs">
-                    {(['events', 'traffic', 'problems', 'chat'] as const).map((name) => (
+                    {(['events', 'traffic', 'problems', 'presence', 'chat'] as const).map((name) => (
                         <button key={name} className={tab === name ? 'tab on' : 'tab'} onClick={() => setTab(name)}>
                             {name}
                             {name === 'traffic' && traffic.length > 0 && <span className="count">{traffic.length}</span>}
@@ -400,6 +409,8 @@ export const App = () => {
                 {tab === 'chat' && <Chat peer={selected} messages={selected ? (chats[selected] ?? []) : []} onSend={sendChat} />}
 
                 {tab === 'problems' && <Problems problems={trouble} onClear={() => setTrouble([])} />}
+
+                {tab === 'presence' && <Presence changes={comings} onClear={() => setComings([])} />}
 
                 {/* Always mounted, so switching tabs does not drop the tap. See Traffic's `hidden`. */}
                 <Traffic

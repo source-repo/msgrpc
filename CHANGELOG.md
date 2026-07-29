@@ -65,6 +65,21 @@
   - `--concurrency` bounds what may be outstanding; past that calls are **not sent and counted as
     fallen behind**. Piling them onto a device that is already behind measures the queue rather than
     the device, and would report healthy latencies for a device that is drowning.
+- **A Presence tab.** A peer that flaps is one of the commonest faults on a plant and the hardest to
+  catch in the act: the console showed it as a dot that changed colour and then forgot, so a device
+  dropping every thirty seconds looked exactly like one that was simply up. The console keeps the
+  arrivals and departures and hands them over when a page connects, so opening it after the trouble
+  still shows it, and a peer that has arrived three times or more in the window is called out by
+  name.
+- **Peers say what they are** - broker, console, page, device, or served without a contract. Learned
+  from descriptions the console was already making when someone selects a peer or when it goes
+  looking for a bus to tap, so the labels fill in as the network is used and an idle console costs
+  what it always did. The worry that this needed a describe per peer on sight is what had kept it
+  out; it does not.
+- **Argument presets**, per method and kept in the browser. Keyed by namespace and method rather than
+  by peer, so a set saved against one cell is offered on the next - the reason to save a setpoint
+  sequence usually being that five more cabinets are coming. Named by what they hold, so there is no
+  dialog to name them in.
 - **Console polish.** The events pane gained the filter, pause and export the traffic tab already
   had - pausing stops the buffer filling rather than only the list rendering, and export writes the
   jsonl `msgrpc record` writes and `jq` reads. **Watch all** takes every event in a namespace in one

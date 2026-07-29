@@ -20,6 +20,39 @@ const asCommand = (peer: string, namespace: string, method: string, args: unknow
     return ['msgrpc', 'call', peer, `${namespace}.${method}`, ...args.map(word), ...where].join(' ')
 }
 
+/**
+ * Argument sets worth keeping, in the browser rather than on the console.
+ *
+ * Keyed by namespace and method rather than by peer, so a set saved against one cell is offered on
+ * the next one - which is the case that matters, since the reason to save a setpoint sequence is
+ * usually that you are about to do it to five more cabinets.
+ */
+const presetKey = (namespace: string, method: string) => `msgrpc.presets.${namespace}.${method}`
+
+interface Preset {
+    label: string
+    texts: string[]
+    include: boolean[]
+}
+
+const readPresets = (namespace: string, method: string): Preset[] => {
+    try {
+        const stored = window.localStorage.getItem(presetKey(namespace, method))
+        return stored ? (JSON.parse(stored) as Preset[]) : []
+    } catch {
+        // A browser with storage turned off is not a reason for the form to stop working.
+        return []
+    }
+}
+
+const writePresets = (namespace: string, method: string, presets: Preset[]) => {
+    try {
+        window.localStorage.setItem(presetKey(namespace, method), JSON.stringify(presets))
+    } catch {
+        // Full, private, or refused. Losing a preset is not worth an error in the console.
+    }
+}
+
 const median = (values: number[]) => {
     if (!values.length) return 0
     const sorted = [...values].sort((a, b) => a - b)
@@ -57,6 +90,7 @@ export const MethodPanel = ({
     // question worth asking of a device is what it does the twentieth time.
     const [times, setTimes] = useState<number[]>([])
     const [copied, setCopied] = useState(false)
+    const [presets, setPresets] = useState<Preset[]>(() => readPresets(namespace, method.name))
 
     // Written the way the source declares it - `mode?: 'auto' | 'manual'` rather than the `| null`
     // the schema encodes optionality as, which reads like a value the method accepts.
@@ -103,6 +137,24 @@ export const MethodPanel = ({
         }
     }
 
+    /** Named by what it holds: a preset called "1200, auto" needs no explaining, and no dialog. */
+    const savePreset = () => {
+        const label = fields.map((field) => (field.include ? field.text : '—')).join(', ') || 'no arguments'
+        const preset: Preset = { label, texts: fields.map((field) => field.text), include: fields.map((field) => field.include) }
+        const next = [preset, ...presets.filter((entry) => entry.label !== label)].slice(0, 8)
+        setPresets(next)
+        writePresets(namespace, method.name, next)
+    }
+
+    const applyPreset = (preset: Preset) =>
+        setFields(fields.map((field, index) => ({ text: preset.texts[index] ?? field.text, include: preset.include[index] ?? field.include })))
+
+    const forgetPreset = (label: string) => {
+        const next = presets.filter((entry) => entry.label !== label)
+        setPresets(next)
+        writePresets(namespace, method.name, next)
+    }
+
     const copyCommand = () => {
         let args: unknown[]
         try {
@@ -135,6 +187,23 @@ export const MethodPanel = ({
                             onChange={(next) => setFields(fields.map((field, i) => (i === index ? next : field)))}
                         />
                     ))}
+                    {params.length > 0 && (presets.length > 0 || fields.length > 0) && (
+                        <div className="presets">
+                            {presets.map((preset) => (
+                                <span key={preset.label} className="preset">
+                                    <button className="toggle" onClick={() => applyPreset(preset)} title="put these arguments back in the form">
+                                        {preset.label}
+                                    </button>
+                                    <button className="forget" onClick={() => forgetPreset(preset.label)} title="forget this one">
+                                        ×
+                                    </button>
+                                </span>
+                            ))}
+                            <button className="toggle" onClick={savePreset} title="keep these arguments for next time">
+                                save
+                            </button>
+                        </div>
+                    )}
                     {method.rest && <p className="muted">Takes further {typeText(method.rest)} arguments, which this form does not send.</p>}
                     {!method.params && <p className="muted">No schema describes this method, so its arguments cannot be shown as fields.</p>}
                     <div className="actions">
