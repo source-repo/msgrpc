@@ -208,15 +208,36 @@ device with a stand-in that agrees with everything is the worst thing this could
 Still open: a model cannot yet record or replay from MCP. `watch_traffic` covers looking; capturing
 to a file would need the contracts-directory treatment.
 
-## 10. The page sometimes fails to reach the console on load
+## 10. The page sometimes fails to reach the console on load — found and fixed in msgrpc-cli 2.5.0
 
-Found while testing the Traffic tab, and **pre-existing** - it reproduces with the console page as
-it was before any of this, on a console that has not changed either, roughly one load in two when
-loads follow each other quickly. The page reports
-`cannot reach the console: Timeout: no response to console.on within 10000 ms` and lists no peers; a
-reload usually fixes it.
+**Leaked connections, and the browser's per-host limit.**
 
-It does not reproduce outside a browser: a Node client doing the same three subscriptions over the
-same link succeeds every time, including with abrupt closes between attempts, so the suspect is what
-the browser does with the previous page's socket across a navigation rather than anything in the
-subscription path.
+The page opened an `RpcServer` and closed it in React's effect cleanup, which does not run when a
+document is torn down by a navigation. So every page that was navigated away from left its
+connection behind for the console to reap on a timeout, and in the meantime remained a peer: in
+everyone's list, still receiving the events it had subscribed to. Five stale pages after five
+reloads was the ordinary shape of a debugging session, and it was visible the whole time in the
+console's own peer list without anyone reading it as a fault.
+
+socket.io connects over HTTP long-polling, so each of those held a long-lived GET against the
+console's origin. Chrome allows six concurrent connections per host. Five ghosts plus a new page's
+handshake is exactly six, so the new page's poll queued behind requests that would not return, and
+`console.on` timed out at ten seconds having never been sent.
+
+That accounts for all of it: browser-only, because nothing outside a browser has that cap - a Node
+client doing the same three subscriptions over the same link succeeded 12 times out of 12. Roughly
+one load in two, depending on whether a ghost happened to expire in time. Worse on rapid reloads,
+because ghosts accumulated faster than the console reaped them. And the console stayed responsive to
+the CLI throughout, since a separate process has its own connection pool.
+
+The fix is a `pagehide` listener that closes the server on the way out - it covers navigation, tab
+close and the back/forward cache, where `unload` is unreliable and increasingly ignored. Ghosts now
+disappear as the page leaves: three loads left five stale peers before, and none after. Thirteen
+consecutive rapid loads connected where roughly half had been failing.
+
+The page also retries the handshake three times before giving up, so if this is ever provoked some
+other way the console recovers instead of sitting there with an error and an empty peer list -
+which is a poor answer from the thing you opened to find out what was wrong.
+
+Not built: forcing the websocket transport, which would sidestep the per-host limit entirely. The
+polling fallback exists for networks that block websockets, and the leak was the actual defect.

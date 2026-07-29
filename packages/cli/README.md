@@ -854,6 +854,12 @@ The browser half is a React app talking to the CLI **over msgrpc itself**. The C
 API and no server-sent events, and the console is the library's own first client — a bug in event
 routing shows up here before it reaches a plant.
 
+The page closes its connection on `pagehide` rather than only on unmount, because React's cleanup
+does not run when a document is torn down by a navigation - a page that did not would stay a peer in
+everyone's list until the console reaped it, and socket.io's long-polling transport means a handful
+of those exhausts the browser's per-host connection limit and stops the next page connecting at all.
+If a handshake does fail, the page tries again three times before saying so.
+
 Each page takes a random readable name — `page-drink-love-spy` — kept in `sessionStorage`, so a
 reload comes back as the same peer and a second tab is simply a different one. It is not derived
 from the URL, because a name is an address: every browser pointed at one console would derive the

@@ -203,6 +203,23 @@
   and the same two checks — that there is something to join, and that a `--name` does not contradict
   the name the key file belongs to.
 
+### Fixed
+
+- **The console page sometimes failed to reach the console on load**, reporting
+  `no response to console.on within 10000 ms` and listing no peers, on roughly one load in two when
+  loads followed each other quickly. The page opened an `RpcServer` and closed it in React's effect
+  cleanup, which does not run when a document is torn down by a navigation - so every page navigated
+  away from left its connection behind, and remained a peer in everyone's list, still being sent the
+  events it had subscribed to, until the console reaped it. socket.io connects over HTTP
+  long-polling, so each of those held a long-lived request against the console's origin, and Chrome
+  allows six concurrent connections per host: five stale pages plus a new one's handshake is exactly
+  six, and the new page's poll queued behind requests that would not return. It now closes on
+  `pagehide`, which covers navigation, tab close and the back/forward cache where `unload` is
+  unreliable. Three loads left five stale peers before and none after.
+  - The page also **retries the handshake** three times before giving up, so the console recovers
+    rather than sitting there with an error and an empty peer list - a poor answer from the thing
+    you opened to find out what was wrong.
+
 ### Security
 
 - Anyone who can reach an unauthenticated broker can now call `bus.tap()` and mirror everything

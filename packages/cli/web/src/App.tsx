@@ -24,6 +24,9 @@ import { ConsoleService, DescribedEvent, NetworkProblem, ServerDescription, Stre
  * and two pages on different consoles are plainly different peers.
  */
 
+/** How many times the page will try the handshake again before giving up and saying so. */
+const RECONNECT_ATTEMPTS = 3
+
 const useConsole = () => {
     const [service, setService] = useState<ConsoleService | null>(null)
     const [me, setMe] = useState('')
@@ -37,7 +40,22 @@ const useConsole = () => {
 
     useEffect(() => {
         let server: RpcServer | undefined
-        void (async () => {
+        let attempts = 0
+        let cancelled = false
+        /**
+         * Closed on the way out of the page as well as on unmount.
+         *
+         * React's cleanup does not run when a document is torn down by a navigation, so a page that
+         * was navigated away from left its connection for the console to reap on a timeout - and in
+         * the meantime it is still a peer, still in everyone's list, and still being sent the events
+         * it subscribed to. Five stale pages after five reloads is the ordinary shape of a debugging
+         * session. `pagehide` covers navigation, tab close and the back/forward cache, where
+         * `unload` is unreliable and increasingly ignored.
+         */
+        const leaving = () => void server?.close()
+        window.addEventListener('pagehide', leaving)
+
+        const connect = async () => {
             try {
                 // Ask who is serving this page before addressing it: the console's name is its own
                 // name on the network, so it differs between instances.
@@ -91,10 +109,28 @@ const useConsole = () => {
                 setService(remote)
                 setStatus('connected')
             } catch (e) {
+                if (cancelled) return
+                // Retried rather than left dead. The handshake occasionally times out on a page
+                // loaded moments after the last one, and until now that left the console showing an
+                // error and no peers with a manual reload as the only way out - which is a poor
+                // answer when the page is the thing you opened to find out what was wrong.
+                await server?.close().catch(() => undefined)
+                server = undefined
+                if (++attempts <= RECONNECT_ATTEMPTS) {
+                    setStatus(`cannot reach the console, trying again (${attempts}/${RECONNECT_ATTEMPTS})`)
+                    await new Promise((wait) => setTimeout(wait, attempts * 1000))
+                    if (!cancelled) await connect()
+                    return
+                }
                 setStatus(`cannot reach the console: ${(e as Error).message}`)
             }
-        })()
-        return () => void server?.close()
+        }
+        void connect()
+        return () => {
+            cancelled = true
+            window.removeEventListener('pagehide', leaving)
+            void server?.close()
+        }
     }, [])
 
     return { service, status, me, events, peerChange, said, frames, problems, peer }
