@@ -2,8 +2,8 @@ import test from 'ava'
 import { fileURLToPath } from 'node:url'
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import type { NamespaceSchema, TypeNode } from '@source-repo/msgrpc'
-import { namespaceProblems } from '@source-repo/msgrpc'
+import type { NamespaceSchema, TypeNode } from '@source-repo/rpc'
+import { namespaceProblems } from '@source-repo/rpc'
 import { extractSchema } from './extract.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
@@ -109,7 +109,7 @@ test('the contracts this package ships still match the source they came from', (
         ['../web/tsconfig.contract.json', '../web/src/chat.types.json'],
         // msgrpc's own, which it loads to describe describe(). It lives there and is generated
         // here, because the extractor that writes it is this package.
-        ['../../msgrpc/tsconfig.contract.json', '../../msgrpc/src/RPC/Introspection.types.json']
+        ['../../rpc/tsconfig.contract.json', '../../rpc/src/RPC/Introspection.types.json']
     ]) {
         const { schema, diagnostics } = extractSchema(resolve(here, project))
         t.deepEqual(diagnostics, [], `${project} should describe cleanly`)

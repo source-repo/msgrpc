@@ -1,16 +1,16 @@
-# @source-repo/msgrpc
+# @source-repo/rpc
 
-TypeScript RPC over WebSocket and MQTT. A class is the contract: the server hands one live instance
+Source RPC — TypeScript RPC over socket.io and MQTT 5. A class is the contract: the server hands one live instance
 to `exposeClassInstance`, the client gets a typed proxy of the same class, and calling a method on
 the proxy runs it on that instance. No code generation and no schema files required, though there is
 a schema when you want arguments checked at runtime.
 
 ```
-npm install @source-repo/msgrpc
+npm install @source-repo/rpc
 ```
 
 ESM only, Node 18.17 or later, and it runs in the browser. Contracts can be extracted from your
-source and checked for breaking changes with [`@source-repo/msgrpc-cli`](https://www.npmjs.com/package/@source-repo/msgrpc-cli), which also serves
+source and checked for breaking changes with [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli), which also serves
 a browser console for a live network.
 
 Upgrading from 1.x? [`CHANGELOG.md`](https://github.com/source-repo/msgrpc/blob/main/CHANGELOG.md) lists what breaks.
@@ -38,7 +38,7 @@ export class Calculator {
 The server. With no transports configured it listens on WebSocket (socket.io) port 3000:
 
 ```typescript
-import { RpcServer } from '@source-repo/msgrpc'
+import { RpcServer } from '@source-repo/rpc'
 import { Calculator } from './calculator.js'
 
 const server = new RpcServer()
@@ -49,7 +49,7 @@ await server.ready()
 A client, in another Node process, a browser page, or the same process for testing:
 
 ```typescript
-import { RpcClient } from '@source-repo/msgrpc'
+import { RpcClient } from '@source-repo/rpc'
 import type { Calculator } from './calculator.js'    // the type only - see below
 
 const client = new RpcClient('http://localhost:3000')
@@ -321,7 +321,7 @@ a class never meant to offer becomes callable by anyone who can reach the transp
 intended methods turns that into an allow-list.
 
 ```typescript
-import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace } from '@source-repo/rpc'
 
 @rpcNamespace('plant', { version: '2' })
 class Plant {
@@ -366,7 +366,7 @@ A call rejects with an `RpcError` carrying a `code`, the remote `message`, and t
 `remoteStack` when the peer sent one.
 
 ```typescript
-import { RpcError } from '@source-repo/msgrpc'
+import { RpcError } from '@source-repo/rpc'
 
 try {
     await calculator.remote!.square(3)
@@ -401,7 +401,7 @@ await plant.remote!.off('alarm', handler)     // same handler reference
 it rather than infer it from failed calls:
 
 ```typescript
-import { TransportEvent } from '@source-repo/msgrpc'
+import { TransportEvent } from '@source-repo/rpc'
 
 client.on(TransportEvent.disconnected, (reason) => console.log('link lost:', reason))
 client.on(TransportEvent.connected, ({ restoredSubscriptions }) =>
@@ -448,7 +448,7 @@ A call that does not match is refused with `InvalidParams` before it reaches the
 message names the offending position: `argument 0: expected number, got string (this server serves
 plant@3)`.
 
-`msgrpc extract` writes this file from your source rather than you writing it by hand. Note what it
+`source-rpc extract` writes this file from your source rather than you writing it by hand. Note what it
 can and cannot see: `value: number` becomes `{ kind: 'number' }`, because a range like `0..2000` is
 a runtime invariant that TypeScript does not carry. Extraction gives you shape checking — types,
 arity, whether an argument is required. Bounds have to be added to the schema or expressed in the
@@ -511,7 +511,7 @@ A caller that declares nothing is simply not version-checked — only its argume
 declaring a version the server has no history for is allowed by default, since truncating history is
 a legitimate operational choice; `unknownVersion: 'reject'` refuses it instead.
 
-`msgrpc check` runs the same comparison at build time, so a change that would refuse a deployed peer
+`source-rpc check` runs the same comparison at build time, so a change that would refuse a deployed peer
 fails the build instead of surfacing when that peer next calls.
 
 ## Describing a server
@@ -526,13 +526,13 @@ const described = await (await client.proxy<Introspection>('msgrpc')).remote!.de
 
 It reports each namespace with its class, its contract version, whether the instance was created at
 runtime, its methods with types when a schema describes them, and its events with how many peers are
-currently subscribed. `msgrpc console` renders this in a browser.
+currently subscribed. `source-rpc console` renders this in a browser.
 
-`describe` describes itself: the `msgrpc` namespace comes with its own contract, so a peer reading a
+`describe` describes itself: the `source-rpc` namespace comes with its own contract, so a peer reading a
 server sees the type it will get back, and `validation: 'required'` does not refuse the one call
 made to find out what is there. Its named types are prefixed — `msgrpc.ServerDescription` — because
 the schema has one type map shared by every namespace, and a plant defining its own `TypeNode`
-should not find `describe()` described against it. A schema that already defines `msgrpc` is left
+should not find `describe()` described against it. A schema that already defines `source-rpc` is left
 untouched.
 
 **Off by default, and subject to `authorize` like any other call.** Listing every class, method and
@@ -638,7 +638,7 @@ so a server that sets its own is unreachable from a client that does not — and
 timeout, which says nothing about why. There is no client option for it, so build the transport:
 
 ```typescript
-import { MqttTransport } from '@source-repo/msgrpc'
+import { MqttTransport } from '@source-repo/rpc'
 
 const transport = new MqttTransport('hmi-1', 'mqtt://broker:1883', { prefix: 'site-4' })
 const client = new RpcClient(undefined, { name: 'hmi-1', transport, defaultTarget: 'plantServer' })
@@ -733,7 +733,7 @@ a broker operator — or any peer whose ACLs let it publish to another peer's to
 message from someone else.
 
 ```typescript
-import { createHmacSigner, createHmacVerifier } from '@source-repo/msgrpc'
+import { createHmacSigner, createHmacVerifier } from '@source-repo/rpc'
 
 const secrets: Record<string, string> = { 'hmi-1': '...', plantServer: '...' }
 const verify = createHmacVerifier(
@@ -921,7 +921,7 @@ properties rather than burying them in an opaque payload. Wiring RPC by hand is 
 handler and a transport:
 
 ```typescript
-import { RpcServerHandler, SocketIoServerTransport } from '@source-repo/msgrpc'
+import { RpcServerHandler, SocketIoServerTransport } from '@source-repo/rpc'
 
 const transport = new SocketIoServerTransport('server', undefined, 3000)
 const handler = new RpcServerHandler('server', [transport])   // transport -> handler
@@ -952,5 +952,5 @@ docker compose -f docker-compose/docker-compose.yml up -d
 
 Point them at a different broker with `MSGRPC_TEST_BROKER=mqtt://host:1883`.
 
-[`examples/`](https://github.com/source-repo/msgrpc/tree/main/packages/msgrpc/examples) is a small plant service showing the 2.0 idioms: `@rpcNamespace` and `@rpc`,
+[`examples/`](https://github.com/source-repo/msgrpc/tree/main/packages/rpc/examples) is a small plant service showing the 2.0 idioms: `@rpcNamespace` and `@rpc`,
 an extracted contract, and a server that validates against it and exposes introspection.

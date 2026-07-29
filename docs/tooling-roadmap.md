@@ -28,10 +28,10 @@ There is no way to call a peer from a shell. `console` needs a browser, `mcp` ne
 other end, and CI has neither.
 
 ```
-msgrpc peers      --hub http://bus:8080 [--json]
-msgrpc describe   <peer> [--json]
-msgrpc call       <peer> <namespace.method> [args...] [--json]
-msgrpc watch      <peer> <namespace.event>          # jsonl until Ctrl-C
+source-rpc peers      --hub http://bus:8080 [--json]
+source-rpc describe   <peer> [--json]
+source-rpc call       <peer> <namespace.method> [args...] [--json]
+source-rpc watch      <peer> <namespace.event>          # jsonl until Ctrl-C
 ```
 
 `ConsoleService` already does all of this; the verbs are that logic without the HTTP server, plus
@@ -126,7 +126,7 @@ the whole point of the history being there.
 
 ## 4. A fake peer from a contract — done in msgrpc-cli 2.5.0
 
-`msgrpc serve --contract plant.types.json`, with `--script` for canned returns, deliberate failures
+`source-rpc serve --contract plant.types.json`, with `--script` for canned returns, deliberate failures
 and timed events, and `--fail ns.method=Code` as the shorthand. `Timeout` never answers at all.
 
 Building it turned up a gap in the library: a method had no way to choose its error code, so every
@@ -139,7 +139,7 @@ moves, and `--script` cannot express that.
 
 ## 5. Record and replay — done in msgrpc-cli 2.5.0
 
-`msgrpc record --out session.jsonl` and `msgrpc replay session.jsonl --against deviceUnderTest`,
+`source-rpc record --out session.jsonl` and `source-rpc replay session.jsonl --against deviceUnderTest`,
 exiting 1 on any difference.
 
 Building it turned up the same race twice more: opening a tap and issuing the first call both
@@ -155,18 +155,18 @@ output back. Recorded, though, so a later comparison could use them.
 `check` today is source-vs-file. Add peer-vs-file:
 
 ```
-msgrpc check --peer plantServer --against plant.types.json
+source-rpc check --peer plantServer --against plant.types.json
 ```
 
 Call `describe()` on the device and run the same `namespaceProblems` comparison. Answers "is this
 device running the firmware we think it is". Every piece exists; this is the wiring.
 
-Sibling: `msgrpc diff <peerA> <peerB>` for "why does cell 3 behave differently from cell 2".
+Sibling: `source-rpc diff <peerA> <peerB>` for "why does cell 3 behave differently from cell 2".
 
 ## 7. Bench — done in msgrpc-cli 2.5.0
 
 ```
-msgrpc bench plantServer plant.read --rate 20 --for 60s
+source-rpc bench plantServer plant.read --rate 20 --for 60s
 ```
 
 p50/p95/p99 and an error breakdown. `call()` already returns `ms`; the console shows it once and

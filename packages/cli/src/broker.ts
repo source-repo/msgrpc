@@ -1,4 +1,4 @@
-import { RpcServer, TransportEvent, type RelayedFrame, type RpcSchema, type Transport } from '@source-repo/msgrpc'
+import { RpcServer, TransportEvent, type RelayedFrame, type RpcSchema, type Transport } from '@source-repo/rpc'
 import { BusService } from './bus.js'
 // Extracted from bus.ts by `npm run contract` and committed, so a console pointed at a broker gets
 // argument fields for tap() rather than `tap(…)`.

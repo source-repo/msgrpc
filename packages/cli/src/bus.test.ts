@@ -1,7 +1,7 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
-import { rpc, rpcNamespace, RpcServer } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcServer } from '@source-repo/rpc'
 import { startBroker } from './broker.js'
 import type { TappedFrame } from './bus.js'
 
@@ -203,7 +203,7 @@ test('the broker describes itself, so it does not look like a device with intros
         const described = await bus.taps()
         t.truthy(described.bus)
     })
-    // The describe path is what the console and `msgrpc describe` use.
+    // The describe path is what the console and `source-rpc describe` use.
     const busPort = port++
     const busName = peer(`described${busPort}`)
     const broker = await startBroker({ port: busPort, name: busName })

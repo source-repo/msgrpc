@@ -1,4 +1,4 @@
-import type { DescribedMethod, ServerDescription, TypeNode } from '@source-repo/msgrpc'
+import type { DescribedMethod, ServerDescription, TypeNode } from '@source-repo/rpc'
 import { awaitPeer, connectNetwork, type ConnectedNetwork, type NetworkOptions } from './network.js'
 
 /**
@@ -90,7 +90,7 @@ export const signatureOf = (method: DescribedMethod) => {
 /**
  * Turns one command-line word into the value the contract asks for.
  *
- * A shell has only strings, so without this `msgrpc call plant plant.writeSetpoint 1200` sends
+ * A shell has only strings, so without this `source-rpc call plant plant.writeSetpoint 1200` sends
  * "1200" and comes back `InvalidParams: expected number, got string` - technically correct and
  * useless. The peer's own contract says what argument 0 is, so it decides.
  *
@@ -187,13 +187,13 @@ const withNetwork = async (options: VerbOptions, io: Output, body: (connected: C
     try {
         connected = await connectNetwork(options)
     } catch (e) {
-        io.err(`msgrpc: cannot join the network: ${failureText(e)}\n`)
+        io.err(`source-rpc: cannot join the network: ${failureText(e)}\n`)
         return 1
     }
     try {
         return await body(connected)
     } catch (e) {
-        io.err(`msgrpc: ${failureText(e)}\n`)
+        io.err(`source-rpc: ${failureText(e)}\n`)
         return 1
     } finally {
         await connected.close().catch(() => undefined)
@@ -202,7 +202,7 @@ const withNetwork = async (options: VerbOptions, io: Output, body: (connected: C
 
 /** A peer that never appeared, said once and the same way everywhere. */
 const missing = (peer: string, options: VerbOptions, io: Output) => {
-    io.err(`msgrpc: ${peer} did not appear within ${options.wait} ms. Run 'msgrpc peers' to see who is there.\n`)
+    io.err(`source-rpc: ${peer} did not appear within ${options.wait} ms. Run 'source-rpc peers' to see who is there.\n`)
     return 1
 }
 
@@ -214,7 +214,7 @@ export const runPeers = (options: VerbOptions, io: Output = processOutput) =>
         await new Promise((resolve) => setTimeout(resolve, Math.min(options.wait, 1000)))
         const peers = [...connected.online].sort()
         if (options.json) io.out(JSON.stringify({ peers }, null, 2) + '\n')
-        else if (peers.length === 0) io.err('msgrpc: no peers announced themselves.\n')
+        else if (peers.length === 0) io.err('source-rpc: no peers announced themselves.\n')
         else io.out(peers.map((peer) => peer + '\n').join(''))
         return 0
     })
@@ -228,7 +228,7 @@ export const runDescribe = (peer: string, options: VerbOptions, io: Output = pro
         } catch (e) {
             // An answer about the peer, not a broken command: a server started without
             // exposeIntrospection is a fact worth reporting plainly.
-            io.err(`msgrpc: ${peer} could not be described: ${failureText(e)}\n`)
+            io.err(`source-rpc: ${peer} could not be described: ${failureText(e)}\n`)
             return 1
         }
         if (options.json) {
@@ -249,7 +249,7 @@ export const runCall = (peer: string, target: string, argumentTexts: string[], o
     withNetwork(options, io, async (connected) => {
         const split = splitTarget(target)
         if (!split) {
-            io.err(`msgrpc: '${target}' should be <namespace>.<method>, e.g. plant.writeSetpoint\n`)
+            io.err(`source-rpc: '${target}' should be <namespace>.<method>, e.g. plant.writeSetpoint\n`)
             return 1
         }
         if (!(await awaitPeer(connected, peer, options.wait))) return missing(peer, options, io)
@@ -262,11 +262,11 @@ export const runCall = (peer: string, target: string, argumentTexts: string[], o
             try {
                 parsed = JSON.parse(options.rawArgs)
             } catch (e) {
-                io.err(`msgrpc: --args is not JSON: ${(e as Error).message}\n`)
+                io.err(`source-rpc: --args is not JSON: ${(e as Error).message}\n`)
                 return 1
             }
             if (!Array.isArray(parsed)) {
-                io.err('msgrpc: --args must be a JSON array of positional arguments\n')
+                io.err('source-rpc: --args must be a JSON array of positional arguments\n')
                 return 1
             }
             args = parsed
@@ -278,7 +278,7 @@ export const runCall = (peer: string, target: string, argumentTexts: string[], o
             try {
                 args = coerceArguments(argumentTexts, method, description?.types)
             } catch (e) {
-                io.err(`msgrpc: ${(e as Error).message}\n`)
+                io.err(`source-rpc: ${(e as Error).message}\n`)
                 return 1
             }
         }
@@ -299,7 +299,7 @@ export const runCall = (peer: string, target: string, argumentTexts: string[], o
         } catch (e) {
             const failure = e as { code?: string; message?: string }
             if (options.json) io.out(JSON.stringify({ error: failure.message ?? String(e), code: failure.code, ms: Date.now() - started }, null, 2) + '\n')
-            else io.err(`msgrpc: ${peer}.${target} failed: ${failureText(e)}\n`)
+            else io.err(`source-rpc: ${peer}.${target} failed: ${failureText(e)}\n`)
             // A refused call is a failed command. That is the whole point of running this in CI.
             return 1
         }
@@ -322,7 +322,7 @@ export const runWatch = (
     withNetwork(options, io, async (connected) => {
         const split = splitTarget(target)
         if (!split) {
-            io.err(`msgrpc: '${target}' should be <namespace>.<event>, e.g. plant.alarm\n`)
+            io.err(`source-rpc: '${target}' should be <namespace>.<event>, e.g. plant.alarm\n`)
             return 1
         }
         if (!(await awaitPeer(connected, peer, options.wait))) return missing(peer, options, io)
@@ -334,10 +334,10 @@ export const runWatch = (
             proxy = await connected.network.proxy<Subscribable>(split.namespace, peer)
             await proxy.remote!.on(split.member, handler)
         } catch (e) {
-            io.err(`msgrpc: cannot watch ${peer}.${target}: ${failureText(e)}\n`)
+            io.err(`source-rpc: cannot watch ${peer}.${target}: ${failureText(e)}\n`)
             return 1
         }
-        io.err(`msgrpc: watching ${peer}.${target}. Ctrl-C to stop.\n`)
+        io.err(`source-rpc: watching ${peer}.${target}. Ctrl-C to stop.\n`)
         await until
         // Drops the server's subscription too, rather than only walking away from it: a debugging
         // session should not leave listeners behind on a device that outlives it.

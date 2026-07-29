@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { RpcServer, TransportEvent, type RpcSchema } from '@source-repo/msgrpc'
+import { RpcServer, TransportEvent, type RpcSchema } from '@source-repo/rpc'
 import { pageName } from './peerName'
 import { Chat } from './Chat'
 import { ChatMessage, ChatService } from './ChatService'

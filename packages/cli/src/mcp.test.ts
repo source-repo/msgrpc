@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { rpc, rpcNamespace, RpcServer } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcServer } from '@source-repo/rpc'
 
 /**
  * Driven as a client would drive it: a real child process, real newline-delimited JSON-RPC over its
@@ -81,7 +81,7 @@ const mcpClient = (port: number, extra: string[] = []) => {
     const ready = new Promise<void>((resolvePromise) => {
         child.stderr.setEncoding('utf8')
         child.stderr.on('data', (chunk: string) => {
-            if (chunk.includes('msgrpc mcp:')) resolvePromise()
+            if (chunk.includes('source-rpc mcp:')) resolvePromise()
         })
     })
     return { child, send, notify, ready, stray, close: () => child.kill() }
@@ -92,7 +92,7 @@ const toolText = (response: Record<string, unknown>) => {
     return { text: result?.content?.[0]?.text ?? '', isError: !!result?.isError }
 }
 
-test('an MCP client can list, describe and call the peers on an msgrpc network', async (t) => {
+test('an MCP client can list, describe and call the peers on a Source RPC network', async (t) => {
     const hub = new RpcServer({ name: peer('hub'), transports: [{ port: 3995 }] })
     await hub.ready()
     const plant = new RpcServer({ name: peer('plant'), transports: [{ connect: 'http://localhost:3995' }], exposeIntrospection: true })
@@ -106,7 +106,7 @@ test('an MCP client can list, describe and call the peers on an msgrpc network',
     const initResult = initialized.result as { protocolVersion: string; capabilities: { tools?: unknown }; serverInfo: { name: string } }
     t.is(initResult.protocolVersion, '2025-06-18', 'the client version should be echoed back')
     t.truthy(initResult.capabilities.tools, 'tools have to be advertised or no client will call them')
-    t.is(initResult.serverInfo.name, 'msgrpc')
+    t.is(initResult.serverInfo.name, 'source-rpc')
     client.notify('notifications/initialized')
 
     const listed = await client.send('tools/list')

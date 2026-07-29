@@ -1,4 +1,4 @@
-import { MqttTransport, RpcServer, SocketIoClientTransport, TransportEvent, type MessageSigner, type MessageVerifier, type Transport } from '@source-repo/msgrpc'
+import { MqttTransport, RpcServer, SocketIoClientTransport, TransportEvent, type MessageSigner, type MessageVerifier, type Transport } from '@source-repo/rpc'
 
 /**
  * Joining a network the way every command here joins one: an MQTT broker, a socket.io hub, or both.

@@ -1,4 +1,4 @@
-import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace } from '@source-repo/rpc'
 
 /**
  * Chat is here to be a service the page *hosts*, not a feature the console offers.
@@ -35,6 +35,6 @@ export class ChatService {
     /** So a peer can show who it is talking to before saying anything. */
     @rpc
     async who() {
-        return { app: 'msgrpc console', kind: 'browser page' }
+        return { app: 'source-rpc console', kind: 'browser page' }
     }
 }

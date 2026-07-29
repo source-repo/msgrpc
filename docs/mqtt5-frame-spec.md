@@ -1,3 +1,9 @@
+<!--
+  The wire identifiers in this document are deliberately unchanged by the 3.0 rename: the packages
+  and the command became Source RPC, the protocol stayed msgrpc. A peer deployed against v1 or v2
+  keeps working, which is the whole point of writing the format down.
+-->
+
 # msgrpc over MQTT 5 — frame layout
 
 **Status: implemented.** `MqttTransport` speaks this by default (`protocol: 5`); `protocol: 4`
@@ -54,7 +60,7 @@ targets — which matters when the fleet includes embedded devices sending a lot
 - `contentType` states which is in use: `application/msgpack` or `application/json`.
 - `payloadFormatIndicator` is `0` for msgpack, `1` for JSON, so tooling renders payloads correctly.
 - **A responder replies in the request's `contentType`.** A JSON-speaking third party gets JSON
-  back without negotiating anything, and msgrpc peers stay on msgpack throughout.
+  back without negotiating anything, and source-rpc peers stay on msgpack throughout.
 
 ## User properties
 

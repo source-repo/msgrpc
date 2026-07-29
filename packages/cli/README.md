@@ -1,10 +1,15 @@
-# @source-repo/msgrpc-cli
+# @source-repo/rpc-cli
 
-Tooling for [msgrpc](https://www.npmjs.com/package/@source-repo/msgrpc): read a contract out of TypeScript source, fail a build when it
+Tooling for [Source RPC](https://www.npmjs.com/package/@source-repo/rpc): read a contract out of TypeScript source, fail a build when it
 changes in a way that would break a deployed peer, and browse a live network in a browser.
 
 ```
-npm install --save-dev @source-repo/msgrpc-cli
+npm install --save-dev @source-repo/rpc-cli
+```
+
+The command is `source-rpc`. It was `msgrpc` before 3.0.
+
+```
 ```
 
 ESM only, Node 18.17 or later.
@@ -12,21 +17,21 @@ ESM only, Node 18.17 or later.
 ## Commands
 
 ```
-msgrpc extract   write the contract described by the source to a file
-msgrpc check     compare the source against a written contract, exit 1 on a breaking change
-msgrpc console   browse a live network: peers, what they expose, calls and events
-msgrpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
-msgrpc mcp       serve the network to an MCP client over stdio
-msgrpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
-msgrpc bench     call one method over and over and report what it cost
-msgrpc diff      compare what two live peers expose
-msgrpc record    write what the network is carrying to a file
-msgrpc replay    send a recording's calls at a peer and compare the answers
+source-rpc extract   write the contract described by the source to a file
+source-rpc check     compare the source against a written contract, exit 1 on a breaking change
+source-rpc console   browse a live network: peers, what they expose, calls and events
+source-rpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
+source-rpc mcp       serve the network to an MCP client over stdio
+source-rpc serve     stand a peer up from a contract, for an HMI with no plant to talk to
+source-rpc bench     call one method over and over and report what it cost
+source-rpc diff      compare what two live peers expose
+source-rpc record    write what the network is carrying to a file
+source-rpc replay    send a recording's calls at a peer and compare the answers
 
-msgrpc peers     who is on the network right now
-msgrpc describe  what one peer exposes
-msgrpc call      call a method, and exit 1 if the peer refuses
-msgrpc watch     stream a peer's events as jsonl until Ctrl-C
+source-rpc peers     who is on the network right now
+source-rpc describe  what one peer exposes
+source-rpc call      call a method, and exit 1 if the peer refuses
+source-rpc watch     stream a peer's events as jsonl until Ctrl-C
 ```
 
 | flag | commands | default | meaning |
@@ -75,7 +80,7 @@ eventually exposed under at some `exposeClassInstance` call elsewhere. Methods o
 so the contract is the allow-list rather than everything on the prototype chain.
 
 ```typescript
-import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace } from '@source-repo/rpc'
 
 @rpcNamespace('plant', { version: '2' })
 export class Plant {
@@ -92,7 +97,7 @@ read statically with any confidence.
 ## extract
 
 ```
-msgrpc extract --project tsconfig.json --out msgrpc.types.json
+source-rpc extract --project tsconfig.json --out msgrpc.types.json
 ```
 
 It describes **the files your tsconfig includes**, not everything they import. A decorated class in
@@ -141,7 +146,7 @@ be added to the schema afterwards or expressed in the type.
 ## check
 
 ```
-msgrpc check --project tsconfig.json --against msgrpc.types.json
+source-rpc check --project tsconfig.json --against msgrpc.types.json
 ```
 
 Compares the source against a stored contract using the **same comparison the server applies at
@@ -149,7 +154,7 @@ runtime** to a caller declaring an older version, so a change that would refuse 
 fails the build instead:
 
 ```
-$ msgrpc check
+$ source-rpc check
   plant.writeSetpoint argument 0 narrowed, so a value the caller may send is no longer accepted
 msgrpc: 1 breaking change against msgrpc.types.json
 $ echo $?
@@ -170,7 +175,7 @@ on site: the contract says this device offers `writeSetpoint(value, mode?)` — 
 the wall is actually running?
 
 ```
-$ msgrpc check --peer plantServer --against plant.types.json --hub http://bus:8080
+$ source-rpc check --peer plantServer --against plant.types.json --hub http://bus:8080
   plant.writeSetpoint argument 0 narrowed, so a value the caller may send is no longer accepted
   plant.read no longer exists
   plant.event alarm is no longer emitted, so a subscription to it would never fire
@@ -194,7 +199,7 @@ Why does cell 3 behave differently from cell 2? Usually because one of them is r
 firmware.
 
 ```
-$ msgrpc diff cell2 plantServer --hub http://bus:8080
+$ source-rpc diff cell2 plantServer --hub http://bus:8080
 cell2  vs  plantServer
 
   plant contract version
@@ -221,7 +226,7 @@ can assert that two cells match; `--json` gives the same as data.
 ## broker
 
 ```
-msgrpc broker --port 8080
+source-rpc broker --port 8080
 ```
 
 A bus for networks that have no MQTT broker to share. It runs until Ctrl-C, relaying between the
@@ -229,7 +234,7 @@ peers that connect to it and telling each of them who else is there — which is
 through retained presence and per-peer topics, over one WebSocket port instead.
 
 ```
-msgrpc broker plantBus on port 8085
+source-rpc broker plantBus on port 8085
   + cellBus (:8085)
   + panel1 (:8085)
   + hmi (:8085)
@@ -252,8 +257,8 @@ it is a switchboard, not a service.
 to the other, and a call crosses without either end knowing there was a hop:
 
 ```
-msgrpc broker --port 8085 --name plantBus
-msgrpc broker --port 8086 --name cellBus --upstream http://plant:8085
+source-rpc broker --port 8085 --name plantBus
+source-rpc broker --port 8086 --name cellBus --upstream http://plant:8085
 ```
 
 A peer on `cellBus` is then callable from `plantBus` and the other way round. Repeat `--upstream` to
@@ -270,10 +275,10 @@ plant bus that has to be restarted before it can be watched will not be watched,
 looking at is the one already going wrong.
 
 ```
-$ msgrpc call plantBus bus.tap '{"peer":"plantServer","payloads":true}' --hub http://bus:8080
+$ source-rpc call plantBus bus.tap '{"peer":"plantServer","payloads":true}' --hub http://bus:8080
 { "token": "tap-1", "expires": 1785272777436, "filter": { … } }
 
-$ msgrpc watch plantBus bus.frame --hub http://bus:8080
+$ source-rpc watch plantBus bus.frame --hub http://bus:8080
 →  hmi-3 -> plantServer  plant.writeSetpoint[1200,"auto"]
 ⇒  plantServer -> hmi-3  plant.alarm["setpoint moved",1]
 ←  plantServer -> hmi-3  plant.writeSetpoint  2ms
@@ -292,7 +297,7 @@ $ msgrpc watch plantBus bus.frame --hub http://bus:8080
 | `taps()` | who is watching what, and how much each has seen |
 
 Frames arrive as the `frame` event, so anything that can subscribe to an msgrpc event can read
-them — the console, `msgrpc watch`, or a program of your own.
+them — the console, `source-rpc watch`, or a program of your own.
 
 **It knows what a frame is**, which is what a topic browser pointed at the same wire cannot do. A
 call and its reply share a correlation id, so the reply is reported with the method it answers and
@@ -337,9 +342,9 @@ part of, and what is on the wire is what it exists to show.
 Either way the answer arrives the same: ask the console, and it turns on whatever it can reach.
 
 ```
-$ msgrpc call myConsole console.tap '{"peer":"plantServer"}' --broker mqtt://localhost:1883
+$ source-rpc call myConsole console.tap '{"peer":"plantServer"}' --broker mqtt://localhost:1883
 { "token": "console-tap-1", "sources": ["this console"] }
-$ msgrpc watch myConsole console.frame --broker mqtt://localhost:1883
+$ source-rpc watch myConsole console.frame --broker mqtt://localhost:1883
 ```
 
 `sources` says who is doing the watching — a broker's `bus` on socket.io, `this console` on MQTT,
@@ -405,8 +410,8 @@ are usually from before anyone thought to look. The console keeps a bounded hist
 over when a page connects, so **opening the console after the trouble still shows it** — which is
 the usual way round.
 
-`msgrpc watch <console> console.problem` streams the same thing to a shell, and
-`msgrpc call <console> console.problems` fetches the history.
+`source-rpc watch <console> console.problem` streams the same thing to a shell, and
+`source-rpc call <console> console.problems` fetches the history.
 
 Each peer in the list also now carries **the link it was found on**, which on a plant with the
 devices on a broker and the HMIs on a hub is the first thing worth knowing about one.
@@ -432,14 +437,14 @@ The console's verbs for a shell rather than a browser. Same network flags as `co
 each, and an exit code:
 
 ```
-msgrpc peers --hub http://bus:8080
-msgrpc describe plantServer --hub http://bus:8080
-msgrpc call plantServer plant.writeSetpoint 1200 auto --hub http://bus:8080
-msgrpc watch plantServer plant.alarm --hub http://bus:8080
+source-rpc peers --hub http://bus:8080
+source-rpc describe plantServer --hub http://bus:8080
+source-rpc call plantServer plant.writeSetpoint 1200 auto --hub http://bus:8080
+source-rpc watch plantServer plant.alarm --hub http://bus:8080
 ```
 
 ```
-$ msgrpc describe plantServer --hub http://bus:8080
+$ source-rpc describe plantServer --hub http://bus:8080
 plantServer (contract 3) — arguments checked
 
 plant@3  Plant
@@ -452,7 +457,7 @@ plant@3  Plant
 rather than a program that parses output.
 
 ```
-$ msgrpc call plantServer plant.writeSetpoint 3000 --hub http://bus:8080
+$ source-rpc call plantServer plant.writeSetpoint 3000 --hub http://bus:8080
 msgrpc: plantServer.plant.writeSetpoint failed: InvalidParams: argument 0 is above the maximum 2000
 $ echo $?
 1
@@ -470,7 +475,7 @@ A word that cannot be what the contract asks for is refused before anything is s
 argument is named rather than numbered:
 
 ```
-$ msgrpc call plantServer plant.writeSetpoint warm
+$ source-rpc call plantServer plant.writeSetpoint warm
 msgrpc: argument 0 (value): expected a number, got 'warm'
 ```
 
@@ -487,7 +492,7 @@ in CI.
 else while a person still sees what it cost:
 
 ```
-$ msgrpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
+$ source-rpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
 84
 ```
 
@@ -495,7 +500,7 @@ $ msgrpc call plantServer plant.read --hub http://bus:8080 | jq .celsius
 and a stream that is pleasant to read is a stream nothing can parse:
 
 ```
-$ msgrpc watch plantServer plant.alarm --hub http://bus:8080
+$ source-rpc watch plantServer plant.alarm --hub http://bus:8080
 msgrpc: watching plantServer.plant.alarm. Ctrl-C to stop.
 {"at":1749047112004,"peer":"plantServer","namespace":"plant","event":"alarm","args":["pressure high",2]}
 ```
@@ -511,8 +516,8 @@ become addressable and then says so plainly, rather than failing intermittently 
 can reproduce:
 
 ```
-$ msgrpc call plantServr plant.read --hub http://bus:8080
-msgrpc: plantServr did not appear within 5000 ms. Run 'msgrpc peers' to see who is there.
+$ source-rpc call plantServr plant.read --hub http://bus:8080
+msgrpc: plantServr did not appear within 5000 ms. Run 'source-rpc peers' to see who is there.
 ```
 
 ## serve
@@ -521,11 +526,11 @@ A peer built from a contract rather than from code, so an HMI has something to t
 has a device willing to fail on request — which a real one is not.
 
 ```
-msgrpc serve --contract plant.types.json --hub http://bus:8080 --name fakePlant
+source-rpc serve --contract plant.types.json --hub http://bus:8080 --name fakePlant
 ```
 
 ```
-$ msgrpc describe fakePlant --hub http://bus:8080
+$ source-rpc describe fakePlant --hub http://bus:8080
 fakePlant — arguments checked
 
 plant@3  Fake
@@ -539,12 +544,12 @@ It answers every method with a value of the declared shape, and **refuses what t
 refuse** — it is given the same schema, so the same validator runs:
 
 ```
-$ msgrpc call fakePlant plant.writeSetpoint 3000 --hub http://bus:8080
+$ source-rpc call fakePlant plant.writeSetpoint 3000 --hub http://bus:8080
 msgrpc: fakePlant.plant.writeSetpoint failed: InvalidParams: argument 0: 3000 is above the maximum 2000
 ```
 
 The contract is the one already extracted and committed for the deployed peer, so the stand-in
-cannot drift from it: `msgrpc check` fails the build when it would.
+cannot drift from it: `source-rpc check` fails the build when it would.
 
 ### What it generates
 
@@ -568,7 +573,7 @@ descending forever.
 ### Scripting it
 
 ```
-msgrpc serve --contract plant.types.json --script fake.json --fail plant.halt=Unauthorized --hub http://bus:8080
+source-rpc serve --contract plant.types.json --script fake.json --fail plant.halt=Unauthorized --hub http://bus:8080
 ```
 
 ```json
@@ -599,7 +604,7 @@ A device is fine at one call a second. What does it do at twenty? Finding that o
 done by writing a script, and it is always the same script.
 
 ```
-$ msgrpc bench plantServer plant.read --rate 40 --for 3000 --hub http://bus:8080
+$ source-rpc bench plantServer plant.read --rate 40 --for 3000 --hub http://bus:8080
 plantServer plant.read  120 calls in 3.0s at 40/s
   ms   min 1  p50 3  p90 4  p95 4  p99 5  max 5
   ok   120   failed 0
@@ -613,7 +618,7 @@ Failures are counted by code, since a device refusing arguments and a device tha
 are different findings with the same shape:
 
 ```
-$ msgrpc bench plantServer plant.writeSetpoint 9999 --rate 20 --for 1500
+$ source-rpc bench plantServer plant.writeSetpoint 9999 --rate 20 --for 1500
 plantServer plant.writeSetpoint  30 calls in 1.5s at 20/s
   ok   0   failed 30
        InvalidParams: 30
@@ -636,8 +641,8 @@ behave like the old one — does it?* Capture a session from the working plant, 
 replacement, and compare the answers.
 
 ```
-msgrpc record --out session.jsonl --hub http://bus:8080
-msgrpc replay session.jsonl --against newPlant --hub http://bus:8080
+source-rpc record --out session.jsonl --hub http://bus:8080
+source-rpc replay session.jsonl --against newPlant --hub http://bus:8080
 ```
 
 `record` opens a tap wherever it can — a broker's `bus` over socket.io, its own subscription over
@@ -663,9 +668,9 @@ results cannot be replayed, which is the only reason to make one. `--no-payloads
 one that was recorded:
 
 ```
-$ msgrpc replay session.jsonl --hub http://bus:8080
+$ source-rpc replay session.jsonl --hub http://bus:8080
   ≠ plantServer plant.read: expected {"celsius":84,"bar":3.2}, got {"celsius":12,"bar":3.2}
-msgrpc replay: 12 calls, 9 matched, 3 differed, 0 failed, 0 uncompared
+source-rpc replay: 12 calls, 9 matched, 3 differed, 0 failed, 0 uncompared
 $ echo $?
 1
 ```
@@ -693,8 +698,8 @@ thing entirely.
 ## mcp
 
 ```
-msgrpc mcp --broker mqtt://localhost:1883
-msgrpc mcp --hub http://hub:8080
+source-rpc mcp --broker mqtt://localhost:1883
+source-rpc mcp --hub http://hub:8080
 ```
 
 Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can
@@ -744,7 +749,7 @@ none are left behind.
 are **not in the tool list**, because a server that cannot write files should not advertise tools
 claiming it can. With it, a contract is written as `<name>.types.json` in that directory and nowhere
 else — a name that would climb out of it is refused rather than resolved — and what is written is
-the same file `msgrpc serve --contract` and `msgrpc check --peer --against` read.
+the same file `source-rpc serve --contract` and `source-rpc check --peer --against` read.
 
 So the loop closes: a model can draft a contract, save it where the CLI will find it, stand a peer
 up from it, drive that peer, and check a real device against the same file.
@@ -785,9 +790,9 @@ the one capability that stays off unless asked for: no `--contracts`, no tools t
 ## console
 
 ```
-msgrpc console --broker mqtt://localhost:1883      # an MQTT network
-msgrpc console --hub http://hub:8080               # a socket.io network
-msgrpc console --broker mqtt://... --hub http://... # both at once
+source-rpc console --broker mqtt://localhost:1883      # an MQTT network
+source-rpc console --hub http://hub:8080               # a socket.io network
+source-rpc console --broker mqtt://... --hub http://... # both at once
 ```
 
 Opens a console at `http://127.0.0.1:7300` listing every peer that is up, what each one exposes, a
@@ -856,7 +861,7 @@ write the contract in the first place.
 
 **Watch all** takes every event in a namespace in one click, which is the usual first move on an
 unfamiliar peer. The events pane has a filter, a pause and an **export** that saves what is on screen
-as jsonl — the same shape `msgrpc record` writes and `jq` reads. Pausing stops the buffer filling
+as jsonl — the same shape `source-rpc record` writes and `jq` reads. Pausing stops the buffer filling
 rather than only the list rendering, so a paused pane on a busy network stays as it was.
 
 Arguments worth keeping get a **save** button. Presets are stored in the browser and keyed by
@@ -865,8 +870,8 @@ the reason to save a setpoint sequence usually being that five more cabinets are
 named by what they hold, so there is nothing to type.
 
 Each method keeps its timings: **×20** calls it repeatedly and reports `20 calls · p50 1 ms · last
-1 ms` next to the button, which is `msgrpc bench` in miniature for when the question is smaller than
-a benchmark. **copy as CLI** puts the equivalent `msgrpc call …` on the clipboard, complete with the
+1 ms` next to the button, which is `source-rpc bench` in miniature for when the question is smaller than
+a benchmark. **copy as CLI** puts the equivalent `source-rpc call …` on the clipboard, complete with the
 network flags this console was started with — a call worth making in a browser is usually one worth
 putting in a script, and retyping `--hub http://…` from memory is where that stops happening.
 
@@ -918,7 +923,7 @@ console still lists peers — presence is unsigned retained state — and then e
 nothing to say why. Give it keys with `--sign`:
 
 ```
-msgrpc console --broker mqtt://broker:1883 --sign console-keys.json
+source-rpc console --broker mqtt://broker:1883 --sign console-keys.json
 ```
 
 ```json

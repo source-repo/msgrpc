@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { RpcClient, RpcServer, type RpcSchema } from '@source-repo/msgrpc'
+import { RpcClient, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { sampleFor, startFake } from './fake.js'
 
 /** Nothing here touches MQTT: a socket.io hub is enough to stand a peer up and call it. */

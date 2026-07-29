@@ -2,7 +2,7 @@ import anyTest, { TestFn } from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
-import { rpc, rpcNamespace, RpcClient, RpcServer } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcClient, RpcServer } from '@source-repo/rpc'
 import { consoleIdentityPath, startConsole } from './console.js'
 import type { TappedFrame } from './bus.js'
 

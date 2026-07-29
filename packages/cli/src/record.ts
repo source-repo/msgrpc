@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
-import { RpcMessageType } from '@source-repo/msgrpc'
+import { RpcMessageType } from '@source-repo/rpc'
 import { awaitPeer, connectNetwork, type NetworkOptions } from './network.js'
 import { openTap } from './tapping.js'
 import type { TapFilter, TappedFrame } from './bus.js'
@@ -106,7 +106,7 @@ export const readRecording = (path: string) => {
     } catch {
         throw new Error(`${path} does not start with a recording header`)
     }
-    if (header?.msgrpc !== 'recording') throw new Error(`${path} is not an msgrpc recording`)
+    if (header?.msgrpc !== 'recording') throw new Error(`${path} is not a Source RPC recording`)
     if (header.version !== 1) throw new Error(`${path} is a version ${header.version} recording, and this only reads version 1`)
     const frames = lines.slice(1).map((line) => JSON.parse(line) as TappedFrame)
     return { header, frames }

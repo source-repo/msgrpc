@@ -1,6 +1,6 @@
 import { resolve as resolvePath, dirname } from 'node:path'
 import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
-import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from '@source-repo/msgrpc'
+import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from '@source-repo/rpc'
 
 /**
  * Reads a contract out of TypeScript source.

@@ -1,4 +1,4 @@
-import { namespaceProblems, type Incompatibility, type NamespaceSchema, type RpcSchema, type ServerDescription } from '@source-repo/msgrpc'
+import { namespaceProblems, type Incompatibility, type NamespaceSchema, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { awaitPeer, connectNetwork, type ConnectedNetwork, type NetworkOptions } from './network.js'
 import { signatureOf } from './verbs.js'
 

@@ -1,5 +1,5 @@
 {
-    "extends": "../msgrpc/tsconfig.json",
+    "extends": "../rpc/tsconfig.json",
     "compilerOptions": {
         "rootDir": "./src",
         "outDir": "./dist"

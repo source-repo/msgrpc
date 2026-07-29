@@ -1,4 +1,4 @@
-import { MqttTransport, TransportEvent, type RelayedFrame, type ServerDescription } from '@source-repo/msgrpc'
+import { MqttTransport, TransportEvent, type RelayedFrame, type ServerDescription } from '@source-repo/rpc'
 import { BusService, type TapFilter, type TappedFrame } from './bus.js'
 import type { ConnectedNetwork, NetworkOptions } from './network.js'
 

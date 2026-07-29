@@ -1,7 +1,7 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
-import { rpc, rpcNamespace, RpcSchema, RpcServer } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcSchema, RpcServer } from '@source-repo/rpc'
 import { coerceArgument, runCall, runDescribe, runPeers, runWatch, signatureOf, type VerbOptions } from './verbs.js'
 
 /** Nothing here touches MQTT: a socket.io hub exercises the same verbs and runs everywhere. */

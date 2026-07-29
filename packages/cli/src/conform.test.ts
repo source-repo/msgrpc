@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { RpcServer, type RpcSchema } from '@source-repo/msgrpc'
+import { RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { startFake } from './fake.js'
 import { checkPeer, diffPeers, schemaFromDescription } from './conform.js'
 

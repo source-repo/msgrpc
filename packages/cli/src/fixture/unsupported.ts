@@ -1,4 +1,4 @@
-import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace } from '@source-repo/rpc'
 
 @rpcNamespace('bad')
 export class Bad {

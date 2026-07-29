@@ -279,7 +279,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         if (this.warnedAboutDisplacing.has(name)) return
         this.warnedAboutDisplacing.add(name)
         console.warn(
-            `msgrpc: '${name}' announced itself on '${this.name}' while another live connection already held that name. ` +
+            `source-rpc: '${name}' announced itself on '${this.name}' while another live connection already held that name. ` +
                 'The newcomer takes the address, so if both are really running, replies will reach the wrong one. Give them distinct names.'
         )
     }
@@ -295,7 +295,7 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         if (this.warnedAboutRelay || this.authenticate) return
         this.warnedAboutRelay = true
         console.warn(
-            `msgrpc: '${this.name}' is relaying frames between peers with no authenticate configured, so their source is an unverified claim. ` +
+            `source-rpc: '${this.name}' is relaying frames between peers with no authenticate configured, so their source is an unverified claim. ` +
                 'Set authenticate, or relay: false to forward nothing.'
         )
     }

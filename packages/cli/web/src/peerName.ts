@@ -1,4 +1,4 @@
-import { readableNameFor } from '@source-repo/msgrpc'
+import { readableNameFor } from '@source-repo/rpc'
 
 /**
  * The name this page answers to on the network.

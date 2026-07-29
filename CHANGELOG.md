@@ -1,6 +1,29 @@
 # Changelog
 
-## msgrpc 2.4.0 and msgrpc-cli 2.5.0
+## Source RPC 3.0.0
+
+**Renamed.** `msgrpc` is now Source RPC: `@source-repo/msgrpc` → `@source-repo/rpc`,
+`@source-repo/msgrpc-cli` → `@source-repo/rpc-cli`, and the command `msgrpc` → `source-rpc`. `msg`
+was always meant as *message*, which is what this is about, but it is a short word full of other
+people's abbreviations and it reads as a puzzle to anyone meeting it for the first time.
+
+**The protocol did not change.** Topic prefixes are still `msgrpc/v1` and `msgrpc/v2`, introspection
+is still the `msgrpc` namespace, MQTT 5 user properties still carry the `mr-` prefix, and the 3.1.1
+header is unchanged. Those are on the wire: renaming them would strand every deployed peer and buy
+nothing. The default contract filename stays `msgrpc.types.json` for the same reason - it is what
+existing projects have on disk, and a rename would break their `--against` for tidiness alone.
+
+Both packages go to 3.0.0 together, since a renamed package is a breaking change however compatible
+the code is.
+
+### Fixed
+
+- **Piping a verb into `head` printed a stack trace.** Closing stdout early makes Node emit an
+  unhandled `error` event, so `source-rpc describe plantServer | head -4` ended in `EPIPE` and a
+  stack trace instead of simply stopping. Handled at the entry point, since every verb writes to
+  stdout and half the documented examples are pipelines. Found by running one of those examples.
+
+### Everything below shipped as msgrpc 2.4.0 and msgrpc-cli 2.5.0
 
 - **The traffic tap.** `msgrpc broker` now exposes a `bus` namespace — `tap(filter?)`, `untap`,
   `taps()` — and emits a `frame` event carrying what it is relaying. A console only ever sees its
@@ -247,7 +270,7 @@
 
 - The `msgrpc` binary is made executable at build time. `tsc` writes `dist/index.js` with a shebang
   but no executable bit; npm sets it when installing a published tarball, so the published package
-  was fine and a workspace checkout was not. `npx @source-repo/msgrpc-cli` run from inside this repo
+  was fine and a workspace checkout was not. `npx @source-repo/rpc-cli` run from inside this repo
   resolves to the workspace copy and died with `sh: 1: msgrpc: Permission denied` - which an MCP
   client reports only as "Connection closed".
 
@@ -495,7 +518,7 @@ A near-complete rework of everything below the API. The class-as-contract surfac
 `exposeClassInstance` and `proxy<T>()` still look the same — but correlation, addressing,
 reconnection, security and the MQTT wire format were all rebuilt.
 
-Published as `@source-repo/msgrpc` and, new in this release, `@source-repo/msgrpc-cli`.
+Published as `@source-repo/rpc` and, new in this release, `@source-repo/rpc-cli`.
 
 ### Breaking
 
@@ -542,7 +565,7 @@ transport, assume they were reachable.
 - **Contract versions**, compared structurally: a caller built against an older contract keeps
   working unless the two genuinely disagree.
 - **`msgrpc.describe()`** reporting namespaces, methods, events and live instances. Off by default.
-- **`@source-repo/msgrpc-cli`** — `extract` reads a contract from TypeScript source, `check` fails a
+- **`@source-repo/rpc-cli`** — `extract` reads a contract from TypeScript source, `check` fails a
   build on a breaking change, `console` serves a browser view of a live network.
 - MQTT shared subscriptions for server replicas, bounded sessions, and presence.
 - Connection lifecycle events, configurable `callTimeout`, and fail-fast on disconnect.

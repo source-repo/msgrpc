@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { createHmacSigner, createHmacVerifier, namespaceProblems, readableNameFor, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/msgrpc'
+import { createHmacSigner, createHmacVerifier, namespaceProblems, readableNameFor, type MessageSigner, type MessageVerifier, type RpcSchema } from '@source-repo/rpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
@@ -21,7 +21,7 @@ import { bench, benchArguments } from './bench.js'
  * next calls.
  */
 
-const usage = `msgrpc <command> [options]
+const usage = `source-rpc <command> [options]
 
   extract   write the contract described by the source to a file
   check     compare the source against a written contract and fail on a breaking change
@@ -176,16 +176,16 @@ const readSigningKeys = (path: string, command: string) => {
     try {
         keys = JSON.parse(readFileSync(path, 'utf8')) as SigningKeys
     } catch (e) {
-        process.stderr.write(`msgrpc ${command}: cannot read keys from ${path}: ${(e as Error).message}\n`)
+        process.stderr.write(`source-rpc ${command}: cannot read keys from ${path}: ${(e as Error).message}\n`)
         process.exit(1)
     }
     if (typeof keys.secret !== 'string' || !keys.secret) {
-        process.stderr.write(`msgrpc ${command}: ${path} has no "secret"\n`)
+        process.stderr.write(`source-rpc ${command}: ${path} has no "secret"\n`)
         process.exit(1)
     }
     try {
         // Worth saying out loud: this file is the console's identity on the network.
-        if (statSync(path).mode & 0o077) process.stderr.write(`msgrpc ${command}: ${path} is readable by other users\n`)
+        if (statSync(path).mode & 0o077) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
     } catch {
         // Not worth failing over if the mode cannot be read.
     }
@@ -207,7 +207,7 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
     const broker = argument(argv, '--broker', '')
     const hub = argument(argv, '--hub', '')
     if (!broker && !hub) {
-        process.stderr.write(`msgrpc ${command}: give it --broker, --hub, or both\n`)
+        process.stderr.write(`source-rpc ${command}: give it --broker, --hub, or both\n`)
         process.exit(1)
     }
     const prefix = argument(argv, '--prefix', '')
@@ -215,7 +215,7 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
     const signing = keyFile ? readSigningKeys(keyFile, command) : undefined
     const requestedName = argument(argv, '--name', '')
     if (signing?.keys.name && requestedName && signing.keys.name !== requestedName) {
-        process.stderr.write(`msgrpc ${command}: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
+        process.stderr.write(`source-rpc ${command}: --name ${requestedName} does not match "${signing.keys.name}" in ${keyFile}\n`)
         process.exit(1)
     }
     return {
@@ -232,7 +232,7 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
 /**
  * The words a command was given, with the flags and their values taken out.
  *
- * `msgrpc call plant plant.setpoint 1200 --hub http://bus --json` has to yield exactly
+ * `source-rpc call plant plant.setpoint 1200 --hub http://bus --json` has to yield exactly
  * ['plant', 'plant.setpoint', '1200'], which means knowing which flags consume the word after them.
  */
 const VALUE_FLAGS = new Set([
@@ -280,7 +280,7 @@ const positionals = (argv: string[]) => {
 /**
  * peers, describe, call and watch: the console's verbs for a shell rather than a browser.
  *
- * The exit code is the product. `msgrpc call` returning 1 when a device refuses is what lets a
+ * The exit code is the product. `source-rpc call` returning 1 when a device refuses is what lets a
  * smoke test be a line in a CI file rather than a program that parses output.
  */
 const runVerb = async (command: string, argv: string[]) => {
@@ -296,13 +296,13 @@ const runVerb = async (command: string, argv: string[]) => {
     if (command === 'peers') return await runPeers(options)
 
     if (!peer) {
-        process.stderr.write(`msgrpc ${command}: which peer? Run 'msgrpc peers' to see who is there.\n`)
+        process.stderr.write(`source-rpc ${command}: which peer? Run 'source-rpc peers' to see who is there.\n`)
         return 1
     }
     if (command === 'describe') return await runDescribe(peer, options)
 
     if (!target) {
-        process.stderr.write(`msgrpc ${command}: give it <namespace>.<${command === 'watch' ? 'event' : 'method'}>, e.g. plant.${command === 'watch' ? 'alarm' : 'writeSetpoint'}\n`)
+        process.stderr.write(`source-rpc ${command}: give it <namespace>.<${command === 'watch' ? 'event' : 'method'}>, e.g. plant.${command === 'watch' ? 'alarm' : 'writeSetpoint'}\n`)
         return 1
     }
     if (command === 'watch') {
@@ -326,14 +326,14 @@ const runVerb = async (command: string, argv: string[]) => {
 const runFake = async (argv: string[]) => {
     const contractPath = argument(argv, '--contract', '')
     if (!contractPath) {
-        process.stderr.write('msgrpc serve: give it --contract <file>\n')
+        process.stderr.write('source-rpc serve: give it --contract <file>\n')
         process.exit(1)
     }
     let schema: RpcSchema
     try {
         schema = readSchema(resolve(contractPath))
     } catch (e) {
-        process.stderr.write(`msgrpc serve: cannot read ${contractPath}: ${(e as Error).message}\n`)
+        process.stderr.write(`source-rpc serve: cannot read ${contractPath}: ${(e as Error).message}\n`)
         process.exit(1)
     }
 
@@ -343,7 +343,7 @@ const runFake = async (argv: string[]) => {
         try {
             script = JSON.parse(readFileSync(resolve(scriptPath), 'utf8')) as FakeScript
         } catch (e) {
-            process.stderr.write(`msgrpc serve: cannot read ${scriptPath}: ${(e as Error).message}\n`)
+            process.stderr.write(`source-rpc serve: cannot read ${scriptPath}: ${(e as Error).message}\n`)
             process.exit(1)
         }
     }
@@ -352,7 +352,7 @@ const runFake = async (argv: string[]) => {
     for (const pair of argumentList(argv, '--fail')) {
         const equals = pair.indexOf('=')
         if (equals <= 0) {
-            process.stderr.write(`msgrpc serve: --fail wants <namespace>.<method>=<Code>, got '${pair}'\n`)
+            process.stderr.write(`source-rpc serve: --fail wants <namespace>.<method>=<Code>, got '${pair}'\n`)
             process.exit(1)
         }
         script = { ...script, fails: { ...script.fails, [pair.slice(0, equals)]: pair.slice(equals + 1) } }
@@ -360,10 +360,10 @@ const runFake = async (argv: string[]) => {
 
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'serve', 'fake')
     const running = await startFake({ ...network, schema, ...(Object.keys(script).length ? { script } : {}) })
-    process.stdout.write(`msgrpc serve: ${network.name} answering ${running.namespaces.join(', ')} from ${contractPath}\n`)
+    process.stdout.write(`source-rpc serve: ${network.name} answering ${running.namespaces.join(', ')} from ${contractPath}\n`)
     // Anything calling this is talking to a stand-in. Worth one line, since a fake that is mistaken
     // for the device is worse than no fake at all.
-    process.stderr.write('msgrpc serve: this is a fake. It answers from the contract, not from a device.\n')
+    process.stderr.write('source-rpc serve: this is a fake. It answers from the contract, not from a device.\n')
 
     const stop = () =>
         void running
@@ -379,7 +379,7 @@ const runFake = async (argv: string[]) => {
 const runRecord = async (argv: string[]) => {
     const out = argument(argv, '--out', '')
     if (!out) {
-        process.stderr.write('msgrpc record: give it --out <file>\n')
+        process.stderr.write('source-rpc record: give it --out <file>\n')
         process.exit(1)
     }
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'record', 'recorder')
@@ -394,18 +394,18 @@ const runRecord = async (argv: string[]) => {
         filter: { payloads, ...(peerFilter ? { peer: peerFilter } : {}), ...(namespaceFilter ? { namespace: namespaceFilter } : {}), ttl: 3600 }
     })
     if (!running.sources.length) {
-        process.stderr.write('msgrpc record: nothing here can watch traffic - no broker exposing a bus, and no --broker link.\n')
+        process.stderr.write('source-rpc record: nothing here can watch traffic - no broker exposing a bus, and no --broker link.\n')
         await running.close()
         process.exit(1)
     }
-    process.stdout.write(`msgrpc record: writing ${out}, watching via ${running.sources.join(', ')}\n`)
-    if (payloads) process.stderr.write('msgrpc record: arguments and results are being written to the file. Use --no-payloads to leave them out.\n')
+    process.stdout.write(`source-rpc record: writing ${out}, watching via ${running.sources.join(', ')}\n`)
+    if (payloads) process.stderr.write('source-rpc record: arguments and results are being written to the file. Use --no-payloads to leave them out.\n')
 
     const stop = () =>
         void running
             .close()
             .then(() => {
-                process.stderr.write(`msgrpc record: ${running.frames()} frames\n`)
+                process.stderr.write(`source-rpc record: ${running.frames()} frames\n`)
                 process.exit(0)
             })
             .catch(() => process.exit(1))
@@ -420,7 +420,7 @@ const runRecord = async (argv: string[]) => {
 const runReplay = async (argv: string[]) => {
     const file = positionals(argv)[1]
     if (!file) {
-        process.stderr.write('msgrpc replay: which recording?\n')
+        process.stderr.write('source-rpc replay: which recording?\n')
         return 1
     }
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'replay', 'replayer')
@@ -442,14 +442,14 @@ const runReplay = async (argv: string[]) => {
                   }
         )
     } catch (e) {
-        process.stderr.write(`msgrpc replay: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc replay: ${e instanceof Error ? e.message : String(e)}\n`)
         return 1
     }
 
     if (json) process.stdout.write(JSON.stringify(summary, null, 2) + '\n')
     else
         process.stdout.write(
-            `msgrpc replay: ${summary.calls.length} call${summary.calls.length === 1 ? '' : 's'}, ` +
+            `source-rpc replay: ${summary.calls.length} call${summary.calls.length === 1 ? '' : 's'}, ` +
                 `${summary.matched} matched, ${summary.differed} differed, ${summary.failed} failed, ${summary.sent} uncompared\n`
         )
     // An answer that differed is the finding this exists to produce, so it fails the command.
@@ -466,7 +466,7 @@ const runCheckPeer = async (argv: string[], peer: string) => {
     try {
         stored = readSchema(against)
     } catch {
-        process.stderr.write(`msgrpc check: cannot read ${against}\n`)
+        process.stderr.write(`source-rpc check: cannot read ${against}\n`)
         return 1
     }
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'check', 'cli')
@@ -474,7 +474,7 @@ const runCheckPeer = async (argv: string[], peer: string) => {
     try {
         report = await checkPeer({ ...network, peer, stored, wait: Number(argument(argv, '--wait', '5000')) })
     } catch (e) {
-        process.stderr.write(`msgrpc check: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc check: ${e instanceof Error ? e.message : String(e)}\n`)
         return 1
     }
 
@@ -490,10 +490,10 @@ const runCheckPeer = async (argv: string[], peer: string) => {
 
     const count = report.problems.length + report.missing.length
     if (count) {
-        process.stderr.write(`msgrpc: ${count} breaking change${count === 1 ? '' : 's'} between ${against} and ${peer}\n`)
+        process.stderr.write(`source-rpc: ${count} breaking change${count === 1 ? '' : 's'} between ${against} and ${peer}\n`)
         return 1
     }
-    process.stdout.write(`msgrpc: ${peer} serves ${report.checked.length ? report.checked.join(', ') : 'nothing'} compatibly with ${against}\n`)
+    process.stdout.write(`source-rpc: ${peer} serves ${report.checked.length ? report.checked.join(', ') : 'nothing'} compatibly with ${against}\n`)
     return 0
 }
 
@@ -501,7 +501,7 @@ const runCheckPeer = async (argv: string[], peer: string) => {
 const runDiff = async (argv: string[]) => {
     const [, left, right] = positionals(argv)
     if (!left || !right) {
-        process.stderr.write('msgrpc diff: give it two peers\n')
+        process.stderr.write('source-rpc diff: give it two peers\n')
         return 1
     }
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'diff', 'cli')
@@ -509,7 +509,7 @@ const runDiff = async (argv: string[]) => {
     try {
         report = await diffPeers({ ...network, left, right, wait: Number(argument(argv, '--wait', '5000')) })
     } catch (e) {
-        process.stderr.write(`msgrpc diff: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc diff: ${e instanceof Error ? e.message : String(e)}\n`)
         return 1
     }
     if (argv.includes('--json')) {
@@ -517,7 +517,7 @@ const runDiff = async (argv: string[]) => {
         return report.differences.length ? 1 : 0
     }
     if (!report.differences.length) {
-        process.stdout.write(`msgrpc diff: ${left} and ${right} expose the same thing\n`)
+        process.stdout.write(`source-rpc diff: ${left} and ${right} expose the same thing\n`)
         return 0
     }
     process.stdout.write(`${left}  vs  ${right}\n`)
@@ -539,12 +539,12 @@ const runBench = async (argv: string[]) => {
     const peer = words[1]
     const target = words[2]
     if (!peer || !target) {
-        process.stderr.write('msgrpc bench: give it a peer and <namespace>.<method>\n')
+        process.stderr.write('source-rpc bench: give it a peer and <namespace>.<method>\n')
         return 1
     }
     const dot = target.lastIndexOf('.')
     if (dot <= 0 || dot === target.length - 1) {
-        process.stderr.write(`msgrpc bench: '${target}' should be <namespace>.<method>\n`)
+        process.stderr.write(`source-rpc bench: '${target}' should be <namespace>.<method>\n`)
         return 1
     }
     const namespace = target.slice(0, dot)
@@ -555,7 +555,7 @@ const runBench = async (argv: string[]) => {
     try {
         args = await benchArguments({ ...network, peer, namespace, method, texts: words.slice(3) })
     } catch (e) {
-        process.stderr.write(`msgrpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
         return 1
     }
 
@@ -573,7 +573,7 @@ const runBench = async (argv: string[]) => {
             wait: Number(argument(argv, '--wait', '5000'))
         })
     } catch (e) {
-        process.stderr.write(`msgrpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc bench: ${e instanceof Error ? e.message : String(e)}\n`)
         return 1
     }
 
@@ -603,16 +603,16 @@ const runBroker = async (argv: string[]) => {
         ...(quiet ? {} : { onPeer: (peer, state, where) => process.stdout.write(`  ${state === 'online' ? '+' : '-'} ${peer} (${where})\n`) })
     }).catch((e: Error) => {
         // A port already taken is the ordinary way this fails, and it deserves a sentence.
-        process.stderr.write(`msgrpc broker: cannot start on port ${port}: ${e.message}\n`)
+        process.stderr.write(`source-rpc broker: cannot start on port ${port}: ${e.message}\n`)
         process.exit(1)
     })
-    process.stdout.write(`msgrpc broker ${name} on port ${port}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`)
+    process.stdout.write(`source-rpc broker ${name} on port ${port}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`)
     // It listens on every interface and forwards for whoever connects, without checking who they
     // are. Worth saying plainly rather than leaving to be discovered.
-    process.stderr.write('msgrpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust.\n')
+    process.stderr.write('source-rpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust.\n')
     // And now it will also show them everything it relays, if they ask. They could always have read
     // it by impersonating a peer; this is merely one call. Said out loud for the same reason.
-    process.stderr.write('msgrpc broker: bus.tap() mirrors every frame crossing this broker to whoever calls it. Use authenticate to gate that.\n')
+    process.stderr.write('source-rpc broker: bus.tap() mirrors every frame crossing this broker to whoever calls it. Use authenticate to gate that.\n')
 
     // Catching matters most here: a shutdown that fails would otherwise reject unhandled, and the
     // process would die on that instead of exiting cleanly - and print nothing about why.
@@ -621,7 +621,7 @@ const runBroker = async (argv: string[]) => {
             .close()
             .then(() => process.exit(0))
             .catch((e: unknown) => {
-                process.stderr.write(`msgrpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.stderr.write(`source-rpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
                 process.exit(1)
             })
     process.on('SIGINT', stop)
@@ -656,10 +656,10 @@ const runConsole = async (argv: string[]) => {
         host
     })
     const watching = [network.broker, network.hub].filter(Boolean).join(' and ')
-    process.stdout.write(`msgrpc console on ${running.url}, watching ${watching} as ${network.name}${signing ? ', signing frames' : ''}\n`)
+    process.stdout.write(`source-rpc console on ${running.url}, watching ${watching} as ${network.name}${signing ? ', signing frames' : ''}\n`)
     if (host !== '127.0.0.1' && host !== 'localhost')
         // Anyone who can reach it can invoke anything the console's own credentials permit.
-        process.stderr.write(`msgrpc console: bound to ${host}, so it is reachable from the network. It can call any method it is allowed to.\n`)
+        process.stderr.write(`source-rpc console: bound to ${host}, so it is reachable from the network. It can call any method it is allowed to.\n`)
     // Catching matters most here: a shutdown that fails would otherwise reject unhandled, and the
     // process would die on that instead of exiting cleanly - and print nothing about why.
     const stop = () =>
@@ -667,7 +667,7 @@ const runConsole = async (argv: string[]) => {
             .close()
             .then(() => process.exit(0))
             .catch((e: unknown) => {
-                process.stderr.write(`msgrpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.stderr.write(`source-rpc: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
                 process.exit(1)
             })
     process.on('SIGINT', stop)
@@ -675,6 +675,16 @@ const runConsole = async (argv: string[]) => {
 }
 
 const main = () => {
+    // `source-rpc describe plantServer | head -4` closes stdout while there is still output to
+    // write, and Node turns that into an unhandled 'error' event: a stack trace where a command
+    // should simply stop. Every verb here writes to stdout, and half the documented examples are
+    // pipelines, so this belongs at the entry point rather than around each write.
+    for (const stream of [process.stdout, process.stderr])
+        stream.on('error', (e: NodeJS.ErrnoException) => {
+            if (e.code === 'EPIPE') process.exit(0)
+            throw e
+        })
+
     const argv = process.argv.slice(2)
     const command = argv[0]
     const project = resolve(argument(argv, '--project', 'tsconfig.json'))
@@ -682,7 +692,7 @@ const main = () => {
     // Both are long-running and async, so their rejections were unhandled: the process died on the
     // rejection itself, with a stack trace where a sentence belonged.
     const fail = (e: unknown) => {
-        process.stderr.write(`msgrpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
         process.exit(1)
     }
     if (command === 'broker') {
@@ -746,7 +756,7 @@ const main = () => {
     if (diagnostics.length) {
         // Refused rather than written with holes in it: a schema that degrades to `any` on the
         // parts it could not read still looks like protection while checking nothing.
-        process.stderr.write(`msgrpc: ${diagnostics.length} type${diagnostics.length === 1 ? '' : 's'} could not be described\n`)
+        process.stderr.write(`source-rpc: ${diagnostics.length} type${diagnostics.length === 1 ? '' : 's'} could not be described\n`)
         reportDiagnostics(diagnostics)
         process.exit(1)
     }
@@ -762,7 +772,7 @@ const main = () => {
         const written = argv.includes('--keep-history') ? withHistory(schema, previous) : schema
         writeFileSync(out, JSON.stringify(written, null, 2) + '\n')
         const count = Object.keys(schema.namespaces).length
-        process.stdout.write(`msgrpc: wrote ${count} namespace${count === 1 ? '' : 's'} to ${out}\n`)
+        process.stdout.write(`source-rpc: wrote ${count} namespace${count === 1 ? '' : 's'} to ${out}\n`)
         return
     }
 
@@ -771,7 +781,7 @@ const main = () => {
     try {
         stored = readSchema(against)
     } catch {
-        process.stderr.write(`msgrpc: cannot read ${against}\n`)
+        process.stderr.write(`source-rpc: cannot read ${against}\n`)
         process.exit(1)
         return
     }
@@ -791,10 +801,10 @@ const main = () => {
     }
 
     if (breaking) {
-        process.stderr.write(`msgrpc: ${breaking} breaking change${breaking === 1 ? '' : 's'} against ${against}\n`)
+        process.stderr.write(`source-rpc: ${breaking} breaking change${breaking === 1 ? '' : 's'} against ${against}\n`)
         process.exit(1)
     }
-    process.stdout.write(`msgrpc: no breaking changes against ${against}\n`)
+    process.stdout.write(`source-rpc: no breaking changes against ${against}\n`)
 }
 
 main()

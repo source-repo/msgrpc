@@ -14,7 +14,7 @@ import { MessageSigner, MessageVerifier, RpcIdentity, SignedFrame } from './Auth
 
 const subtle = () => {
     const available = globalThis.crypto?.subtle
-    if (!available) throw new Error('msgrpc signing needs WebCrypto (globalThis.crypto.subtle)')
+    if (!available) throw new Error('source-rpc signing needs WebCrypto (globalThis.crypto.subtle)')
     return available
 }
 

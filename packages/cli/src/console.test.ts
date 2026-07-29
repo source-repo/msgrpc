@@ -2,7 +2,7 @@ import anyTest, { TestFn } from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { connectAsync } from 'mqtt'
-import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer, type ServerDescription, type TypeNode } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcClient, RpcSchema, RpcServer, type ServerDescription, type TypeNode } from '@source-repo/rpc'
 import { consoleIdentityPath, startConsole, type ConsoleService } from './console.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
@@ -83,7 +83,7 @@ const browserClient = async (url: string) => {
     return { client, remote: proxy.remote! }
 }
 
-test('the console discovers a peer, describes it, calls it and streams its events over msgrpc', async (t) => {
+test('the console discovers a peer, describes it, calls it and streams its events over Source RPC', async (t) => {
     if (t.context.skipped) {
         t.pass(`no MQTT broker at ${BROKER_URL} - skipped`)
         return

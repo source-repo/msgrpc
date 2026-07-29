@@ -1,4 +1,4 @@
-import type { ServerDescription } from '@source-repo/msgrpc'
+import type { ServerDescription } from '@source-repo/rpc'
 import { awaitPeer, connectNetwork, type NetworkOptions } from './network.js'
 import { coerceArguments } from './verbs.js'
 

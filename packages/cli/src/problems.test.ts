@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { RpcClient, RpcServer } from '@source-repo/msgrpc'
+import { RpcClient, RpcServer } from '@source-repo/rpc'
 import { consoleIdentityPath, startConsole, type NetworkProblem } from './console.js'
 
 /**

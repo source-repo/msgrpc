@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { RpcSchema, RpcServer } from '@source-repo/msgrpc'
+import { RpcSchema, RpcServer } from '@source-repo/rpc'
 import { History, Plant } from './PlantService.js'
 
 /**
  * Run with:  node dist-examples/server.js  (or ts-node), broker on localhost:1883
  *
- * The schema is the file `msgrpc extract` wrote. With it loaded the server refuses arguments that
+ * The schema is the file `source-rpc extract` wrote. With it loaded the server refuses arguments that
  * do not match, and msgrpc.describe() can report types to the console.
  */
 const here = dirname(fileURLToPath(import.meta.url))

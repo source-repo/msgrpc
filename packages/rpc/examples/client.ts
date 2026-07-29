@@ -1,4 +1,4 @@
-import { RpcClient } from '@source-repo/msgrpc'
+import { RpcClient } from '@source-repo/rpc'
 import type { Plant } from './PlantService.js'
 
 const client = new RpcClient(process.env.BROKER ?? 'mqtt://localhost:1883', {

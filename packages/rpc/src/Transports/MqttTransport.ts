@@ -334,7 +334,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (this.warnedAboutFlapping) return
         this.warnedAboutFlapping = true
         console.warn(
-            `msgrpc: '${this.name}' has lost its broker connection ${this.shortConnections} times in a row without staying up. ` +
+            `source-rpc: '${this.name}' has lost its broker connection ${this.shortConnections} times in a row without staying up. ` +
                 'The usual cause is a second peer running under this name, since both use the same client id and evict each other. ' +
                 'MQTT 3.1.1 gives no reason for a disconnect, so this is a guess - MQTT 5 would say so outright.'
         )
@@ -347,7 +347,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (this.warnedAboutDisplacement) return
         this.warnedAboutDisplacement = true
         console.warn(
-            `msgrpc: '${this.name}' was disconnected because another connection claimed its broker session, which means a second peer is running under this name. ` +
+            `source-rpc: '${this.name}' was disconnected because another connection claimed its broker session, which means a second peer is running under this name. ` +
                 'Both will keep taking the connection from each other, and calls to either will reach whichever holds it. Give them distinct names.'
         )
     }

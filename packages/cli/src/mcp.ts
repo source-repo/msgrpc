@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/msgrpc'
+import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { checkPeerOn, diffPeersOn } from './conform.js'
@@ -216,7 +216,7 @@ const toolsFor = (contracts: string | undefined) => [
                   name: 'save_contract',
                   description:
                       'Write a contract to the contracts directory so it survives this conversation, can be committed, and can be served later with ' +
-                      '`msgrpc serve --contract <file>` or checked against a device with `msgrpc check --peer`. Returns the path written.',
+                      '`source-rpc serve --contract <file>` or checked against a device with `source-rpc check --peer`. Returns the path written.',
                   inputSchema: {
                       type: 'object',
                       properties: {
@@ -337,7 +337,7 @@ export const startMcp = async (options: McpOptions) => {
                 if (!looksLikeSchema(args.schema)) return { text: 'schema must be an msgrpc contract: {"schema":1,"namespaces":{…}}.', isError: true }
                 const file = contractPath(options.contracts, String(args.name ?? ''))
                 writeFileSync(file, JSON.stringify(args.schema, null, 2) + '\n')
-                return { text: `Wrote ${file}. Serve it with \`msgrpc serve --contract ${file}\`, or check a device against it with \`msgrpc check --peer <name> --against ${file}\`.` }
+                return { text: `Wrote ${file}. Serve it with \`source-rpc serve --contract ${file}\`, or check a device against it with \`source-rpc check --peer <name> --against ${file}\`.` }
             } catch (e) {
                 return { text: failureText(e), isError: true }
             }
@@ -450,9 +450,9 @@ export const startMcp = async (options: McpOptions) => {
                     protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
                     capabilities: { tools: {} },
                     // Bumped with the package. Clients show it when reporting which server said what.
-                    serverInfo: { name: 'msgrpc', version: '2.5.0' },
+                    serverInfo: { name: 'source-rpc', version: '3.0.0' },
                     instructions:
-                        'This is a live msgrpc network. Start with list_peers, then describe_peer to learn a peer' +
+                        'This is a live Source RPC network. Start with list_peers, then describe_peer to learn a peer' +
                         ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.' +
                         ' start_fake puts a peer of your own on the same network, built from a contract you supply - use it to try something' +
                         ' against a device that does not exist yet, rather than against one that does. watch_traffic shows what other peers' +
@@ -503,12 +503,12 @@ export const startMcp = async (options: McpOptions) => {
             } catch {
                 // No id to answer to, so there is nowhere to send a parse error that the client
                 // could match up. Said on stderr, which is where a person will look.
-                process.stderr.write('msgrpc mcp: ignoring a line that is not JSON\n')
+                process.stderr.write('source-rpc mcp: ignoring a line that is not JSON\n')
                 continue
             }
             void handle(request).catch((e) => {
                 if (request.id !== undefined && request.id !== null) fail(request.id, INTERNAL_ERROR, failureText(e))
-                else process.stderr.write(`msgrpc mcp: ${failureText(e)}\n`)
+                else process.stderr.write(`source-rpc mcp: ${failureText(e)}\n`)
             })
         }
     })
@@ -521,6 +521,6 @@ export const startMcp = async (options: McpOptions) => {
         await connected.close()
     }
     // Not stdout: see the note at the top. A client learns what is here from initialize.
-    process.stderr.write(`msgrpc mcp: ${options.name} on ${options.broker ?? ''}${options.broker && options.hub ? ' and ' : ''}${options.hub ?? ''}\n`)
+    process.stderr.write(`source-rpc mcp: ${options.name} on ${options.broker ?? ''}${options.broker && options.hub ? ' and ' : ''}${options.hub ?? ''}\n`)
     return { network, close, peers: online }
 }

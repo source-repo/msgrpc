@@ -3,14 +3,14 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'events'
-import { MqttTransport, RpcServer, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/msgrpc'
+import { MqttTransport, RpcServer, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { networkTransports, type NetworkOptions } from './network.js'
 import { BusService, DEFAULT_TAP_TTL, type TapFilter, type TappedFrame } from './bus.js'
 // The tap's own contract, merged with the console's below: one server, and a schema has to describe
 // every namespace it serves or the ones it leaves out are refused their argument types.
 import busContract from './bus.types.json' with { type: 'json' }
 // Extracted from this file by `npm run contract`, and committed so it is reviewable and so
-// `msgrpc check` can catch a change to the service that would refuse a page built against the old
+// `source-rpc check` can catch a change to the service that would refuse a page built against the old
 // one. The console describing itself with the same machinery it shows other peers is the point:
 // what it cannot describe here, nobody else can describe either.
 import contract from './console.types.json' with { type: 'json' }
@@ -527,7 +527,7 @@ const serveAsset = async (pathname: string, response: ServerResponse, identity?:
             response.end(index)
         } catch {
             response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
-            response.end('The console app is not built. Run `npm run build` in @source-repo/msgrpc-cli.\n')
+            response.end('The console app is not built. Run `npm run build` in @source-repo/rpc-cli.\n')
         }
     }
 }
@@ -610,7 +610,7 @@ export const startConsole = async (options: ConsoleOptions) => {
         ...(options.prefix ? { prefix: options.prefix } : {})
     }
     network.exposeClassInstance(service)
-    // The console's own tap, exposed like any other so `msgrpc call <console> bus.tap` works and
+    // The console's own tap, exposed like any other so `source-rpc call <console> bus.tap` works and
     // another console can watch this one's MQTT link.
     if (localBus) network.exposeClassInstance(localBus)
     // After ready(): transports are built asynchronously now, so before it there is nothing to

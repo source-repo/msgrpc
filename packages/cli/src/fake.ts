@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { RpcServer, type NamespaceSchema, type RpcSchema, type TypeNode } from '@source-repo/msgrpc'
+import { RpcServer, type NamespaceSchema, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 import { networkTransports, type NetworkOptions } from './network.js'
 
 /**
@@ -10,7 +10,7 @@ import { networkTransports, type NetworkOptions } from './network.js'
  * it talks to, a console cannot be exercised without a peer to select, and a test that needs a
  * device which times out or throws needs a device willing to do that on request - which a real one
  * is not. The contract is already extracted and committed for the deployed peer, so standing a
- * stand-in up from it costs nothing and cannot drift: `msgrpc check` fails the build if it does.
+ * stand-in up from it costs nothing and cannot drift: `source-rpc check` fails the build if it does.
  *
  * Generated values are deterministic. A fake whose readings wander is nicer to look at and useless
  * to assert on, and `--script` is there for when a particular answer is what the test needs.

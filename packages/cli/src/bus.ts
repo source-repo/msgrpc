@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events'
-import { rpc, rpcNamespace, RpcMessageType, type Message, type RelayedFrame, type RpcCallInstanceMethodPayload, type RpcErrorPayload, type RpcEventPayload, type RpcSuccessPayload } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace, RpcMessageType, type Message, type RelayedFrame, type RpcCallInstanceMethodPayload, type RpcErrorPayload, type RpcEventPayload, type RpcSuccessPayload } from '@source-repo/rpc'
 
 /**
  * The traffic tap: what the broker is relaying, turned on while it runs.

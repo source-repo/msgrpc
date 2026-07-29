@@ -1,8 +1,8 @@
 import EventEmitter from 'events'
-import { rpc, rpcNamespace } from '@source-repo/msgrpc'
+import { rpc, rpcNamespace } from '@source-repo/rpc'
 
 /**
- * The service classes. These are the contract: `msgrpc extract` reads this file and writes
+ * The service classes. These are the contract: `source-rpc extract` reads this file and writes
  * msgrpc.types.json, which the server validates against and the console renders.
  */
 
