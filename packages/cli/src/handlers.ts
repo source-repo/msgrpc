@@ -169,6 +169,16 @@ export const pythonRuntime = async (program: string, targets: string[], interpre
         else waiting.resolve(message.result)
     })
 
+    // A write to a child whose read end has gone raises EPIPE on the stream, and an unhandled
+    // 'error' on a stream is an uncaught exception - which would take the whole fake down because a
+    // simulator's interpreter died. Recorded the way an exit is, so the calls waiting on it are
+    // refused with a reason and the next one is refused before it writes.
+    child.stdin.on('error', (e: Error) => {
+        died ??= new Error(`the python program is no longer reading: ${e.message}`)
+        for (const [, waiting] of pending) waiting.reject(died)
+        pending.clear()
+    })
+
     const stderr: string[] = []
     child.stderr.on('data', (chunk: Buffer) => {
         const text = chunk.toString()
@@ -195,7 +205,14 @@ export const pythonRuntime = async (program: string, targets: string[], interpre
             if (died) throw handlerFailed(target, died)
             const id = nextId++
             const answer = new Promise<unknown>((resolve, reject) => pending.set(id, { resolve, reject }))
-            child.stdin.write(`${JSON.stringify({ id, target, params })}\n`)
+            // Guarded as well as listened for: a stream already destroyed throws here rather than
+            // emitting, and either way the call fails now instead of waiting out the budget.
+            try {
+                child.stdin.write(`${JSON.stringify({ id, target, params })}\n`)
+            } catch (e) {
+                pending.delete(id)
+                throw handlerFailed(target, e)
+            }
             const budget = new Promise<never>((_, reject) =>
                 setTimeout(() => {
                     pending.delete(id)

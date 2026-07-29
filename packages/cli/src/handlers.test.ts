@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { execFileSync } from 'node:child_process'
 import { RpcClient, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { startFake } from './fake.js'
-import { javascriptRuntime } from './handlers.js'
+import { javascriptRuntime, pythonRuntime } from './handlers.js'
 
 /**
  * A fake that reacts, rather than repeating a canned answer.
@@ -179,6 +179,26 @@ test('a python program answers, and keeps its own state', async (t) => {
     t.is(await plant.read(), 12)
 
     await close()
+})
+
+test('a python program that stops reading fails the call rather than the process', async (t) => {
+    if (!havePython) {
+        t.pass('no python3 - skipped')
+        return
+    }
+    // A write to a child whose read end has gone raises EPIPE on the stream, and an unhandled
+    // 'error' on a stream is an uncaught exception. This program stays alive with stdin closed,
+    // which is the deterministic form of what an interpreter that died leaves behind - and before
+    // the listener existed it took the whole fake down instead of failing one call.
+    const runtime = await pythonRuntime('import os, time\nos.close(0)\ntime.sleep(30)\n', ['a.b'])
+    await new Promise((resolve) => setTimeout(resolve, 400))
+
+    const failure = await t.throwsAsync(runtime.call('a.b', []))
+    t.regex(String(failure?.message), /no longer reading/)
+
+    await runtime.close()
+    // Reaching here at all is the assertion: an uncaught exception would have ended the worker.
+    t.pass()
 })
 
 test('a python handler that raises is reported with what python said', async (t) => {

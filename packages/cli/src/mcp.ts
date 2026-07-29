@@ -347,6 +347,14 @@ export const startMcp = async (options: McpOptions) => {
     // stdout carries the protocol, so this goes to stderr like every other word this server says.
     if (options.allowExec)
         process.stderr.write('source-rpc mcp: --allow-exec is on, so start_fake will run JavaScript or Python the client sends. Development machines only.\n')
+    // Said at least as loudly as --allow-exec, because it is the larger grant of the two: a handler
+    // is a method body in a sandbox that is not a boundary, and a script is a process with this
+    // server's own privileges, its environment and its bus credentials. The smaller one announcing
+    // itself while the bigger one stayed quiet was the wrong way round.
+    if (options.scripts)
+        process.stderr.write(
+            `source-rpc mcp: --scripts is on, so this server will write and run programs in ${options.scripts} with your privileges, and may install packages there. Development machines only.\n`
+        )
     if (!options.broker && !options.hub) throw new Error('startMcp: give it a broker, a hub, or both')
 
     // Exposes nothing. This is a window onto the network, not a peer offering anything to it.
