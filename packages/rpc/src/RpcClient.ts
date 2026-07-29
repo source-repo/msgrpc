@@ -38,6 +38,16 @@ export interface RpcClientOptions {
      * call so a server can tell a genuinely stale caller from one sending rubbish.
      */
     schema?: RpcSchema
+    /**
+     * Connect to an `https://`, `wss://` or `mqtts://` peer without checking its certificate.
+     *
+     * Deliberately unsafe, and off: anything able to answer on that address can then read and
+     * rewrite everything this client sends, which over this library means industrial commands. It
+     * exists for a development server with a self-signed certificate. A plant with its own
+     * certificate authority should pass the CA in `credentials` instead, which keeps verification
+     * on rather than switching it off.
+     */
+    allowInsecureTls?: boolean
 }
 
 export interface RpcProxy<T> {
@@ -99,7 +109,8 @@ export class RpcClient extends EventEmitter {
         let transport = this.options.transport
         if (!transport) {
             const socketOptions = this.options.credentials ? { auth: this.options.credentials as { [key: string]: unknown } } : {}
-            if (this.url?.startsWith('http') || this.url?.startsWith('ws')) transport = new SocketIoClientTransport(this.options.name, this.url, undefined, socketOptions)
+            if (this.url?.startsWith('http') || this.url?.startsWith('ws'))
+                transport = new SocketIoClientTransport(this.options.name, this.url, undefined, socketOptions, true, this.options.allowInsecureTls)
             else if (this.url?.startsWith('mqtt')) {
                 // Imported on demand so a browser bundle that only speaks WebSocket does not have
                 // to carry the MQTT client. Bundlers split this into a chunk fetched only when an
@@ -107,9 +118,10 @@ export class RpcClient extends EventEmitter {
                 const { MqttTransport } = await import('./Transports/MqttTransport.js')
                 transport = new MqttTransport(this.options.name, this.url, {
                     mqtt: (this.options.credentials ?? {}) as IClientOptions,
-                    sign: this.options.sign
+                    sign: this.options.sign,
+                    allowInsecureTls: this.options.allowInsecureTls
                 })
-            } else transport = new SocketIoClientTransport(this.options.name, `http://localhost:${defaultWebSocketPort}`, undefined, socketOptions)
+            } else transport = new SocketIoClientTransport(this.options.name, `http://localhost:${defaultWebSocketPort}`, undefined, socketOptions, true, this.options.allowInsecureTls)
         }
         this.options.transport = transport
         // The transport encodes, so there is no converter between it and the handler. A structured

@@ -33,13 +33,22 @@ export const MR = {
     nonce: 'mr-nonce',
     timestamp: 'mr-ts',
     signature: 'mr-sig',
-    contractVersion: 'mr-ver'
+    contractVersion: 'mr-ver',
+    /**
+     * Milliseconds the caller will still wait, counted from when it sent. Carried alongside MQTT's
+     * own messageExpiryInterval rather than instead of it: expiry is coarse (whole seconds), the
+     * broker decrements it, and it stops at the broker - it says nothing about how long a frame then
+     * sat in the receiving process. This is the caller's own statement, signed, and it survives
+     * relaying through a transport that does not speak MQTT at all.
+     */
+    ttl: 'mr-ttl'
 } as const
 
 /**
- * Version 2 covers contentType, the error code and the declared contract version in the signature;
- * version 1 did not, and a frame signed under one cannot verify under the other. Bumped rather than
- * negotiated: a receiver that quietly accepted either would let an attacker choose the weaker.
+ * Version 2 covers contentType, the error code, the declared contract version, the response topic
+ * and the ttl in the signature; version 1 covered none of them, and a frame signed under one cannot
+ * verify under the other. Bumped rather than negotiated: a receiver that quietly accepted either
+ * would let an attacker choose the weaker.
  */
 export const FRAME_VERSION = '2'
 
@@ -62,12 +71,17 @@ export interface OutboundFrame {
     code?: string
     /** Contract version the caller declares, when it has one. */
     version?: string
+    /** Milliseconds the caller will still wait. Drives the MQTT message expiry as well. */
+    ttl?: number
     /** Encoded as the packet payload: arguments for a request, the value for a result. */
     body: unknown
 }
 
 const requestKind = (method: string): FrameKind =>
     method === 'on' ? 'subscribe' : method === 'off' || method === 'removeListener' ? 'unsubscribe' : 'call'
+
+/** Kinds that expect an answer, and so are the only ones entitled to say where it should go. */
+export const isRequestKind = (kind: string | undefined) => kind === 'call' || kind === 'subscribe' || kind === 'unsubscribe'
 
 /** Undefined for anything this layout has no representation for, which the transport drops. */
 export const toOutboundFrame = (message: Message): OutboundFrame | undefined => {
@@ -83,6 +97,7 @@ export const toOutboundFrame = (message: Message): OutboundFrame | undefined => 
                 path: call.path,
                 method: call.method,
                 version: call.version,
+                ttl: call.ttl,
                 body: call.params
             }
         }
@@ -111,6 +126,8 @@ export interface InboundFrame {
     event?: string
     code?: string
     version?: string
+    /** What the caller said it would still wait, already narrowed by anything the broker reported. */
+    ttl?: number
     body: unknown
 }
 
@@ -127,6 +144,7 @@ export const fromInboundFrame = (frame: InboundFrame): Message | undefined => {
                 path: frame.path,
                 method: frame.method,
                 version: frame.version,
+                ttl: frame.ttl,
                 // A caller that sends no payload means no arguments.
                 params: Array.isArray(frame.body) ? frame.body : frame.body === undefined || frame.body === null ? [] : [frame.body]
             }

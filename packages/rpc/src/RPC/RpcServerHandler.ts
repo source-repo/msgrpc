@@ -97,6 +97,16 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     deduplicateRequests = true
     /** How many recent request ids to remember. Oldest are evicted first. */
     maxTrackedRequests = 1000
+    /**
+     * Refuse a call whose caller has already stopped waiting for it, instead of running it late.
+     *
+     * A request carries the milliseconds its caller intended to wait, and that budget is counted
+     * from the moment this process received the frame. A read arriving late only wastes work; a
+     * command does not - the operator saw a timeout, did something else about it, and then the
+     * original 'start pump' runs anyway. On by default, because that outcome is worse than the
+     * failed call it replaces.
+     */
+    refuseExpiredCalls = true
     /** Describes what exposed methods accept. Absent means nothing is checked. */
     schema?: RpcSchema
     /**
@@ -259,6 +269,10 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
 
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     private async dispatch(payload: RpcMessage, source: string, target: string) {
+        // Stamped here, on arrival, and by this process's own clock. Comparing the caller's clock
+        // with this one would need the two to agree, which over MQTT they broadly do and from a
+        // browser they do not.
+        const arrived = Date.now()
         if (isRpcCallInstanceMethodPayload(payload)) {
             if (this.deduplicateRequests) {
                 const cached = this.recentResponses.get(payload.id)
@@ -334,6 +348,20 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 return
             }
 
+            // Checked here rather than on arrival, and last of all the checks: the queue this is
+            // meant to catch is the one in front of the method itself, so the budget has to be
+            // read at the moment of invoking and not before the checks that precede it.
+            const spent = this.expiredBy(payload, arrived)
+            if (spent !== undefined) {
+                await this.sendError(
+                    payload.id,
+                    source,
+                    'Timeout',
+                    `${payload.path}.${payload.method} was not run: its caller stopped waiting ${spent} ms ago`
+                )
+                return
+            }
+
             const params = [...payload.params]
             let result
             try {
@@ -353,6 +381,21 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 )
             }
         }
+    }
+
+    /**
+     * How long ago the caller's budget ran out, or undefined while it still has one.
+     *
+     * The budget starts when the frame arrived here, so it covers the wait in front of this method
+     * and nothing before it. What came before is the transport's to account for: MQTT 5 hands the
+     * broker the same budget as a message expiry, so a request that sat in a queue arrives already
+     * shortened, or does not arrive at all.
+     */
+    private expiredBy(payload: RpcCallInstanceMethodPayload, arrived: number) {
+        if (!this.refuseExpiredCalls || payload.ttl === undefined) return undefined
+        if (!Number.isFinite(payload.ttl) || payload.ttl < 0) return undefined
+        const overdue = Date.now() - (arrived + payload.ttl)
+        return overdue > 0 ? overdue : undefined
     }
 
     /** Catches this server returning something its own contract does not allow. */

@@ -1,3 +1,18 @@
+```
+███████╗ ██████╗ ██╗   ██╗██████╗  ██████╗███████╗
+██╔════╝██╔═══██╗██║   ██║██╔══██╗██╔════╝██╔════╝
+███████╗██║   ██║██║   ██║██████╔╝██║     █████╗
+╚════██║██║   ██║██║   ██║██╔══██╗██║     ██╔══╝
+███████║╚██████╔╝╚██████╔╝██║  ██║╚██████╗███████╗
+╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚══════╝
+██████╗ ██████╗  ██████╗      ██████╗██╗     ██╗
+██╔══██╗██╔══██╗██╔════╝     ██╔════╝██║     ██║
+██████╔╝██████╔╝██║     ████╗██║     ██║     ██║
+██╔══██╗██╔═══╝ ██║     ╚═══╝██║     ██║     ██║
+██║  ██║██║     ╚██████╗     ╚██████╗███████╗██║
+╚═╝  ╚═╝╚═╝      ╚═════╝      ╚═════╝╚══════╝╚═╝
+```
+
 # @source-repo/rpc-cli
 
 Tooling for [Source RPC](https://www.npmjs.com/package/@source-repo/rpc): read a contract out of TypeScript source, fail a build when it
@@ -49,6 +64,7 @@ source-rpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
 | `--sign <keyfile>` | console, mcp, verbs, serve | — | HMAC keys, so it can talk to a signed network |
+| `--insecure-tls` | console, mcp, verbs, serve | off | accept any certificate on an `https`/`wss`/`mqtts` link. Unsafe by design: for a development bus with a self-signed certificate, never a plant |
 | `--contracts <dir>` | mcp | — | let it save and load contracts here; without it those tools are not offered |
 | `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
 | `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
@@ -954,9 +970,10 @@ exposing it has to be a deliberate act: `--host 0.0.0.0` works and prints a warn
 have just done.
 
 **Credentials are thin.** Broker credentials work if they fit in the url (`mqtt://user:pass@host`);
-TLS client certificates have nowhere to go yet. A hub that authenticates needs a handshake token,
-which has no flag for the same reason the signing keys do not — build the console from the library's
-`startConsole` and pass `hubCredentials`.
+TLS client certificates have nowhere to go yet, and neither does a private certificate authority —
+`--insecure-tls` accepts any certificate at all, which is a development answer and not a plant one.
+A hub that authenticates needs a handshake token, which has no flag for the same reason the signing
+keys do not — build the console from the library's `startConsole` and pass `hubCredentials`.
 
 **`--prefix` is MQTT's.** A socket.io hub has no topic namespace, so the flag does nothing for
 `--hub`. Watching two MQTT networks at once is not possible either; it is one broker and one hub.

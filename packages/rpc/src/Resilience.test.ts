@@ -141,6 +141,43 @@ test('a method that throws answers the caller with the reason', async (t) => {
     await server.close()
 })
 
+test('a command whose caller has already given up is refused instead of run late', async (t) => {
+    // The hazard is not the wasted work. It is that the operator saw a timeout, did something else
+    // about it, and then the original command runs anyway - which for 'start pump' or 'reset fault'
+    // is a machine moving when nobody expects it to.
+    let started = 0
+    class SlowGate extends EventEmitter {
+        async startPump() {
+            started++
+            return 'running'
+        }
+    }
+    const server = new RpcServer({
+        transports: [{ port: 3814 }],
+        // Something in front of the method that takes longer than the caller will wait. An
+        // authorizer is the honest version of it: the check has to finish before the method can be
+        // allowed to run, and a directory server having a bad day is exactly how that happens.
+        authorize: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 400))
+            return true
+        }
+    })
+    await server.ready()
+    server.exposeClassInstance(new SlowGate(), 'gate')
+
+    const client = new RpcClient('http://localhost:3814', { name: peer('impatient'), callTimeout: 120 })
+    await client.ready()
+    const gate = await client.proxy<SlowGate>('gate')
+
+    await t.throwsAsync(gate.remote!.startPump(), { message: /Timeout/ }, 'the caller should have given up')
+    // Long enough for the authorizer to finish and the method to run, if it were going to.
+    await new Promise((resolve) => setTimeout(resolve, 600))
+    t.is(started, 0, 'a command ran after its caller had already been told it timed out')
+
+    await client.close()
+    await server.close()
+})
+
 test('a switch says so when it cannot place a message', async (t) => {
     // It used to drop the message and return, so the only evidence was a call that never came back.
     const source = new GenericModule('source')

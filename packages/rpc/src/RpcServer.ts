@@ -25,6 +25,12 @@ export interface ConnectServerOptions extends ServerOptions {
     path?: string
     /** Presented to a hub that authenticates. */
     credentials?: unknown
+    /**
+     * Dial an `https://` or `wss://` hub without checking its certificate. Deliberately unsafe:
+     * anything able to answer on that address can then read and rewrite this link. For a
+     * development hub with a self-signed certificate.
+     */
+    allowInsecureTls?: boolean
 }
 
 export interface RpcServerOptions {
@@ -185,10 +191,17 @@ export class RpcServerBase implements IManageRpc {
         if (serveroption instanceof GenericModule) return serveroption as Transport
         if ((serveroption as ConnectServerOptions).connect) {
             const connectOptions = serveroption as ConnectServerOptions
-            return new SocketIoClientTransport(this.options.name, connectOptions.connect, [], {
-                ...(connectOptions.path ? { path: connectOptions.path } : {}),
-                ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
-            })
+            return new SocketIoClientTransport(
+                this.options.name,
+                connectOptions.connect,
+                [],
+                {
+                    ...(connectOptions.path ? { path: connectOptions.path } : {}),
+                    ...(connectOptions.credentials ? { auth: connectOptions.credentials as { [key: string]: unknown } } : {})
+                },
+                true,
+                connectOptions.allowInsecureTls
+            )
         }
         return undefined
     }

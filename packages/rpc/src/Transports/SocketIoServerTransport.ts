@@ -1,6 +1,6 @@
 import * as SocketIo from 'socket.io'
 import { createServer as createHttpServer, Server as HttpServer } from 'http'
-import { createServer as createHttpsServer, Server as HttpsServer } from 'https'
+import { createServer as createHttpsServer, Server as HttpsServer, type ServerOptions as TlsServerOptions } from 'https'
 import { GenericModule, IGenericModule, Message, TransportEvent, type RelayedFrame } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
@@ -44,14 +44,24 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         name: string,
         public server?: Servers,
         port?: number,
-        https?: boolean,
+        /**
+         * Certificate and key for a server opened here. Present means HTTPS.
+         *
+         * This used to be `https?: boolean`, and `true` called createHttpsServer() with nothing in
+         * it - a server that listens, completes no handshake, and refuses every client with an
+         * error about missing certificates. There is no useful HTTPS server without key material,
+         * so the material is what asks for one.
+         */
+        tls?: TlsServerOptions,
         sources?: IGenericModule[],
         socketIoOptions: Partial<SocketIo.ServerOptions> = {},
         public authenticate?: RpcAuthenticator
     ) {
         super(name, sources)
         this.ourServer = server === undefined
-        if (!server) this.server = https ? createHttpsServer() : createHttpServer()
+        if (tls && !tls.cert && !tls.pfx && !tls.SNICallback)
+            throw new Error(`SocketIoServerTransport '${name}': tls needs a certificate - pass cert and key, or pfx, or an SNICallback that supplies them`)
+        if (!server) this.server = tls ? createHttpsServer(tls) : createHttpServer()
         if (this.server instanceof SocketIo.Server) this.io = this.server
         else {
             const configuredAllowRequest = socketIoOptions?.allowRequest

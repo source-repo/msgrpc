@@ -25,7 +25,18 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         // SocketOptions carries `auth`, which is how credentials reach an authenticating server.
         public options: Partial<ManagerOptions & SocketOptions> = {},
         /** Announce on connect. Off leaves this peer unlisted and unaddressable, as before. */
-        public announcePresence = true
+        public announcePresence = true,
+        /**
+         * Connect to an `https://` or `wss://` server without checking its certificate.
+         *
+         * This used to be the default, and it should never have been: it accepts any certificate at
+         * all, so anything able to answer on the server's address can read and rewrite everything
+         * sent over the link - which on this library's traffic means industrial commands. Left as a
+         * deliberate, named choice for a development server with a self-signed certificate. A plant
+         * with its own certificate authority should pass `ca` in the socket options instead, which
+         * keeps verification on.
+         */
+        public allowInsecureTls = false
     ) {
         super(name, sources)
         // Deferred by a microtask so whatever constructs this transport can finish wiring it
@@ -82,9 +93,13 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         // first socket orphaned and reconnecting forever, exactly what the guard is here to prevent.
         void super.open()
         const urlSocketIo = this.url
-        this.options = {
-            rejectUnauthorized: false,
-            ...this.options
+        // Certificate verification is Node's default and stays on. It was turned off here for
+        // every client, before the caller's own options were applied, so a Node peer accepted an
+        // impersonated TLS server unless whoever wrote it knew to turn verification back on.
+        if (this.allowInsecureTls) {
+            // Spread after, so a caller that asks for both gets the safer of the two.
+            this.options = { rejectUnauthorized: false, ...this.options }
+            this.warnAboutInsecureTls()
         }
         this.socket = urlSocketIo ? io(urlSocketIo, this.options) : io(this.options)
         this.socket.on('message', async (messageArray) => {
@@ -131,6 +146,18 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             }
             this.emit(TransportEvent.disconnected, reason)
         })
+    }
+
+    /**
+     * Said once per transport, and only where it means anything: the flag has no effect on a plain
+     * `http://` link, and warning about one would teach people to ignore the warning.
+     */
+    private warnAboutInsecureTls() {
+        if (!this.url || !/^(https|wss):/i.test(this.url)) return
+        console.warn(
+            `source-rpc: '${this.name}' is connecting to ${this.url} with allowInsecureTls, so the server's certificate is not checked. ` +
+                'Anything able to answer on that address can read and rewrite this link. Use it for a development server, not a plant.'
+        )
     }
 
     /**

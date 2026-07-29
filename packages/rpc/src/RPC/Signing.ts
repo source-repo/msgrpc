@@ -47,6 +47,12 @@ export const canonicalSignedBytes = (frame: SignedFrame): Uint8Array => {
 export interface SignedFrameV5 {
     version: string
     topic: string
+    /**
+     * Where the sender asks for its reply, empty when it asks for none. Signed because it is
+     * honoured: a receiver publishes the answer where this says, so anything able to rewrite it
+     * could have a server deliver a reply to a topic of its choosing.
+     */
+    responseTopic: string
     source: string
     kind: string
     path: string
@@ -61,6 +67,15 @@ export interface SignedFrameV5 {
     code: string
     /** The contract version the sender declares, which decides compatibility at the far end. */
     contractVersion: string
+    /**
+     * Milliseconds the caller said it would still wait, as a string, empty when it said nothing.
+     *
+     * A duration rather than a moment, deliberately: an absolute deadline is only as good as the
+     * agreement between two clocks, and one of the peers here is a browser, whose clock the user
+     * owns. The receiver turns it into a local deadline on arrival, so nobody's clock has to match
+     * anybody else's. See RpcServerHandler for what is done with it.
+     */
+    ttl: string
     timestamp: number
     nonce: string
     payload: Uint8Array
@@ -78,14 +93,21 @@ export interface SignedFrameV5 {
  * a signed setpoint from 1 to 49 with the signature still good.
  *
  * The same argument applies to anything else the receiver acts on rather than merely transports: the
- * error code decides what a caller does about a failure, and the declared contract version decides
- * whether the call is accepted at all. Both are now covered.
+ * error code decides what a caller does about a failure, the declared contract version decides
+ * whether the call is accepted at all, the response topic decides where the answer is published, and
+ * the ttl decides whether the method runs at all. All four are covered.
+ *
+ * The MQTT message expiry is deliberately **not** covered, because the broker is meant to decrement
+ * it in flight and a signature over it would break on the first queued message. Nothing is lost:
+ * expiry may only narrow the signed ttl, never extend it, so rewriting it can delay or drop a frame
+ * - which anyone able to rewrite it could do anyway - but cannot buy a stale command more time.
  */
 export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
     const preamble = stringToUint8Array(
         JSON.stringify([
             frame.version,
             frame.topic,
+            frame.responseTopic,
             frame.source,
             frame.kind,
             frame.path,
@@ -94,6 +116,7 @@ export const canonicalSignedBytesV5 = (frame: SignedFrameV5): Uint8Array => {
             frame.contentType,
             frame.code,
             frame.contractVersion,
+            frame.ttl,
             frame.timestamp,
             frame.nonce
         ])

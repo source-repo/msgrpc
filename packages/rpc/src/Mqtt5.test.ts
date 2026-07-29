@@ -182,6 +182,129 @@ test('an error reaches a plain MQTT 5 caller with its code in a user property', 
     await server.close()
 })
 
+test('a caller is answered on the response topic it asked for, not one derived from its name', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('interop-rsp')
+    class Plant {
+        async read() {
+            return 42
+        }
+    }
+    const server = new RpcServer({ name: peer('rspServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
+    await server.ready()
+    server.exposeClassInstance(new Plant(), 'plant')
+
+    // MQTT 5 says the Response Topic is where the answer goes. This one is deliberately nothing
+    // like `<prefix>/rsp/<mr-src>`, which is what the server used to derive and reply to instead -
+    // so the earlier code answered into a topic this caller was not listening on.
+    const inbox = `${prefix}/rsp/inbox-7c2f`
+    const tool: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+    await tool.subscribeAsync(inbox, { qos: 1 })
+    const reply = new Promise<{ topic: string; value: unknown }>((resolve) => {
+        tool.on('message', (topic, payload) => resolve({ topic, value: msgPackDecode(payload) }))
+    })
+    await tool.publishAsync(`${prefix}/req/${peer('rspServer')}`, Buffer.from(msgPackEncode([])), {
+        qos: 1,
+        properties: {
+            responseTopic: inbox,
+            correlationData: Buffer.from('rsp-1'),
+            contentType: 'application/msgpack',
+            userProperties: { 'mr-v': '1', 'mr-src': 'rsptool', 'mr-kind': 'call', 'mr-path': 'plant', 'mr-method': 'read' }
+        }
+    })
+
+    const answer = await reply
+    t.is(answer.topic, inbox, 'the reply did not go to the response topic the request named')
+    t.is(answer.value, 42)
+
+    await tool.endAsync()
+    await server.close()
+})
+
+test('a response topic outside the transport prefix is refused', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('interop-rsp-deny')
+    let calls = 0
+    class Counter {
+        async bump() {
+            calls++
+            return calls
+        }
+    }
+    const server = new RpcServer({ name: peer('denyServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
+    await server.ready()
+    server.exposeClassInstance(new Counter(), 'counter')
+    const rejected: { reason?: string }[] = []
+    server.transports[0].on('rejected', (info: { reason?: string }) => rejected.push(info))
+
+    // Honouring the response topic means a caller picks a topic this server then publishes to, so
+    // there has to be a boundary. Anything outside the transport's own prefix is refused rather
+    // than answered somewhere else, because a caller waiting on a topic it named is not helped by
+    // a reply sent elsewhere.
+    const tool: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+    await tool.publishAsync(`${prefix}/req/${peer('denyServer')}`, Buffer.from(msgPackEncode([])), {
+        qos: 1,
+        properties: {
+            responseTopic: '$SYS/broker/somewhere',
+            correlationData: Buffer.from('deny-1'),
+            contentType: 'application/msgpack',
+            userProperties: { 'mr-v': '1', 'mr-src': 'denytool', 'mr-kind': 'call', 'mr-path': 'counter', 'mr-method': 'bump' }
+        }
+    })
+    await new Promise((resolve) => setTimeout(resolve, 600))
+
+    t.is(calls, 0, 'a request naming an out-of-bounds response topic was executed')
+    t.true(
+        rejected.some((info) => /response topic/.test(info.reason ?? '')),
+        `the refusal was not reported: ${JSON.stringify(rejected)}`
+    )
+
+    await tool.endAsync()
+    await server.close()
+})
+
+test("a request carries its caller's remaining time, and the broker is given the same deadline", async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5-ttl')
+    class Plant {
+        async read() {
+            return 1
+        }
+    }
+    const server = new RpcServer({ name: peer('ttlServer'), transports: [{ brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix }] })
+    await server.ready()
+    server.exposeClassInstance(new Plant(), 'plant')
+
+    // Watching the request go past, the way an operator with MQTT Explorer would.
+    const watcher: MqttClient = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+    const seen = new Promise<{ ttl?: string; expiry?: number }>((resolve) => {
+        watcher.on('message', (topic, payload, packet) =>
+            resolve({ ttl: userProp(packet, MR.ttl), expiry: (props(packet) as { messageExpiryInterval?: number }).messageExpiryInterval })
+        )
+    })
+    await watcher.subscribeAsync(`${prefix}/req/${peer('ttlServer')}`, { qos: 1 })
+
+    const client = new RpcClient(undefined, {
+        name: peer('ttl-client'),
+        defaultTarget: peer('ttlServer'),
+        callTimeout: 4000,
+        transport: new MqttTransport(peer('ttl-client'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY })
+    })
+    await client.ready()
+    t.is(await (await client.proxy<Plant>('plant')).remote!.read(), 1)
+
+    const request = await seen
+    t.is(request.ttl, '4000', 'the request did not state what its caller would wait')
+    // The two used to be independent: a caller giving up after ten seconds published a request the
+    // broker held for thirty, so it could be delivered and executed twenty seconds after the
+    // operator had already been told the call failed.
+    t.is(request.expiry, 4, "the broker was not given the caller's deadline")
+
+    await watcher.endAsync()
+    await client.close()
+    await server.close()
+})
+
 test('a frame repeating a control property is rejected', async (t) => {
     if (skipWithoutBroker(t)) return
     const prefix = prefixFor('interop-dup')
@@ -276,7 +399,10 @@ const until = async (condition: () => boolean, timeout = 5000) => {
 // A peer name is the MQTT client id, so two tests sharing one evict each other when ava runs them
 // concurrently - the very collision this transport warns about. Each signing test gets its own pair.
 const SIGN_SECRETS: { [peer: string]: string } = Object.fromEntries(
-    ['hmi-v5', 'srv-v5', 'rogue-v5', 'hmi-ct', 'srv-ct', 'hmi-ct2', 'srv-ct2', 'hmi-code', 'srv-code'].map((name) => [peer(name), `${name}-secret`])
+    ['hmi-v5', 'srv-v5', 'rogue-v5', 'hmi-ct', 'srv-ct', 'hmi-ct2', 'srv-ct2', 'hmi-code', 'srv-code', 'hmi-rt', 'srv-rt', 'hmi-ttl', 'srv-ttl'].map((name) => [
+        peer(name),
+        `${name}-secret`
+    ])
 )
 const v5Verifier = createHmacVerifier(
     (peer) => SIGN_SECRETS[peer],
@@ -305,15 +431,26 @@ const publishSignedV5 = async (
         sentContentType?: string
         code?: string
         sentCode?: string
+        /** What the signature covers. Defaults to this peer's own reply topic under the prefix. */
+        responseTopic?: string
+        /** What the packet actually asks for, when that is meant to differ from what was signed. */
+        sentResponseTopic?: string
+        ttl?: number
+        sentTtl?: number
     }
 ) => {
     const body = opts.rawBody ?? new Uint8Array(msgPackEncode(opts.body))
     const nonce = opts.nonce ?? createNonce()
     const timestamp = opts.timestamp ?? Date.now()
     const contentType = opts.contentType ?? 'application/msgpack'
+    // Derived from the request topic, which carries the prefix: a response topic outside it is
+    // refused, and the reply would go somewhere nothing is listening anyway.
+    const responseTopic = opts.responseTopic ?? `${opts.topic.split('/').slice(0, -2).join('/')}/rsp/${opts.source}`
+    const ttl = opts.ttl !== undefined ? String(opts.ttl) : ''
     const canonical = canonicalSignedBytesV5({
         version: FRAME_VERSION,
         topic: opts.topic,
+        responseTopic,
         source: opts.source,
         kind: opts.kind,
         path: opts.path ?? '',
@@ -322,15 +459,17 @@ const publishSignedV5 = async (
         contentType,
         code: opts.code ?? '',
         contractVersion: '',
+        ttl,
         timestamp,
         nonce,
         payload: body
     })
     const signature = await createHmacSigner(SIGN_SECRETS[opts.signAs])(canonical, { source: opts.source })
+    const sentTtl = opts.sentTtl ?? opts.ttl
     await client.publishAsync(opts.topic, Buffer.from(body), {
         qos: 1,
         properties: {
-            responseTopic: `msgrpc/v5sign/rsp/${opts.source}`,
+            responseTopic: opts.sentResponseTopic ?? responseTopic,
             correlationData: Buffer.from(opts.correlation),
             contentType: opts.sentContentType ?? contentType,
             userProperties: {
@@ -340,6 +479,7 @@ const publishSignedV5 = async (
                 ...(opts.path ? { [MR.path]: opts.path } : {}),
                 ...(opts.method ? { [MR.method]: opts.method } : {}),
                 ...(opts.sentCode ?? opts.code ? { [MR.code]: (opts.sentCode ?? opts.code)! } : {}),
+                ...(sentTtl !== undefined ? { [MR.ttl]: String(sentTtl) } : {}),
                 [MR.nonce]: nonce,
                 [MR.timestamp]: String(timestamp),
                 [MR.signature]: signature
@@ -747,6 +887,122 @@ test('the error code and the declared contract version are covered by the signat
     })
     await new Promise((resolve) => setTimeout(resolve, 700))
     t.deepEqual(asked, [], 'a frame whose code was added after signing must not be acted on')
+
+    await client.endAsync()
+    await server.close()
+})
+
+test('the response topic cannot be redirected after signing', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5sign-rt')
+    const asked: number[] = []
+    class Plant {
+        async write(v: number) {
+            asked.push(v)
+            return v
+        }
+    }
+    const server = new RpcServer({
+        name: peer('srv-rt'),
+        transports: [
+            { brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-rt')]), verify: v5Verifier }
+        ],
+        requireAuthenticatedPeers: true
+    })
+    server.exposeClassInstance(new Plant(), 'plant')
+    await server.ready()
+    const client = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+
+    // Now that the response topic is honoured, it decides where the answer is published - so
+    // anything able to rewrite it in flight could have this server deliver a reply to a topic of
+    // its own choosing. Both topics here pass the prefix rule, which is what makes this about the
+    // signature rather than about the policy.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-rt')}`,
+        source: peer('hmi-rt'),
+        signAs: peer('hmi-rt'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'rt-1',
+        body: 11,
+        responseTopic: `${prefix}/rsp/${peer('hmi-rt')}`,
+        sentResponseTopic: `${prefix}/rsp/eavesdropper`
+    })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    t.deepEqual(asked, [], 'a frame whose response topic was changed after signing must not run the method')
+
+    // The same call with the topic it was signed with does run, so the refusal above is about the
+    // redirection and not about the frame.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-rt')}`,
+        source: peer('hmi-rt'),
+        signAs: peer('hmi-rt'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'rt-2',
+        body: 11,
+        responseTopic: `${prefix}/rsp/${peer('hmi-rt')}`
+    })
+    await until(() => asked.length > 0)
+    t.deepEqual(asked, [11])
+
+    await client.endAsync()
+    await server.close()
+})
+
+test('the stated deadline cannot be extended after signing', async (t) => {
+    if (skipWithoutBroker(t)) return
+    const prefix = prefixFor('v5sign-ttl')
+    const asked: number[] = []
+    class Plant {
+        async write(v: number) {
+            asked.push(v)
+            return v
+        }
+    }
+    const server = new RpcServer({
+        name: peer('srv-ttl'),
+        transports: [
+            { brokerurl: BROKER_URL, sessionExpirySeconds: TEST_SESSION_EXPIRY, prefix, sign: createHmacSigner(SIGN_SECRETS[peer('srv-ttl')]), verify: v5Verifier }
+        ],
+        requireAuthenticatedPeers: true
+    })
+    server.exposeClassInstance(new Plant(), 'plant')
+    await server.ready()
+    const client = await connectAsync(BROKER_URL, { protocolVersion: 5 })
+
+    // The ttl is what stops a command running after its caller gave up, so anything able to raise
+    // it could buy a stale 'start pump' another hour. Signed as a second, sent as an hour.
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-ttl')}`,
+        source: peer('hmi-ttl'),
+        signAs: peer('hmi-ttl'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'ttl-1',
+        body: 9,
+        ttl: 1000,
+        sentTtl: 3600000
+    })
+    await new Promise((resolve) => setTimeout(resolve, 700))
+    t.deepEqual(asked, [], 'a frame whose deadline was extended after signing must not run the method')
+
+    await publishSignedV5(client, {
+        topic: `${prefix}/req/${peer('srv-ttl')}`,
+        source: peer('hmi-ttl'),
+        signAs: peer('hmi-ttl'),
+        kind: 'call',
+        path: 'plant',
+        method: 'write',
+        correlation: 'ttl-2',
+        body: 9,
+        ttl: 30000
+    })
+    await until(() => asked.length > 0)
+    t.deepEqual(asked, [9])
 
     await client.endAsync()
     await server.close()

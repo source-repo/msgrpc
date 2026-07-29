@@ -28,6 +28,17 @@ export interface RpcCallInstanceMethodPayload extends RpcMessage {
      * with the version it serves and refuses only when the two are structurally incompatible.
      */
     version?: string
+    /**
+     * How many milliseconds the caller will still be waiting, measured when it sent this. A server
+     * that finds the budget spent answers `Timeout` instead of running the method.
+     *
+     * A duration, not a moment. An absolute deadline would be exact if every peer agreed on the
+     * time, and one of the peers here is a browser page whose clock belongs to whoever is sitting
+     * at it - so a wrong clock would refuse every command it sent, which is a worse failure than
+     * the one this prevents. The receiver stamps arrival by its own clock and counts from there,
+     * and on MQTT 5 the broker's own expiry accounts for the part of the journey it queued.
+     */
+    ttl?: number
 }
 
 export type RpcErrorCode = 'ClassNotFound' | 'MethodNotFound' | 'Exception' | 'Timeout' | 'TransportError' | 'Unauthorized' | 'Forbidden' | 'InvalidParams' | 'IncompatibleVersion'

@@ -4,10 +4,11 @@
   keeps working, which is the whole point of writing the format down.
 
   What did change in 3.0 is the signed frame version, `mr-v`, which went 1 -> 2. Version 2 covers the
-  content type, the error code and the declared contract version in the signature; version 1 did not,
-  and a frame signed under version 1 no longer verifies. That gate applies only to signed frames -
-  an unsigned plain-MQTT peer sending `mr-v: 1` is still accepted, because its version says nothing
-  about security and interop is the point. See the Security section of the changelog.
+  content type, the error code, the declared contract version, the response topic and the ttl in the
+  signature; version 1 covered none of them, and a frame signed under version 1 no longer verifies.
+  That gate applies only to signed frames - an unsigned plain-MQTT peer sending `mr-v: 1` is still
+  accepted, because its version says nothing about security and interop is the point. See the
+  Security section of the changelog.
 -->
 
 # msgrpc over MQTT 5 — frame layout
@@ -81,14 +82,32 @@ refusing, not resolving.
 
 | property | on | meaning |
 | --- | --- | --- |
-| `mr-v` | all | frame format version, currently `1` |
+| `mr-v` | all | frame format version, currently `2` |
 | `mr-src` | all | sending peer name |
 | `mr-kind` | all | `call` \| `subscribe` \| `unsubscribe` \| `result` \| `error` \| `event` |
 | `mr-path` | call, subscribe, event | exposed instance name |
 | `mr-method` | call, subscribe | method name |
 | `mr-event` | event | event name |
 | `mr-code` | error | `RpcErrorCode` |
+| `mr-ver` | call, subscribe | contract version the caller declares |
+| `mr-ttl` | call, subscribe | milliseconds the caller will still wait, counted from sending |
 | `mr-nonce`, `mr-ts`, `mr-sig` | signed frames | replay and signature fields |
+
+### Why `mr-ttl` as well as `messageExpiryInterval`
+
+They answer different questions. Expiry is the broker's: whole seconds, decremented while queued,
+and it stops at the moment of delivery. `mr-ttl` is the caller's own statement of how long it will
+wait, it is signed, and it survives being relayed onto a transport that is not MQTT at all.
+
+A responder uses both. Expiry, which the broker rewrites, may only **narrow** the ttl and never
+extend it, so what is left when the two are combined is the caller's signed budget minus the time
+the broker actually held the message — measured by the broker, with nobody's clock compared to
+anybody else's.
+
+A duration rather than a deadline is deliberate: an absolute time is only as good as the agreement
+between two clocks, and one of the peers on this network is a browser page whose clock belongs to
+whoever is sitting at it. A wrong clock would refuse every command that page sent, which is worse
+than the late execution this exists to prevent.
 
 ## Request
 
@@ -98,13 +117,14 @@ responseTopic            msgrpc/v2/rsp/hmi
 correlationData          <16 random bytes>
 contentType              application/msgpack
 payloadFormatIndicator   0
-messageExpiryInterval    10                       # seconds, from callTimeout
+messageExpiryInterval    10                       # seconds, from mr-ttl rounded up
 userProperties
-  mr-v                   1
+  mr-v                   2
   mr-src                 hmi
   mr-kind                call
   mr-path                plant
   mr-method              writeSetpoint
+  mr-ttl                 10000                    # ms the caller will still wait
   mr-nonce               <base64>                 # signed frames only
   mr-ts                  1785187832623            # signed frames only
   mr-sig                 <base64>                 # signed frames only
@@ -113,6 +133,18 @@ payload                  <msgpack of [1200]>      # the argument array, nothing 
 
 `correlationData` replaces the `id` field. `mr-src` is retained even though `responseTopic` implies
 it, because identity has to be bound explicitly by the signature rather than inferred from a topic.
+
+**The Response Topic is where the answer goes.** Not a topic derived from `mr-src` — a caller that
+subscribes somewhere of its own choosing is answered there, which is what MQTT 5 request/response
+means and what an outside implementer would expect. Two rules bound it, because the caller is
+choosing a topic somebody else will publish to:
+
+- it must be a publishable topic: no wildcards, no control characters, and not under `$`;
+- it must sit under the transport's prefix, which is the boundary broker ACLs are usually drawn on.
+  `allowResponseTopic` replaces that rule where an installation needs something else.
+
+A request naming a topic outside the rule is **refused**, not quietly answered on a derived topic:
+a caller waiting on the topic it named is not helped by a reply sent elsewhere.
 
 For `mr-kind: subscribe` the payload is the argument array holding the event name, e.g. `["alarm"]`,
 so every request has one shape.
@@ -124,7 +156,7 @@ topic                    msgrpc/v2/rsp/hmi        # whatever responseTopic said
 correlationData          <echoed verbatim>
 contentType              application/msgpack      # mirrors the request
 userProperties
-  mr-v                   1
+  mr-v                   2
   mr-src                 plantServer
   mr-kind                result
   mr-nonce, mr-ts, mr-sig                         # signed frames only
@@ -135,7 +167,7 @@ Errors keep the shape with `mr-kind: error`, an `mr-code` carrying the `RpcError
 of `{name, message, stack?}`:
 
 ```
-userProperties   mr-v=1  mr-src=plantServer  mr-kind=error  mr-code=Forbidden
+userProperties   mr-v=2  mr-src=plantServer  mr-kind=error  mr-code=Forbidden
 payload          <msgpack of {"name":"RpcError","message":"not permitted to call plant.writeSetpoint"}>
 ```
 
@@ -148,7 +180,7 @@ without decoding the payload.
 topic            msgrpc/v2/evt/hmi
                  # no correlationData: unsolicited
 userProperties
-  mr-v           1
+  mr-v           2
   mr-src         plantServer
   mr-kind        event
   mr-path        plant
@@ -164,19 +196,32 @@ topic now carries the addressing, it is signed rather than a `target` field:
 
 ```
 signedInput = utf8(JSON.stringify([
-    v, topic, src, kind, path, methodOrEvent, correlationDataB64, ts, nonce
+    v, topic, responseTopic, src, kind, path, methodOrEvent, correlation,
+    contentType, code, contractVersion, ttl, ts, nonce
 ])) || payload
 ```
 
 Fields are signed **positionally by value**, so the `mr-` property naming does not enter the
 canonical form and renaming a property later would not silently change what verifies. Absent fields
-are `""`; `correlationDataB64` is `""` for events. A JSON array fixes order and escapes values, so
-no combination of names can be made to look like a different frame — the property the current
-`canonicalSignedBytes` already has. `v` is included so a later format revision cannot be made to
-verify under these rules.
+are `""`; `correlation` is `""` for events. A JSON array fixes order and escapes values, so no
+combination of names can be made to look like a different frame. `v` is included so a later format
+revision cannot be made to verify under these rules.
 
-`contentType` is deliberately **not** signed: it describes how to read the payload, and the payload
-bytes are covered directly. Changing it cannot alter the signed bytes, only make them fail to parse.
+**Everything the receiver acts on is covered.** Version 1 left out `contentType`, on the reasoning
+that it only says how to read bytes that are themselves signed — so altering it could make a payload
+fail to parse but never change what was authorised. That reasoning is wrong, and the counterexample
+is one byte long: `0x31` is the JSON text `"1"`, which is the number 1, and a MsgPack positive
+fixint, which is 49. Both parse. Both verified. Flipping one unsigned property turned a signed
+`writeSetpoint(1)` into a signed `writeSetpoint(49)`.
+
+The same argument covers the rest of what version 2 added: `code` decides what a caller does about a
+failure, `contractVersion` decides whether the call is accepted at all, `responseTopic` decides where
+the answer is published, and `ttl` decides whether a command that is already too late still runs.
+
+`messageExpiryInterval` is deliberately **not** signed, because the broker is required to decrement
+it in flight and a signature over it would break on the first queued message. Nothing is lost: it
+may only narrow the signed `mr-ttl`, so rewriting it can delay or drop a frame — which anyone able
+to rewrite it could do anyway — but cannot buy a stale command more time.
 
 Replay protection is unchanged: `mr-nonce` plus the `mr-ts` freshness window, with
 `messageExpiryInterval` as defence in depth at the broker.
@@ -190,9 +235,20 @@ Replay protection is unchanged: `mr-nonce` plus the `mr-ts` freshness window, wi
 | stale requests | delivered late, executed | dropped by the broker at `messageExpiryInterval` |
 | server HA | not possible | shared subscription on `req` |
 
-`messageExpiryInterval` closes a real hole: today a request queued for a persistent server session
-can arrive long after the caller timed out, and the server executes it. It is not a duplicate, so
+`messageExpiryInterval` closes a real hole: a request queued for a persistent server session can
+arrive long after the caller timed out, and the server executes it. It is not a duplicate, so
 duplicate suppression does not help.
+
+The expiry is taken from `mr-ttl`, which is the caller's own timeout. The two used to be set
+independently — a ten-second call timeout against a thirty-second expiry — so a request could be
+delivered and executed twenty seconds after the operator had already been told the call failed. For
+a read that is wasted work; for `start pump` or `reset fault` it is a machine moving when nobody
+expects it to.
+
+A responder that is handed a request should therefore check the budget **immediately before running
+the method**, not only on arrival. The broker's expiry covers the queue in front of the broker; it
+says nothing about a request that arrived promptly and then waited on something slow inside the
+process serving it.
 
 ## What a third party has to implement
 
@@ -201,7 +257,10 @@ A responder serving one namespace:
 1. Subscribe `<prefix>/req/<name>`.
 2. On a message, read `mr-path` and `mr-method` and decode the payload as an argument array using
    `contentType`.
-3. Publish the result to the packet's `responseTopic`, echoing `correlationData`, with
+3. If `mr-ttl` is present, stop and answer `mr-code=Timeout` when more than that many milliseconds
+   have passed since the message arrived — less whatever the broker already deducted from
+   `messageExpiryInterval`. Check it just before running the method, not on arrival.
+4. Publish the result to the packet's `responseTopic`, echoing `correlationData`, with
    `mr-kind=result` and the same `contentType`.
 
 No msgrpc framing, no `$` splitting, no nested envelope. A caller is the mirror image. A third party

@@ -24,6 +24,14 @@ export interface NetworkOptions {
     verify?: MessageVerifier
     /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
     hubCredentials?: unknown
+    /**
+     * Talk to an `https://`, `wss://` or `mqtts://` peer without checking its certificate.
+     *
+     * Deliberately unsafe, and off. It exists because a plant's development bus often has a
+     * self-signed certificate and a debugging tool that cannot reach it is no use - but anything
+     * able to answer on that address can then read and rewrite what this command sends.
+     */
+    insecureTls?: boolean
 }
 
 /** The links a set of options asks for, in the order the commands have always built them. */
@@ -33,15 +41,21 @@ export const networkTransports = (options: NetworkOptions): Transport[] => [
               new MqttTransport(options.name, options.broker, {
                   ...(options.prefix ? { prefix: options.prefix } : {}),
                   ...(options.sign ? { sign: options.sign } : {}),
-                  ...(options.verify ? { verify: options.verify } : {})
+                  ...(options.verify ? { verify: options.verify } : {}),
+                  ...(options.insecureTls ? { allowInsecureTls: true } : {})
               })
           ]
         : []),
     ...(options.hub
         ? [
-              new SocketIoClientTransport(options.name, options.hub, [], {
-                  ...(options.hubCredentials ? { auth: options.hubCredentials as { [key: string]: unknown } } : {})
-              })
+              new SocketIoClientTransport(
+                  options.name,
+                  options.hub,
+                  [],
+                  { ...(options.hubCredentials ? { auth: options.hubCredentials as { [key: string]: unknown } } : {}) },
+                  true,
+                  options.insecureTls
+              )
           ]
         : [])
 ]

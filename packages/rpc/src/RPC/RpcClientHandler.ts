@@ -181,7 +181,11 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             path: instanceName,
             method,
             params,
-            version: this.schemaVersions?.[instanceName]
+            version: this.schemaVersions?.[instanceName],
+            // The same number that arms the timer below, so what the far end is told is exactly
+            // what this caller is going to do. A request carrying no ttl is one with no deadline,
+            // which is what a caller that has disabled its own timeout is asking for.
+            ttl: this.callTimeout > 0 ? this.callTimeout : undefined
         }
         return new Promise((resolve, reject) => {
             // Registered before sending: a response can arrive before sendPayload's promise settles.

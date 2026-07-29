@@ -36,6 +36,45 @@ the code is.
   - **An unknown content type is refused** rather than falling back to MsgPack. Guessing how to read
     somebody else's bytes decides what the values mean.
   - Found in the OpenAI review of 2.3.0, whose reasoning was right in every particular.
+- **TLS certificate verification was off by default.** The socket.io client transport set
+  `rejectUnauthorized: false` before applying the caller's own options, so every Node peer accepted
+  any certificate at all - which on this library's traffic means accepting an impersonated server
+  for industrial commands. Node's default is now left alone. Where a development server really does
+  have a self-signed certificate there is `allowInsecureTls`, on the client, the transport and the
+  CLI's `--insecure-tls`, which says what it does, warns when it is used on a TLS link, and is off.
+  A plant with its own certificate authority should pass the CA instead, which keeps verification on
+  rather than switching it off.
+- **`{ https: true }` opened a server with no certificate.** It called `createHttpsServer()` with
+  nothing in it: the port listened, and every handshake then failed. Replaced by `tls: { cert, key }`
+  - the material is what asks for HTTPS, because there is no useful HTTPS server without it. The old
+  spelling is refused with a message pointing at the new one, in the types and at runtime, rather
+  than silently falling back to plain HTTP.
+- **The incoming MQTT 5 Response Topic is now honoured.** A request's reply used to go to a topic
+  derived from `mr-src` rather than to the Response Topic the packet named. The interop tests passed
+  only because the third-party client happened to choose the same topic msgrpc would have derived; a
+  standards-compliant caller picking any other valid topic was never answered where it was waiting.
+  The topic is validated (no wildcards, no control characters, not under `$`) and must sit under the
+  transport's prefix, which `allowResponseTopic` overrides - a caller now chooses a topic somebody
+  else publishes to, so it needs a boundary. It is signed for the same reason. A request naming a
+  topic outside the rule is refused rather than quietly answered elsewhere.
+- **A request could execute after its caller had given up.** The call timeout defaulted to 10
+  seconds and the MQTT request expiry to 30, set independently, so a queued request could be
+  delivered and run twenty seconds after the operator had been told the call failed. For a read that
+  is wasted work; for `start pump` or `reset fault` it is a machine moving when nobody expects it.
+  - A request now carries `mr-ttl`, the milliseconds its caller will still wait, and **the broker's
+    expiry is derived from it** rather than set independently.
+  - The server **checks the budget immediately before invoking the method** and answers `Timeout`
+    instead of running it. The broker's expiry only covers the queue at the broker; a request that
+    arrived promptly and then waited on something slow inside the serving process needs the check.
+  - **A duration, not an absolute deadline** - which is where this departs from the review's
+    suggestion. An absolute deadline is only as good as the agreement between two clocks, and one of
+    the peers here is a browser page whose clock belongs to whoever is sitting at it: a wrong clock
+    would refuse every command that page sent, which is a worse failure than the one being fixed.
+    The receiver counts from its own arrival stamp, and on MQTT 5 the broker's decremented expiry
+    accounts for the queueing - so nobody's clock is ever compared to anybody else's. `mr-ttl` is
+    signed, and the expiry may only narrow it.
+  - `refuseExpiredCalls` on the server handler turns the refusal off for anyone who wants the old
+    behaviour.
 
 ### Fixed
 

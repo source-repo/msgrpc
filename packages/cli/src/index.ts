@@ -69,6 +69,8 @@ const usage = `source-rpc <command> [options]
     --wait <ms>                 how long to wait for the peer to appear, default 5000
     --name <peer>               how it identifies itself, default cli-<three words>
     --sign <keyfile>            HMAC keys, for a signed network
+    --insecure-tls              accept any certificate on an https/wss/mqtts link
+                                unsafe by design: for a development bus, never a plant
     --json                      machine-readable output
     --args <json>               (call) the whole argument list as a JSON array, instead of words
 
@@ -82,6 +84,8 @@ const usage = `source-rpc <command> [options]
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how the console identifies itself, default console-<three words>
     --sign <keyfile>            HMAC keys, so the console can talk to a signed network
+    --insecure-tls              accept any certificate on an https/wss/mqtts link
+                                unsafe by design: for a development bus, never a plant
 
   mcp
     --broker <url>              an MQTT network
@@ -91,6 +95,8 @@ const usage = `source-rpc <command> [options]
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how it identifies itself, default mcp-<three words>
     --sign <keyfile>            HMAC keys, for a signed network
+    --insecure-tls              accept any certificate on an https/wss/mqtts link
+                                unsafe by design: for a development bus, never a plant
     --contracts <dir>           let it save and load contracts here; without it those tools
                                 are not offered at all
                                 stdio carries the protocol, so it is not for interactive use
@@ -224,6 +230,7 @@ const resolveNetworkFlags = (argv: string[], command: string, defaultNamePrefix:
         ...(prefix ? { prefix } : {}),
         name: requestedName || signing?.keys.name || readableNameFor(defaultNamePrefix),
         callTimeout: Number(argument(argv, '--timeout', '10000')),
+        ...(argv.includes('--insecure-tls') ? { insecureTls: true } : {}),
         ...(signing ? { sign: signing.sign, ...(signing.verify ? { verify: signing.verify } : {}) } : {}),
         signing
     }

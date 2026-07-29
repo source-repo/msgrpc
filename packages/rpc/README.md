@@ -1,3 +1,18 @@
+```
+███████╗ ██████╗ ██╗   ██╗██████╗  ██████╗███████╗
+██╔════╝██╔═══██╗██║   ██║██╔══██╗██╔════╝██╔════╝
+███████╗██║   ██║██║   ██║██████╔╝██║     █████╗
+╚════██║██║   ██║██║   ██║██╔══██╗██║     ██╔══╝
+███████║╚██████╔╝╚██████╔╝██║  ██║╚██████╗███████╗
+╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝ ╚═════╝╚══════╝
+██████╗ ██████╗  ██████╗
+██╔══██╗██╔══██╗██╔════╝
+██████╔╝██████╔╝██║
+██╔══██╗██╔═══╝ ██║
+██║  ██║██║     ╚██████╗
+╚═╝  ╚═╝╚═╝      ╚═════╝
+```
+
 # @source-repo/rpc
 
 Source RPC — TypeScript RPC over socket.io and MQTT 5. A class is the contract: the server hands one live instance
@@ -109,7 +124,7 @@ The server's `transports` say where it listens; the client's url says where to r
 | server | client |
 | --- | --- |
 | `new RpcServer()` | `new RpcClient()` — socket.io on port 3000, the default on both sides |
-| `transports: [{ port: 8080 }]` (also `https`, `path`) | `new RpcClient('http://host:8080')` |
+| `transports: [{ port: 8080 }]` (also `tls`, `path`) | `new RpcClient('http://host:8080')` |
 | `transports: [{ server: httpServer }]` | `new RpcClient(origin)` — share an `http.Server` you already have, so the page and its RPC arrive on one port |
 | `transports: [{ brokerurl: 'mqtt://broker:1883' }]` | `new RpcClient('mqtt://broker:1883', { defaultTarget: 'plantServer' })` |
 
@@ -380,12 +395,23 @@ try {
 | `Exception` | the exposed method threw |
 | `MethodNotFound` | the instance exists but the method is not exposed |
 | `ClassNotFound` | nothing is exposed under that name |
-| `Timeout` | no response within `callTimeout` |
+| `Timeout` | no response within `callTimeout`, or the server refused to run it that late |
 | `TransportError` | the link dropped, or the message could not be encoded or sent |
 | `Unauthorized` | the caller is not authenticated and the server requires it |
 | `Forbidden` | the caller is authenticated but not permitted this call |
 | `InvalidParams` | the arguments do not match the schema for that method |
 | `IncompatibleVersion` | the caller's contract cannot be served by this one |
+
+**A call that timed out will not run afterwards.** Every request carries the time its caller will
+still wait, so a server that reaches the method late answers `Timeout` instead of running it, and an
+MQTT broker is given the same deadline as its message expiry rather than a longer one of its own.
+Without that, a request queued for a restarting server arrives after the operator has already been
+told the call failed and acted on it - which for a read is wasted work and for `start pump` is a
+machine moving when nobody expects it to.
+
+It is a duration on the wire rather than a moment, so no two peers ever have to agree what time it
+is - a browser page's clock belongs to whoever is sitting at it. `refuseExpiredCalls` on the server
+handler turns the refusal off.
 
 ## Events and reconnection
 
@@ -805,10 +831,14 @@ off or absent.
 | `relay` | `true` | forward frames addressed to another connected peer; `false`, or a predicate per connection |
 | `callTimeout` | `10000` | for this server's own outgoing calls, via `proxy()` |
 
-A transport entry is `{ port, https?, path? }` for a socket.io server, `{ server, path? }` to attach
+A transport entry is `{ port, tls?, path? }` for a socket.io server, `{ server, path? }` to attach
 to an existing `http.Server`, `{ connect, path?, credentials? }` to serve over a connection this
 server opens, `{ brokerurl, ...MqttTransportOptions }` for MQTT, or a `Transport` instance you built
 yourself.
+
+`tls` takes the certificate and key that `https.createServer` takes, and its presence is what makes
+the server HTTPS - there is no useful HTTPS server without key material, which is why there is no
+boolean for it.
 
 ### RpcClientOptions
 
@@ -823,6 +853,7 @@ yourself.
 | `credentials` | — | socket.io handshake `auth`, or MQTT broker connect options |
 | `sign` | — | sign outgoing frames; only meaningful for MQTT |
 | `schema` | — | declares the contract version this client was built against |
+| `allowInsecureTls` | `false` | accept any certificate on an `https`/`wss`/`mqtts` link; unsafe by design, and it says so |
 
 ### MqttTransportOptions
 
@@ -835,7 +866,9 @@ yourself.
 | `presence` | `true` | retained last will, which is how peers learn of departures |
 | `persistentSession` | `false`, `true` for `RpcServer`'s own | queue messages while disconnected |
 | `sessionExpirySeconds` | `3600` persistent, `60` otherwise, `0` for a replica | bounds that queueing |
-| `requestExpirySeconds` | `30` | the broker discards a request nobody collected in time |
+| `requestExpirySeconds` | `30` | how long the broker holds a request that states no deadline; one from an RPC client carries its caller's, and the expiry follows that |
+| `allowResponseTopic` | under the prefix | decides whether a request may have its reply published where it asks |
+| `allowInsecureTls` | `false` | accept any certificate from an `mqtts`/`wss` broker; unsafe by design |
 | `channels` | all three | which of `req`/`rsp`/`evt` to subscribe to |
 | `sharedGroup` / `replicaId` | — | see [Replicas](#replicas) |
 | `sign` / `verify` | — | see [Signing frames](#signing-frames) |

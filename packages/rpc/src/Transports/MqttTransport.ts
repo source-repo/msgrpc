@@ -12,6 +12,7 @@ import {
     correlationToString,
     FRAME_VERSION,
     fromInboundFrame,
+    isRequestKind,
     MR,
     readControlProperties,
     SUPPORTED_FRAME_VERSIONS,
@@ -61,6 +62,14 @@ export const isSafeTopicPrefix = (value: unknown): value is string =>
     !value.startsWith('/') &&
     !value.endsWith('/')
 
+/**
+ * A topic something may be published to. Spans levels, but wildcards are only meaningful in a
+ * subscription and `$` opens the broker's own namespace, so neither belongs in a destination that
+ * arrived from somewhere else.
+ */
+export const isSafeTopicName = (value: unknown): value is string =>
+    typeof value === 'string' && value.length > 0 && value.length <= 256 && !hasUnsafeTopicCharacter(value, true) && !value.startsWith('$')
+
 export interface MqttTransportOptions {
     /** Topic namespace. Traffic lives under <prefix>/rpc/<peer> and <prefix>/presence/<peer>. */
     prefix?: string
@@ -105,6 +114,13 @@ export interface MqttTransportOptions {
     persistentSession?: boolean
     /** Broker connection options: credentials, TLS client certificates, clientId, keepalive. */
     mqtt?: mqtt.IClientOptions
+    /**
+     * Connect to an `mqtts://` or `wss://` broker without checking its certificate. Deliberately
+     * unsafe and named so: it accepts any certificate at all, so anything able to answer on the
+     * broker's address can read and rewrite everything this peer sends. For a development broker
+     * with a self-signed certificate; a plant should carry its own CA in `mqtt.ca` instead.
+     */
+    allowInsecureTls?: boolean
     /** Sign every outgoing frame. See RPC/Signing.ts for ready-made HMAC and Ed25519 signers. */
     sign?: MessageSigner
     /**
@@ -123,8 +139,24 @@ export interface MqttTransportOptions {
      * traffic. 4 (MQTT 3.1.1) keeps the older $-delimited header for brokers that need it.
      */
     protocol?: 4 | 5
-    /** MQTT 5 only: request lifetime the broker enforces, so a stale request is never executed. */
+    /**
+     * MQTT 5 only: how long the broker holds a request that names no deadline of its own.
+     *
+     * A request from an RPC client carries the time its caller will still wait, and the expiry is
+     * taken from that instead - the two used to be independent, so a client that gave up after ten
+     * seconds could have its request delivered and executed twenty seconds later. This remains the
+     * answer for a request that says nothing, which is any third-party caller not sending `mr-ttl`.
+     */
     requestExpirySeconds?: number
+    /**
+     * MQTT 5 only: decide whether a request may have its reply published where it asks.
+     *
+     * A request names a Response Topic and that is where the answer goes, which means a caller
+     * chooses a topic this peer then publishes to. Unset, the rule is that the topic must sit under
+     * this transport's own prefix - the boundary broker ACLs are usually drawn on. Supply this to
+     * widen it, or to narrow it to exactly the peer's own reply topic.
+     */
+    allowResponseTopic?: (topic: string, source: string) => boolean
     /** MQTT 5 only: which of this peer's channels to subscribe to. Defaults to all three. */
     channels?: Channel[]
     /**
@@ -164,6 +196,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     readonly requestExpirySeconds: number
     readonly channels: Channel[]
     readonly sharedGroup?: string
+    readonly allowResponseTopic?: (topic: string, source: string) => boolean
     readonly tap: boolean
     readonly replicaId: string
     readonly sessionExpirySeconds: number
@@ -175,11 +208,13 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     /** Peer name -> identity established by verifying that peer's signature. */
     peerIdentities = new Map<string, RpcIdentity>()
     /**
-     * Correlation -> the contentType its request arrived in, so the reply goes back in the same
-     * encoding. A third party that speaks JSON must not be answered in msgpack it cannot read.
-     * Bounded, since the keys come off the wire.
+     * Correlation -> where a request asked for its reply and in what encoding it arrived, so the
+     * answer goes back where it was asked for and in a form the caller can read. A third party that
+     * speaks JSON must not be answered in msgpack, and one that subscribed to a topic of its own
+     * choosing must not be answered on a topic we invented for it. Bounded, since the keys come off
+     * the wire.
      */
-    private replyEncoding = new Map<string, string>()
+    private pendingReplies = new Map<string, { contentType?: string; topic?: string }>()
     private maxTrackedReplies = 1000
 
     constructor(
@@ -199,6 +234,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.tap = options.tap ?? false
         this.persistentSession = options.persistentSession ?? false
         this.sharedGroup = options.sharedGroup
+        this.allowResponseTopic = options.allowResponseTopic
         this.replicaId = options.replicaId ?? uint8ArrayToBase64(globalThis.crypto.getRandomValues(new Uint8Array(6)))
         // A replica keeps no session: its share of the queue would never be drained if it stayed
         // down, and the broker would hold messages for a process that is not coming back.
@@ -207,7 +243,12 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         // as offline when a single process stops, and its siblings' retained 'online' would fight
         // with it. Replicas therefore observe presence without announcing their own.
         this.announcePresence = this.presence && !this.sharedGroup
-        this.mqttOptions = options.mqtt ?? {}
+        this.mqttOptions = options.allowInsecureTls ? { rejectUnauthorized: false, ...options.mqtt } : (options.mqtt ?? {})
+        if (options.allowInsecureTls && /^(mqtts|wss|ssl|tls):/.test(this.url))
+            console.warn(
+                `source-rpc: '${name}' is connecting to ${this.url} with allowInsecureTls, so the broker's certificate is not checked. ` +
+                    "Anything able to answer on that address can read and rewrite this peer's traffic. Use it for a development broker, not a plant."
+            )
         this.sign = options.sign
         this.verify = options.verify
         this.replayGuard = new ReplayGuard(options.maxClockSkew ?? 60000, options.maxTrackedNonces ?? 5000)
@@ -462,9 +503,24 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         }
         const body = new Uint8Array(messageBuffer.buffer, messageBuffer.byteOffset, messageBuffer.byteLength)
         const correlation = correlationToString(properties?.correlationData)
+        // Only a request may say where its answer goes; a reply or an event carrying the property is
+        // saying nothing this peer acts on. Read before the policy is applied, because the signature
+        // covers what arrived either way.
+        const responseTopic = isRequestKind(values[MR.kind]) ? properties?.responseTopic : undefined
+        // The policy is about publishing there, so it applies to a peer that will answer and not to
+        // a tap, whose job is to show what is on the wire rather than to have opinions about it.
+        if (responseTopic !== undefined && !this.tap) {
+            const refusal = this.refuseResponseTopic(responseTopic, source)
+            if (refusal) {
+                // Refused rather than quietly answered on the derived topic: a caller that named a
+                // topic is waiting on that topic, and a reply it never sees is a call that hangs.
+                this.emit(TransportEvent.rejected, { source, reason: refusal })
+                return
+            }
+        }
 
         if (this.verify) {
-            const rejection = await this.verifyV5(topic, values, correlation, body, properties?.contentType)
+            const rejection = await this.verifyV5({ topic, responseTopic, values, correlation, body, contentType: properties?.contentType })
             if (rejection) {
                 this.emit(TransportEvent.rejected, { source, reason: rejection })
                 return
@@ -478,8 +534,9 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.rejected, { source, reason: `undecodable payload: ${String(e)}` })
             return
         }
-        // Recorded before dispatch so the reply can mirror it.
-        if (correlation) this.rememberReplyEncoding(correlation, properties?.contentType)
+        // Recorded before dispatch so the reply can mirror it. Not for a tap, which replies to
+        // nothing and would otherwise keep a note about every request on the network.
+        if (correlation && !this.tap) this.rememberReply(correlation, properties?.contentType, responseTopic)
         const message = fromInboundFrame({
             kind: values[MR.kind],
             correlation,
@@ -488,6 +545,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             event: values[MR.event],
             code: values[MR.code],
             version: values[MR.contractVersion],
+            ttl: this.remainingTtl(values[MR.ttl], properties?.messageExpiryInterval),
             body: decoded
         })
         if (!message) {
@@ -594,21 +652,68 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         }
     }
 
-    private rememberReplyEncoding(correlation: string, contentType: string | undefined) {
-        if (!contentType || contentType === this.codec.contentType) return
-        this.replyEncoding.set(correlation, contentType)
-        while (this.replyEncoding.size > this.maxTrackedReplies) {
-            const oldest = this.replyEncoding.keys().next()
+    /**
+     * A reason to refuse a response topic, or undefined to publish the answer there.
+     *
+     * The topic comes from whoever sent the request, and this peer is the one that will publish to
+     * it, so without a rule a caller could have a server publish anywhere the broker's ACLs let it -
+     * over another peer's presence, into `$SYS`, or onto a retained topic something else reads. The
+     * default rule is the transport's own prefix, since that is the boundary an operator already
+     * draws ACLs on.
+     */
+    private refuseResponseTopic(topic: string, source: string) {
+        if (!isSafeTopicName(topic)) return `unusable response topic '${String(topic).slice(0, 64)}'`
+        if (this.allowResponseTopic) return this.allowResponseTopic(topic, source) ? undefined : `response topic '${topic}' is not allowed here`
+        return topic.startsWith(`${this.prefix}/`) ? undefined : `response topic '${topic}' is outside '${this.prefix}/'`
+    }
+
+    /**
+     * What is left of the caller's stated budget.
+     *
+     * MQTT 5 requires a server to hand on the Message Expiry Interval it received minus the time
+     * the message spent waiting in it, so for a request that was queued this is the caller's budget
+     * with the queueing already deducted - measured by the broker, with no clock of ours entering
+     * into it. Taken as an upper bound only: expiry is whole seconds and a broker of unknown
+     * quality set it, so it may shorten what the caller signed and never lengthen it.
+     */
+    private remainingTtl(stated: string | undefined, expirySeconds: number | undefined) {
+        if (stated === undefined) return undefined
+        const ttl = Number(stated)
+        if (!Number.isFinite(ttl) || ttl < 0) return undefined
+        if (typeof expirySeconds !== 'number' || !Number.isFinite(expirySeconds)) return ttl
+        return Math.min(ttl, Math.max(0, expirySeconds) * 1000)
+    }
+
+    /**
+     * Seconds the broker should hold a request: what its caller said it would wait, rounded up.
+     *
+     * Clamped to the four-byte field MQTT gives it - about 136 years - because the ttl comes from
+     * whatever number a caller set as its timeout, and a value that does not fit would be a packet
+     * the broker refuses rather than a request that waits a long time.
+     */
+    private expiryFor(ttl: number | undefined) {
+        if (ttl === undefined || !Number.isFinite(ttl) || ttl <= 0) return this.requestExpirySeconds
+        return Math.min(Math.max(1, Math.ceil(ttl / 1000)), 0xffffffff)
+    }
+
+    private rememberReply(correlation: string, contentType: string | undefined, topic: string | undefined) {
+        // Only what differs from what would be derived anyway, so an ordinary exchange between two
+        // of our own peers adds nothing to this map.
+        const encoding = contentType && contentType !== this.codec.contentType ? contentType : undefined
+        if (!encoding && !topic) return
+        this.pendingReplies.set(correlation, { contentType: encoding, topic })
+        while (this.pendingReplies.size > this.maxTrackedReplies) {
+            const oldest = this.pendingReplies.keys().next()
             if (oldest.done) break
-            this.replyEncoding.delete(oldest.value)
+            this.pendingReplies.delete(oldest.value)
         }
     }
 
-    private takeReplyEncoding(correlation: string) {
-        const contentType = this.replyEncoding.get(correlation)
-        if (!contentType) return undefined
-        this.replyEncoding.delete(correlation)
-        return this.codecFor(contentType)
+    /** One request, one answer: taking it also forgets it. */
+    private takeReply(correlation: string) {
+        const pending = this.pendingReplies.get(correlation)
+        if (pending) this.pendingReplies.delete(correlation)
+        return pending
     }
 
     /** A peer may speak JSON while this one defaults to msgpack; contentType says which. */
@@ -617,7 +722,15 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         return this.codec
     }
 
-    private async verifyV5(topic: string, values: { [key: string]: string }, correlation: string | undefined, body: Uint8Array, contentType?: string) {
+    private async verifyV5(frame: {
+        topic: string
+        responseTopic?: string
+        values: { [key: string]: string }
+        correlation?: string
+        body: Uint8Array
+        contentType?: string
+    }) {
+        const { topic, values, correlation, body, contentType } = frame
         const signature = values[MR.signature]
         const nonce = values[MR.nonce]
         const timestamp = Number(values[MR.timestamp])
@@ -635,16 +748,19 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         const canonical = canonicalSignedBytesV5({
             version: values[MR.version] ?? FRAME_VERSION,
             topic,
+            responseTopic: frame.responseTopic ?? '',
             source,
             kind: values[MR.kind] ?? '',
             path: values[MR.path] ?? '',
             methodOrEvent: values[MR.method] ?? values[MR.event] ?? '',
             correlation: correlation ?? '',
             // Rebuilt from what arrived, so tampering with any of them fails the signature rather
-            // than changing how the payload is read or what the caller does about a failure.
+            // than changing how the payload is read, where the answer is sent, what the caller does
+            // about a failure, or whether a command that is already too late still runs.
             contentType: contentType ?? '',
             code: values[MR.code] ?? '',
             contractVersion: values[MR.contractVersion] ?? '',
+            ttl: values[MR.ttl] ?? '',
             timestamp,
             nonce,
             payload: body
@@ -731,11 +847,15 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             this.emit(TransportEvent.unroutable, { source, target, reason: 'no MQTT 5 representation for this message' })
             return
         }
-        const topic = this.channelTopic(frame.channel, target)
-        // A reply mirrors the encoding its request used; anything else uses this peer's own.
-        const replyCodec = frame.channel === 'rsp' && frame.correlation ? this.takeReplyEncoding(frame.correlation) : undefined
-        const codec = replyCodec ?? this.codec
+        // A reply goes where its request asked and in the encoding it arrived in; anything else goes
+        // to the addressee's own channel in this peer's own encoding.
+        const pending = frame.channel === 'rsp' && frame.correlation ? this.takeReply(frame.correlation) : undefined
+        const topic = pending?.topic ?? this.channelTopic(frame.channel, target)
+        const codec = pending?.contentType ? this.codecFor(pending.contentType) : this.codec
         const body = codec.encode(frame.body)
+        // Where this peer wants its own answer. Named explicitly rather than left to the far end to
+        // derive, and signed below, because the far end now publishes to it.
+        const responseTopic = frame.channel === 'req' ? this.channelTopic('rsp', source) : undefined
         const userProperties: { [key: string]: string } = {
             [MR.version]: FRAME_VERSION,
             [MR.source]: source,
@@ -746,6 +866,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         if (frame.event) userProperties[MR.event] = frame.event
         if (frame.code) userProperties[MR.code] = frame.code
         if (frame.version) userProperties[MR.contractVersion] = frame.version
+        if (frame.ttl !== undefined) userProperties[MR.ttl] = String(frame.ttl)
 
         if (this.sign) {
             const nonce = createNonce()
@@ -753,6 +874,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             const canonical = canonicalSignedBytesV5({
                 version: FRAME_VERSION,
                 topic,
+                responseTopic: responseTopic ?? '',
                 source,
                 kind: frame.kind,
                 path: frame.path ?? '',
@@ -761,6 +883,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 contentType: codec.contentType,
                 code: frame.code ?? '',
                 contractVersion: frame.version ?? '',
+                ttl: frame.ttl !== undefined ? String(frame.ttl) : '',
                 timestamp,
                 nonce,
                 payload: body
@@ -776,10 +899,11 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 contentType: codec.contentType,
                 payloadFormatIndicator: codec.contentType === jsonCodec.contentType,
                 correlationData: frame.correlation ? Buffer.from(correlationToBytes(frame.correlation)!) : undefined,
-                // Only a request expects an answer, and only a request should expire.
-                ...(frame.channel === 'req'
-                    ? { responseTopic: this.channelTopic('rsp', source), messageExpiryInterval: this.requestExpirySeconds }
-                    : {}),
+                // Only a request expects an answer, and only a request should expire. The expiry is
+                // the caller's own remaining time, so the broker stops holding the request at the
+                // moment the caller stops waiting for it - the two used to be set independently,
+                // and a request outlived its caller's patience by twenty seconds by default.
+                ...(responseTopic ? { responseTopic, messageExpiryInterval: this.expiryFor(frame.ttl) } : {}),
                 userProperties
             }
         })
