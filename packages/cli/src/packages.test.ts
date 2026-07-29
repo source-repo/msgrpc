@@ -1,5 +1,5 @@
 import test from 'ava'
-import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { addPackage, ensureManifest, listPackages, npmEntryPoint, removePackage } from './packages.js'
@@ -54,16 +54,36 @@ test("npm is reached through its own script, so Windows never spawns a .cmd", (t
     // Node refuses to spawn a .cmd without a shell since the fix for CVE-2024-27980, and turning the
     // shell on would be worse: `>`, `<`, `|` and `^` are all legal in a version range and all
     // metacharacters to cmd.exe. Running npm-cli.js with this Node keeps every argument as argv.
-    const windows = npmEntryPoint('C:\\Program Files\\nodejs\\node.exe', 'win32')
-    // Nothing is on disk at that path here, so the lookup finds nothing - what matters is that the
-    // candidate it would use is the script and not the shim.
-    t.is(windows, undefined)
+    //
+    // Both layouts are built under a temp directory, so this tests the lookup rather than whatever
+    // is installed on the machine running it. The first version of this asserted that a made-up
+    // `C:\Program Files\nodejs` path found nothing - which is true on Linux and false on a Windows
+    // runner, where that directory is exactly where Node lives.
+    const root = mkdtempSync(join(tmpdir(), 'source-rpc-npm-'))
 
-    // On this machine there is a real one, and it is a .js rather than a shell wrapper.
+    // Windows keeps npm beside node.exe.
+    const windowsCli = join(root, 'win', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    mkdirSync(join(root, 'win', 'node_modules', 'npm', 'bin'), { recursive: true })
+    writeFileSync(windowsCli, '')
+    t.is(npmEntryPoint(join(root, 'win', 'node.exe'), 'win32'), windowsCli)
+
+    // The POSIX layout puts it under ../lib from the bin directory.
+    const posixCli = join(root, 'posix', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    mkdirSync(join(root, 'posix', 'lib', 'node_modules', 'npm', 'bin'), { recursive: true })
+    mkdirSync(join(root, 'posix', 'bin'), { recursive: true })
+    writeFileSync(posixCli, '')
+    t.is(npmEntryPoint(join(root, 'posix', 'bin', 'node'), 'linux'), posixCli)
+
+    // Nothing there is nothing found, rather than a path that does not exist.
+    t.is(npmEntryPoint(join(root, 'nowhere', 'node.exe'), 'win32'), undefined)
+
+    // And on this machine it resolves to a script rather than a shell wrapper.
     const found = npmEntryPoint()
     t.truthy(found, 'npm should be resolvable next to the node running these tests')
     t.regex(String(found), /npm-cli\.js$/)
     t.notRegex(String(found), /\.cmd$/)
+
+    rmSync(root, { recursive: true, force: true })
 })
 
 test('anything that is not a package name is refused', async (t) => {

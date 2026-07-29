@@ -209,7 +209,11 @@ test('a python program that stops reading fails the call rather than the process
     await new Promise((resolve) => setTimeout(resolve, 400))
 
     const failure = await t.throwsAsync(runtime.call('a.b', []))
-    t.regex(String(failure?.message), /no longer reading/)
+    // The route differs by platform and the guarantee does not. On POSIX the write gets EPIPE and
+    // the call is refused at once; on Windows closing the descriptor does not break the pipe the
+    // same way, so the call waits out its budget instead. Either is a failed call rather than a
+    // failed process, which is the whole of what this is protecting.
+    t.regex(String(failure?.message), /no longer reading|did not answer/)
 
     await runtime.close()
     // Reaching here at all is the assertion: an uncaught exception would have ended the worker.
