@@ -1,0 +1,84 @@
+# Scan the images that are already published, on a timer.
+#
+# The release workflow scans what it is about to push, which catches a bad image on the way out. It
+# cannot catch the other case, which is the more common one: the image is fine on Friday and an
+# advisory lands against something in it on Tuesday. Nothing rebuilds in between, so without this the
+# first anyone hears of it is the next release - discovered while trying to ship, and unrelated to
+# whatever was being shipped.
+#
+# The remedy is nearly always to re-run the release build rather than to change anything: the
+# Dockerfile floats on `node:24-alpine` and runs `apk upgrade`, so a rebuild picks up the fix by
+# itself. This exists to say when that is worth doing.
+#
+# Worth knowing: GitHub disables scheduled workflows after 60 days without repository activity, and
+# does it quietly. On a repository being worked on that never comes up; on one that has gone quiet,
+# this stops running at exactly the point nobody is watching it.
+name: Scan published images
+
+on:
+    schedule:
+        # Monday morning UTC: a finding then has the week in front of it rather than the weekend.
+        - cron: '0 6 * * 1'
+    workflow_dispatch:
+        inputs:
+            tag:
+                description: The published tag to scan
+                required: false
+                default: latest
+
+permissions:
+    contents: read
+    packages: read
+
+jobs:
+    scan:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Log in to GitHub Packages
+              uses: docker/login-action@v3
+              with:
+                  registry: ghcr.io
+                  username: ${{ github.actor }}
+                  password: ${{ secrets.GITHUB_TOKEN }}
+
+            # Before the first release there is nothing to scan, and a red run for that reason would
+            # train everybody to ignore this one.
+            - name: Is there anything published yet
+              id: published
+              env:
+                  TAG: ${{ github.event.inputs.tag || 'latest' }}
+              run: |
+                  image=ghcr.io/${{ github.repository_owner }}/rpc-cli
+                  if docker manifest inspect "${image}:${TAG}" > /dev/null 2>&1; then
+                    echo "runtime=${image}:${TAG}" >> "$GITHUB_OUTPUT"
+                  else
+                    echo "no image at ${image}:${TAG} yet - nothing to scan"
+                  fi
+                  if docker manifest inspect "${image}:dev" > /dev/null 2>&1; then
+                    echo "dev=${image}:dev" >> "$GITHUB_OUTPUT"
+                  fi
+
+            # The one that matters. `ignore-unfixed` so a red run always means there is something to
+            # do: a rebuild, or a base image that has moved on.
+            - name: Scan the runtime image
+              if: steps.published.outputs.runtime
+              uses: aquasecurity/trivy-action@v0.36.0
+              with:
+                  image-ref: ${{ steps.published.outputs.runtime }}
+                  format: table
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: '1'
+
+            # Reported and not enforced, the same as at release time: this image ships npm on purpose
+            # and inherits the advisories against npm's own dependencies. `always()` so it still runs
+            # when the step above has already failed - both answers are wanted in one place.
+            - name: Scan the development image
+              if: always() && steps.published.outputs.dev
+              uses: aquasecurity/trivy-action@v0.36.0
+              with:
+                  image-ref: ${{ steps.published.outputs.dev }}
+                  format: table
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: '0'

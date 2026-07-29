@@ -1,42 +1,24 @@
-<!--
-  The wire identifiers in this document are deliberately unchanged by the 3.0 rename: the packages
-  and the command became Source RPC, the protocol stayed msgrpc. A peer deployed against v1 or v2
-  keeps working, which is the whole point of writing the format down.
+<!-- The wire identifiers in this document are deliberately unchanged by the 3.0 rename: the packages and the command became Source RPC, the protocol stayed msgrpc. A peer deployed against v1 or v2 keeps working, which is the whole point of writing the format down.
 
-  What did change in 3.0 is the signed frame version, `mr-v`, which went 1 -> 2. Version 2 covers the
-  content type, the error code, the declared contract version, the response topic and the ttl in the
-  signature; version 1 covered none of them, and a frame signed under version 1 no longer verifies.
-  That gate applies only to signed frames - an unsigned plain-MQTT peer sending `mr-v: 1` is still
-  accepted, because its version says nothing about security and interop is the point. See the
-  Security section of the changelog.
--->
+  What did change in 3.0 is the signed frame version, `mr-v`, which went 1 -> 2. Version 2 covers the content type, the error code, the declared contract version, the response topic and the ttl in the signature; version 1 covered none of them, and a frame signed under version 1 no longer verifies. That gate applies only to signed frames - an unsigned plain-MQTT peer sending `mr-v: 1` is still accepted, because its version says nothing about security and interop is the point. See the Security section of the changelog. -->
 
 # msgrpc over MQTT 5 — frame layout
 
-**Status: implemented.** `MqttTransport` speaks this by default (`protocol: 5`); `protocol: 4`
-keeps the older `$`-delimited header for brokers that need it. Verified against a live broker with
-vanilla mqtt.js on the far side, in `src/Mqtt5.test.ts`.
+**Status: implemented.** `MqttTransport` speaks this by default (`protocol: 5`); `protocol: 4` keeps the older `$`-delimited header for brokers that need it. Verified against a live broker with vanilla mqtt.js on the far side, in `src/Mqtt5.test.ts`.
 
-Shared subscriptions (`sharedGroup` / `replicaId`) and bounded sessions (`sessionExpirySeconds`)
-are implemented too.
+Shared subscriptions (`sharedGroup` / `replicaId`) and bounded sessions (`sessionExpirySeconds`) are implemented too.
 
 ## Why
 
-Today an outsider wanting to call `plant.writeSetpoint(1200)` must publish, on
-`msgrpc/v1/rpc/plantServer`:
+Today an outsider wanting to call `plant.writeSetpoint(1200)` must publish, on `msgrpc/v1/rpc/plantServer`:
 
 ```
 {"source":"hmi","target":"plantServer","time":1785187832623,"seq":0}$<msgpack>
 ```
 
-with the msgpack decoding to a doubly-nested envelope, and must know that `type: 'POST'` means
-"call", that `path` is the instance name, and that replies correlate by `payload.id` on
-`msgrpc/v1/rpc/hmi`. None of that is discoverable, and in MQTT tooling it renders as an opaque blob.
+with the msgpack decoding to a doubly-nested envelope, and must know that `type: 'POST'` means "call", that `path` is the instance name, and that replies correlate by `payload.id` on `msgrpc/v1/rpc/hmi`. None of that is discoverable, and in MQTT tooling it renders as an opaque blob.
 
-MQTT 5 has request/response in the protocol: **Response Topic** says where to reply, **Correlation
-Data** matches reply to request. Moving to it makes a frame self-describing in any MQTT 5 client
-and in standard tooling, and unlocks two things that matter more than interop for control systems:
-message expiry and shared subscriptions.
+MQTT 5 has request/response in the protocol: **Response Topic** says where to reply, **Correlation Data** matches reply to request. Moving to it makes a frame self-describing in any MQTT 5 client and in standard tooling, and unlocks two things that matter more than interop for control systems: message expiry and shared subscriptions.
 
 ## Topics
 
@@ -47,38 +29,25 @@ message expiry and shared subscriptions.
 | `<prefix>/evt/<peer>` | events pushed to a subscriber | peers that subscribe to events |
 | `<prefix>/presence/<peer>` | retained `online` / `offline` (unchanged) | all |
 
-Requests are on their own topic because **shared subscriptions only make sense there**. Replicas of
-a server subscribe `$share/<group>/<prefix>/req/plantServer` and the broker distributes requests
-among them. If responses shared that topic they would be load-balanced too, and a reply meant for
-one requester would land on a replica instead.
+Requests are on their own topic because **shared subscriptions only make sense there**. Replicas of a server subscribe `$share/<group>/<prefix>/req/plantServer` and the broker distributes requests among them. If responses shared that topic they would be load-balanced too, and a reply meant for one requester would land on a replica instead.
 
-Splitting `rsp` from `evt` costs one subscription and buys least-privilege ACLs: a pure client never
-subscribes to `req`, a pure server never subscribes to `evt`.
+Splitting `rsp` from `evt` costs one subscription and buys least-privilege ACLs: a pure client never subscribes to `req`, a pure server never subscribes to `evt`.
 
-The default prefix moves `msgrpc/v1` → `msgrpc/v2`. v1 and v2 peers therefore share a broker without
-seeing each other, and a bridge peer can run one transport of each during migration.
+The default prefix moves `msgrpc/v1` → `msgrpc/v2`. v1 and v2 peers therefore share a broker without seeing each other, and a bridge peer can run one transport of each during migration.
 
 ## Encoding
 
-MsgPack by default, JSON accepted. MsgPack sits between JSON and protobuf on size and parse cost
-without a schema toolchain, and has small allocation-light C implementations for constrained
-targets — which matters when the fleet includes embedded devices sending a lot of data.
+MsgPack by default, JSON accepted. MsgPack sits between JSON and protobuf on size and parse cost without a schema toolchain, and has small allocation-light C implementations for constrained targets — which matters when the fleet includes embedded devices sending a lot of data.
 
 - `contentType` states which is in use: `application/msgpack` or `application/json`.
 - `payloadFormatIndicator` is `0` for msgpack, `1` for JSON, so tooling renders payloads correctly.
-- **A responder replies in the request's `contentType`.** A JSON-speaking third party gets JSON
-  back without negotiating anything, and source-rpc peers stay on msgpack throughout.
+- **A responder replies in the request's `contentType`.** A JSON-speaking third party gets JSON back without negotiating anything, and source-rpc peers stay on msgpack throughout.
 
 ## User properties
 
-All msgrpc control fields are prefixed `mr-`, so a broker or gateway that injects its own user
-properties (`clientid`, `username`, `peerhost` and similar) cannot be mistaken for one of ours. The
-prefix is kept to three characters because every key is carried in full on every packet, and packet
-overhead is a real cost on constrained links.
+All msgrpc control fields are prefixed `mr-`, so a broker or gateway that injects its own user properties (`clientid`, `username`, `peerhost` and similar) cannot be mistaken for one of ours. The prefix is kept to three characters because every key is carried in full on every packet, and packet overhead is a real cost on constrained links.
 
-MQTT permits a user property to repeat. **A frame with any `mr-*` property present more than once is
-rejected**, rather than taking the first or last — a duplicated control field is an ambiguity worth
-refusing, not resolving.
+MQTT permits a user property to repeat. **A frame with any `mr-*` property present more than once is rejected**, rather than taking the first or last — a duplicated control field is an ambiguity worth refusing, not resolving.
 
 | property | on | meaning |
 | --- | --- | --- |
@@ -96,19 +65,11 @@ refusing, not resolving.
 
 ### Why `mr-ttl` as well as `messageExpiryInterval`
 
-They answer different questions. Expiry is the broker's: whole seconds, decremented while queued,
-and it stops at the moment of delivery. `mr-ttl` is the caller's own statement of how long it will
-wait, it is signed, and it survives being relayed onto a transport that is not MQTT at all.
+They answer different questions. Expiry is the broker's: whole seconds, decremented while queued, and it stops at the moment of delivery. `mr-ttl` is the caller's own statement of how long it will wait, it is signed, and it survives being relayed onto a transport that is not MQTT at all.
 
-A responder uses both. Expiry, which the broker rewrites, may only **narrow** the ttl and never
-extend it, so what is left when the two are combined is the caller's signed budget minus the time
-the broker actually held the message — measured by the broker, with nobody's clock compared to
-anybody else's.
+A responder uses both. Expiry, which the broker rewrites, may only **narrow** the ttl and never extend it, so what is left when the two are combined is the caller's signed budget minus the time the broker actually held the message — measured by the broker, with nobody's clock compared to anybody else's.
 
-A duration rather than a deadline is deliberate: an absolute time is only as good as the agreement
-between two clocks, and one of the peers on this network is a browser page whose clock belongs to
-whoever is sitting at it. A wrong clock would refuse every command that page sent, which is worse
-than the late execution this exists to prevent.
+A duration rather than a deadline is deliberate: an absolute time is only as good as the agreement between two clocks, and one of the peers on this network is a browser page whose clock belongs to whoever is sitting at it. A wrong clock would refuse every command that page sent, which is worse than the late execution this exists to prevent.
 
 ## Request
 
@@ -132,23 +93,16 @@ userProperties
 payload                  <msgpack of [1200]>      # the argument array, nothing else
 ```
 
-`correlationData` replaces the `id` field. `mr-src` is retained even though `responseTopic` implies
-it, because identity has to be bound explicitly by the signature rather than inferred from a topic.
+`correlationData` replaces the `id` field. `mr-src` is retained even though `responseTopic` implies it, because identity has to be bound explicitly by the signature rather than inferred from a topic.
 
-**The Response Topic is where the answer goes.** Not a topic derived from `mr-src` — a caller that
-subscribes somewhere of its own choosing is answered there, which is what MQTT 5 request/response
-means and what an outside implementer would expect. Two rules bound it, because the caller is
-choosing a topic somebody else will publish to:
+**The Response Topic is where the answer goes.** Not a topic derived from `mr-src` — a caller that subscribes somewhere of its own choosing is answered there, which is what MQTT 5 request/response means and what an outside implementer would expect. Two rules bound it, because the caller is choosing a topic somebody else will publish to:
 
 - it must be a publishable topic: no wildcards, no control characters, and not under `$`;
-- it must sit under the transport's prefix, which is the boundary broker ACLs are usually drawn on.
-  `allowResponseTopic` replaces that rule where an installation needs something else.
+- it must sit under the transport's prefix, which is the boundary broker ACLs are usually drawn on. `allowResponseTopic` replaces that rule where an installation needs something else.
 
-A request naming a topic outside the rule is **refused**, not quietly answered on a derived topic:
-a caller waiting on the topic it named is not helped by a reply sent elsewhere.
+A request naming a topic outside the rule is **refused**, not quietly answered on a derived topic: a caller waiting on the topic it named is not helped by a reply sent elsewhere.
 
-For `mr-kind: subscribe` the payload is the argument array holding the event name, e.g. `["alarm"]`,
-so every request has one shape.
+For `mr-kind: subscribe` the payload is the argument array holding the event name, e.g. `["alarm"]`, so every request has one shape.
 
 ## Response
 
@@ -164,16 +118,14 @@ userProperties
 payload                  <msgpack of 1200>        # the return value, encoded bare
 ```
 
-Errors keep the shape with `mr-kind: error`, an `mr-code` carrying the `RpcErrorCode`, and a payload
-of `{name, message, stack?}`:
+Errors keep the shape with `mr-kind: error`, an `mr-code` carrying the `RpcErrorCode`, and a payload of `{name, message, stack?}`:
 
 ```
 userProperties   mr-v=2  mr-src=plantServer  mr-kind=error  mr-code=Forbidden
 payload          <msgpack of {"name":"RpcError","message":"not permitted to call plant.writeSetpoint"}>
 ```
 
-Putting the code in a property means an operator can see *why* a call failed in MQTT Explorer
-without decoding the payload.
+Putting the code in a property means an operator can see *why* a call failed in MQTT Explorer without decoding the payload.
 
 ## Event
 
@@ -192,8 +144,7 @@ payload          <msgpack of ["high pressure"]>   # the emit argument array
 
 ## Signing
 
-The signature must cover everything that decides what a frame means and where it goes. Since the
-topic now carries the addressing, it is signed rather than a `target` field:
+The signature must cover everything that decides what a frame means and where it goes. Since the topic now carries the addressing, it is signed rather than a `target` field:
 
 ```
 signedInput = utf8(JSON.stringify([
@@ -202,31 +153,15 @@ signedInput = utf8(JSON.stringify([
 ])) || payload
 ```
 
-Fields are signed **positionally by value**, so the `mr-` property naming does not enter the
-canonical form and renaming a property later would not silently change what verifies. Absent fields
-are `""`; `correlation` is `""` for events. A JSON array fixes order and escapes values, so no
-combination of names can be made to look like a different frame. `v` is included so a later format
-revision cannot be made to verify under these rules.
+Fields are signed **positionally by value**, so the `mr-` property naming does not enter the canonical form and renaming a property later would not silently change what verifies. Absent fields are `""`; `correlation` is `""` for events. A JSON array fixes order and escapes values, so no combination of names can be made to look like a different frame. `v` is included so a later format revision cannot be made to verify under these rules.
 
-**Everything the receiver acts on is covered.** Version 1 left out `contentType`, on the reasoning
-that it only says how to read bytes that are themselves signed — so altering it could make a payload
-fail to parse but never change what was authorised. That reasoning is wrong, and the counterexample
-is one byte long: `0x31` is the JSON text `"1"`, which is the number 1, and a MsgPack positive
-fixint, which is 49. Both parse. Both verified. Flipping one unsigned property turned a signed
-`writeSetpoint(1)` into a signed `writeSetpoint(49)`.
+**Everything the receiver acts on is covered.** Version 1 left out `contentType`, on the reasoning that it only says how to read bytes that are themselves signed — so altering it could make a payload fail to parse but never change what was authorised. That reasoning is wrong, and the counterexample is one byte long: `0x31` is the JSON text `"1"`, which is the number 1, and a MsgPack positive fixint, which is 49. Both parse. Both verified. Flipping one unsigned property turned a signed `writeSetpoint(1)` into a signed `writeSetpoint(49)`.
 
-The same argument covers the rest of what version 2 added: `code` decides what a caller does about a
-failure, `contractVersion` decides whether the call is accepted at all, `responseTopic` decides where
-the answer is published, `ttl` decides whether a command that is already too late still runs, and
-`mr-idem` decides whether a command that has already run runs again.
+The same argument covers the rest of what version 2 added: `code` decides what a caller does about a failure, `contractVersion` decides whether the call is accepted at all, `responseTopic` decides where the answer is published, `ttl` decides whether a command that is already too late still runs, and `mr-idem` decides whether a command that has already run runs again.
 
-`messageExpiryInterval` is deliberately **not** signed, because the broker is required to decrement
-it in flight and a signature over it would break on the first queued message. Nothing is lost: it
-may only narrow the signed `mr-ttl`, so rewriting it can delay or drop a frame — which anyone able
-to rewrite it could do anyway — but cannot buy a stale command more time.
+`messageExpiryInterval` is deliberately **not** signed, because the broker is required to decrement it in flight and a signature over it would break on the first queued message. Nothing is lost: it may only narrow the signed `mr-ttl`, so rewriting it can delay or drop a frame — which anyone able to rewrite it could do anyway — but cannot buy a stale command more time.
 
-Replay protection is unchanged: `mr-nonce` plus the `mr-ts` freshness window, with
-`messageExpiryInterval` as defence in depth at the broker.
+Replay protection is unchanged: `mr-nonce` plus the `mr-ts` freshness window, with `messageExpiryInterval` as defence in depth at the broker.
 
 ## Session and delivery
 
@@ -237,69 +172,37 @@ Replay protection is unchanged: `mr-nonce` plus the `mr-ts` freshness window, wi
 | stale requests | delivered late, executed | dropped by the broker at `messageExpiryInterval` |
 | server HA | not possible | shared subscription on `req` |
 
-`messageExpiryInterval` closes a real hole: a request queued for a persistent server session can
-arrive long after the caller timed out, and the server executes it. It is not a duplicate, so
-duplicate suppression does not help.
+`messageExpiryInterval` closes a real hole: a request queued for a persistent server session can arrive long after the caller timed out, and the server executes it. It is not a duplicate, so duplicate suppression does not help.
 
-The expiry is taken from `mr-ttl`, which is the caller's own timeout. The two used to be set
-independently — a ten-second call timeout against a thirty-second expiry — so a request could be
-delivered and executed twenty seconds after the operator had already been told the call failed. For
-a read that is wasted work; for `start pump` or `reset fault` it is a machine moving when nobody
-expects it to.
+The expiry is taken from `mr-ttl`, which is the caller's own timeout. The two used to be set independently — a ten-second call timeout against a thirty-second expiry — so a request could be delivered and executed twenty seconds after the operator had already been told the call failed. For a read that is wasted work; for `start pump` or `reset fault` it is a machine moving when nobody expects it to.
 
-A responder that is handed a request should therefore check the budget **immediately before running
-the method**, not only on arrival. The broker's expiry covers the queue in front of the broker; it
-says nothing about a request that arrived promptly and then waited on something slow inside the
-process serving it.
+A responder that is handed a request should therefore check the budget **immediately before running the method**, not only on arrival. The broker's expiry covers the queue in front of the broker; it says nothing about a request that arrived promptly and then waited on something slow inside the process serving it.
 
 ## What a third party has to implement
 
 A responder serving one namespace:
 
 1. Subscribe `<prefix>/req/<name>`.
-2. On a message, read `mr-path` and `mr-method` and decode the payload as an argument array using
-   `contentType`.
-3. If `mr-ttl` is present, stop and answer `mr-code=Timeout` when more than that many milliseconds
-   have passed since the message arrived — less whatever the broker already deducted from
-   `messageExpiryInterval`. Check it just before running the method, not on arrival.
-   If `mr-idem` is present and the method is one a repeat would change something with, look the key
-   up before running and answer from the recorded outcome if it is there.
-4. Publish the result to the packet's `responseTopic`, echoing `correlationData`, with
-   `mr-kind=result` and the same `contentType`.
+2. On a message, read `mr-path` and `mr-method` and decode the payload as an argument array using `contentType`.
+3. If `mr-ttl` is present, stop and answer `mr-code=Timeout` when more than that many milliseconds have passed since the message arrived — less whatever the broker already deducted from `messageExpiryInterval`. Check it just before running the method, not on arrival. If `mr-idem` is present and the method is one a repeat would change something with, look the key up before running and answer from the recorded outcome if it is there.
+4. Publish the result to the packet's `responseTopic`, echoing `correlationData`, with `mr-kind=result` and the same `contentType`.
 
-No msgrpc framing, no `$` splitting, no nested envelope. A caller is the mirror image. A third party
-that prefers JSON simply sets `contentType: application/json` and gets JSON replies.
+No msgrpc framing, no `$` splitting, no nested envelope. A caller is the mirror image. A third party that prefers JSON simply sets `contentType: application/json` and gets JSON replies.
 
 ## Known limits
 
-- **Shared subscriptions suit stateless calls, not event subscriptions.** A client subscribing to
-  events registers with whichever replica received the request, and only that replica will emit to
-  it. Event fan-out across replicas needs shared state, and is out of scope here.
-- **A resumed session delivers its queue the instant it connects.** Instances therefore have to be
-  exposed before `ready()` is awaited; anything registered afterwards is too late for the requests
-  that were queued while the server was down, and those callers get `ClassNotFound`.
-- **Replicas do not announce presence.** One replica's will would declare the whole shared name
-  offline while its siblings were still serving, so they observe presence without publishing it.
-- **Duplicate suppression stays per-replica.** A QoS 1 redelivery that lands on a different replica
-  after one dies would not be recognised as a repeat. Exactly-once across replicas needs a shared
-  store.
-- **Interop and signing pull against each other.** Full third-party participation on a signed topic
-  means publishing this canonicalisation so outsiders can implement it. Cheaper to reserve signing
-  for links crossing a trust boundary and rely on broker ACLs elsewhere.
-- **Requires an MQTT 5 broker.** EMQX 5 and Mosquitto 2.x are fine; some embedded brokers are
-  3.1.1 only.
+- **Shared subscriptions suit stateless calls, not event subscriptions.** A client subscribing to events registers with whichever replica received the request, and only that replica will emit to it. Event fan-out across replicas needs shared state, and is out of scope here.
+- **A resumed session delivers its queue the instant it connects.** Instances therefore have to be exposed before `ready()` is awaited; anything registered afterwards is too late for the requests that were queued while the server was down, and those callers get `ClassNotFound`.
+- **Replicas do not announce presence.** One replica's will would declare the whole shared name offline while its siblings were still serving, so they observe presence without publishing it.
+- **Duplicate suppression stays per-replica.** A QoS 1 redelivery that lands on a different replica after one dies would not be recognised as a repeat. Exactly-once across replicas needs a shared store.
+- **Interop and signing pull against each other.** Full third-party participation on a signed topic means publishing this canonicalisation so outsiders can implement it. Cheaper to reserve signing for links crossing a trust boundary and rely on broker ACLs elsewhere.
+- **Requires an MQTT 5 broker.** EMQX 5 and Mosquitto 2.x are fine; some embedded brokers are 3.1.1 only.
 
 ## Implementation shape
 
-The RPC handlers currently build a `Message` object that is msgpack-encoded and then framed with a
-`$` header, so a transport only ever sees opaque bytes. MQTT 5 needs structured access to kind,
-path, method, correlation and arguments.
+The RPC handlers currently build a `Message` object that is msgpack-encoded and then framed with a `$` header, so a transport only ever sees opaque bytes. MQTT 5 needs structured access to kind, path, method, correlation and arguments.
 
-That means introducing a transport-independent `RpcFrame` — `{kind, src, target, path, method,
-event, correlation, args | result | error}` — that handlers emit and each transport maps to its own
-wire form. socket.io keeps today's `Message` + msgpack + `$` header; MQTT maps to properties plus a
-bare payload. It is a refactor of the module chain rather than a patch to the MQTT transport, and it
-is the bulk of the work.
+That means introducing a transport-independent `RpcFrame` — `{kind, src, target, path, method, event, correlation, args | result | error}` — that handlers emit and each transport maps to its own wire form. socket.io keeps today's `Message` + msgpack + `$` header; MQTT maps to properties plus a bare payload. It is a refactor of the module chain rather than a patch to the MQTT transport, and it is the bulk of the work.
 
 ## Decisions
 

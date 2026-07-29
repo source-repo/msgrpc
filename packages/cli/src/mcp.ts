@@ -3,6 +3,8 @@ import { join, resolve, sep } from 'node:path'
 import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
+import { ScriptRunner, deleteScript, environmentFor, listScripts, readScript, saveScript } from './scripts.js'
+import { addPackage, listPackages, removePackage } from './packages.js'
 import { checkPeerOn, diffPeersOn } from './conform.js'
 import { openTap } from './tapping.js'
 import type { TappedFrame } from './bus.js'
@@ -33,6 +35,24 @@ export interface McpOptions extends NetworkOptions {
      * that claim it can, and a directory says exactly where the writing is allowed to happen.
      */
     contracts?: string
+    /**
+     * Permit a fake whose behaviour is JavaScript or Python the model wrote. Absent means the fields
+     * are not offered on `start_fake` at all - the same rule the contracts directory follows, and for
+     * the same reason: a tool description that advertises what the server will refuse wastes a turn
+     * and teaches the model something untrue.
+     *
+     * It is off by default because it is code execution on whoever runs this server. See handlers.ts.
+     */
+    allowExec?: boolean
+    /**
+     * Where scripts may be written, read and run from. Absent means the script tools are not offered
+     * at all - the same rule the contracts directory follows.
+     *
+     * A script is a Node process with the privileges of whoever started this server, so this is a
+     * bigger grant than `allowExec` and is separate from it on purpose: a simulator body in a
+     * sandbox and a program that can open sockets are not the same permission.
+     */
+    scripts?: string
 }
 
 /**
@@ -78,7 +98,7 @@ const INTERNAL_ERROR = -32603
  * shell; the ones that write a contract to disk appear only when a directory was named, so a server
  * that cannot write files does not advertise tools claiming it can.
  */
-const toolsFor = (contracts: string | undefined) => [
+const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: string) => [
     {
         name: 'list_peers',
         description: 'List the peers currently on the msgrpc network, with the ones this server can reach right now.',
@@ -123,6 +143,11 @@ const toolsFor = (contracts: string | undefined) => [
             '. `script` can supply canned returns, deliberate failures and events on a timer: ' +
             '{"returns":{"plant.read":{"celsius":84}},"fails":{"plant.halt":"Unauthorized"},"emits":[{"event":"plant.alarm","every":2000}]}. ' +
             'The failure code "Timeout" is the special one - that method never answers at all, which is how a caller\'s own timeout is staged. ' +
+            (allowExec
+                ? 'For a simulation that reacts rather than repeats, `state` seeds shared variables and `handlers` gives a method a JavaScript body: ' +
+                  '{"state":{"celsius":20,"setpoint":20},"handlers":{"plant.setSetpoint":"(v) => { state.setpoint = v }","plant.read":"() => ({celsius: state.celsius += Math.sign(state.setpoint - state.celsius)})"}}. ' +
+                  '`python` runs a program instead - {"python":{"program":"@rpc(\'plant.read\')\\ndef read(): return {\'celsius\': 20}","targets":["plant.read"]}} - which keeps its own state and is started once. '
+                : '') +
             'This joins the real network, so it will not take a name a peer already answers to.',
         inputSchema: {
             type: 'object',
@@ -130,7 +155,7 @@ const toolsFor = (contracts: string | undefined) => [
                 name: { type: 'string', description: 'The peer name to serve under. Defaults to fake-<three words>.' },
                 schema: { type: 'object', description: 'The contract, as an msgrpc schema: {"schema":1,"namespaces":{...}}.' },
                 ...(contracts ? { contract: { type: 'string', description: 'The name of a saved contract to serve instead of passing one inline.' } } : {}),
-                script: { type: 'object', description: 'Canned returns, deliberate failures and timed events. Optional.' }
+                script: { type: 'object', description: 'Canned returns, deliberate failures and timed events. Optional.' + (allowExec ? ' May also carry `state`, `handlers` and `python`.' : '') }
             },
             additionalProperties: false
         }
@@ -233,6 +258,83 @@ const toolsFor = (contracts: string | undefined) => [
                   inputSchema: { type: 'object', properties: {}, additionalProperties: false }
               }
           ]
+        : []),
+    ...(scripts
+        ? [
+              {
+                  name: 'save_script',
+                  description:
+                      'Write a script to the scripts directory. A script is an ESM Node program that imports @source-repo/rpc and is a peer in its own right - ' +
+                      'so unlike start_fake it is not bound to one contract and can call as well as answer, drive a sequence, watch events, or stand several peers up at once. ' +
+                      'It runs as its own process. The network this server is on is in the environment as SOURCE_RPC_HUB, SOURCE_RPC_BROKER, SOURCE_RPC_PREFIX and SOURCE_RPC_TOKEN, ' +
+                      'so a script should read those rather than hardcode a url. Saving does not start it.',
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string', description: 'A name; the file becomes <name>.ts (or <name>.mjs) in the scripts directory.' },
+                          source: { type: 'string', description: 'The program. TypeScript by default - Node runs it directly - so `import type { Pump } from ...` gives a typed proxy.' },
+                          language: { type: 'string', enum: ['ts', 'mjs'], description: 'Default ts. Use mjs for plain JavaScript, or when the server runs on a Node older than 22.6.' }
+                      },
+                      required: ['name', 'source'],
+                      additionalProperties: false
+                  }
+              },
+              {
+                  name: 'list_scripts',
+                  description: 'The scripts in the directory, and which of them are running here.',
+                  inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+              },
+              {
+                  name: 'read_script',
+                  description: 'The source of one saved script, for changing a part of it rather than rewriting the whole.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              },
+              {
+                  name: 'delete_script',
+                  description: 'Remove a script from the directory. It is stopped first if it is running.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              },
+              {
+                  name: 'start_script',
+                  description: 'Run a saved script as its own process. Returns immediately; use script_output to see what it printed.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              },
+              {
+                  name: 'stop_script',
+                  description: 'Stop a running script. Scripts are stopped anyway when this server exits.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              },
+              {
+                  name: 'list_packages',
+                  description: 'The npm packages a script in this directory may import, with what is declared and what is actually installed.',
+                  inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+              },
+              {
+                  name: 'add_package',
+                  description:
+                      'Install an npm package into the scripts directory so a script can import it. Give a name, optionally with a range: `zod` or `@scope/name@^2`. ' +
+                      'Install scripts are skipped by default, because a postinstall hook is unreviewed code from the registry running here - pass allowInstallScripts only for a package that needs a native build, and say why.',
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          spec: { type: 'string', description: 'Package name, optionally with a version range.' },
+                          allowInstallScripts: { type: 'boolean', description: 'Permit the package to run its own install hooks. Default false.' }
+                      },
+                      required: ['spec'],
+                      additionalProperties: false
+                  }
+              },
+              {
+                  name: 'remove_package',
+                  description: 'Uninstall an npm package from the scripts directory.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              },
+              {
+                  name: 'script_output',
+                  description: 'The most recent output of a script, running or finished, with stderr lines marked "! ". This is how a script reports; it has no other channel.',
+                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+              }
+          ]
         : [])
 ]
 
@@ -242,6 +344,9 @@ const failureText = (e: unknown) => {
 }
 
 export const startMcp = async (options: McpOptions) => {
+    // stdout carries the protocol, so this goes to stderr like every other word this server says.
+    if (options.allowExec)
+        process.stderr.write('source-rpc mcp: --allow-exec is on, so start_fake will run JavaScript or Python the client sends. Development machines only.\n')
     if (!options.broker && !options.hub) throw new Error('startMcp: give it a broker, a hub, or both')
 
     // Exposes nothing. This is a window onto the network, not a peer offering anything to it.
@@ -250,6 +355,9 @@ export const startMcp = async (options: McpOptions) => {
 
     /** Peers this server is standing up, stopped when it exits so none outlive the conversation. */
     const fakes = new Map<string, { namespaces: string[]; close: () => Promise<void> }>()
+    // Given the same network this server joined, so a script reads its broker url rather than
+    // inventing one that is right on this machine and wrong on the next.
+    const runner = options.scripts ? new ScriptRunner(options.scripts, environmentFor(options)) : undefined
 
     /** A contract given inline, or the name of one saved in the contracts directory. */
     const contractFrom = async (args: { [key: string]: unknown }): Promise<{ schema: RpcSchema } | { problem: string }> => {
@@ -317,6 +425,87 @@ export const startMcp = async (options: McpOptions) => {
                 return { text: result === undefined ? 'The method returned nothing.' : JSON.stringify(result, null, 2) }
             } catch (e) {
                 return { text: `${peer}.${namespace}.${method} failed: ${failureText(e)}`, isError: true }
+            }
+        }
+
+        if (runner && options.scripts) {
+            const directory = options.scripts
+            const scriptName = String(args.name ?? '')
+            if (name === 'save_script') {
+                if (!scriptName || args.source === undefined) return { text: 'save_script needs name and source.', isError: true }
+                try {
+                    const language = args.language === 'mjs' ? 'mjs' : 'ts'
+                    return { text: `Saved ${saveScript(directory, scriptName, String(args.source), language)}. It is not running; start_script runs it.` }
+                } catch (e) {
+                    return { text: `could not save '${scriptName}': ${failureText(e)}`, isError: true }
+                }
+            }
+            if (name === 'list_scripts')
+                return {
+                    text: JSON.stringify(
+                        listScripts(directory).map((script) => ({
+                            ...script,
+                            running: runner.isRunning(script.name),
+                            ...(runner.status(script.name)?.ended ? { ended: runner.status(script.name)!.ended } : {})
+                        })),
+                        null,
+                        2
+                    )
+                }
+            if (name === 'read_script') {
+                try {
+                    return { text: readScript(directory, scriptName) }
+                } catch (e) {
+                    return { text: `could not read '${scriptName}': ${failureText(e)}`, isError: true }
+                }
+            }
+            if (name === 'delete_script') {
+                try {
+                    if (runner.isRunning(scriptName)) await runner.stop(scriptName)
+                    deleteScript(directory, scriptName)
+                    return { text: `${scriptName} deleted.` }
+                } catch (e) {
+                    return { text: `could not delete '${scriptName}': ${failureText(e)}`, isError: true }
+                }
+            }
+            if (name === 'start_script') {
+                try {
+                    const started = runner.start(scriptName)
+                    return { text: `${scriptName} started as pid ${started.pid ?? 'unknown'}. It is a process of its own; script_output is how it reports.` }
+                } catch (e) {
+                    return { text: `could not start '${scriptName}': ${failureText(e)}`, isError: true }
+                }
+            }
+            if (name === 'stop_script') {
+                try {
+                    await runner.stop(scriptName)
+                    return { text: `${scriptName} stopped.` }
+                } catch (e) {
+                    return { text: failureText(e), isError: true }
+                }
+            }
+            if (name === 'list_packages') return { text: JSON.stringify(listPackages(directory), null, 2) }
+            if (name === 'add_package') {
+                try {
+                    const result = await addPackage(directory, String(args.spec ?? ''), args.allowInstallScripts === true)
+                    return { text: result.output || 'Installed.', isError: !result.ok }
+                } catch (e) {
+                    return { text: failureText(e), isError: true }
+                }
+            }
+            if (name === 'remove_package') {
+                try {
+                    const result = await removePackage(directory, scriptName)
+                    return { text: result.output || 'Removed.', isError: !result.ok }
+                } catch (e) {
+                    return { text: failureText(e), isError: true }
+                }
+            }
+            if (name === 'script_output') {
+                const record = runner.status(scriptName)
+                if (!record) return { text: `'${scriptName}' has not been started here.`, isError: true }
+                const ended = record.ended ? `\n(ended: code ${String(record.ended.code)}${record.ended.signal ? `, signal ${record.ended.signal}` : ''})` : ''
+                return { text: (record.output.length ? record.output.join('\n') : 'It has printed nothing yet.') + ended }
             }
         }
 
@@ -467,7 +656,7 @@ export const startMcp = async (options: McpOptions) => {
                 if (!isNotification) respond(request.id, {})
                 return
             case 'tools/list':
-                respond(request.id, { tools: toolsFor(options.contracts) })
+                respond(request.id, { tools: toolsFor(options.contracts, options.allowExec, options.scripts) })
                 return
             case 'tools/call': {
                 const name = String(request.params?.name ?? '')
@@ -518,6 +707,9 @@ export const startMcp = async (options: McpOptions) => {
         // Before the network goes: a fake left running would hold a link this is about to drop.
         for (const fake of fakes.values()) await fake.close().catch(() => undefined)
         fakes.clear()
+        // Scripts are separate processes, so they would outlive this one and go on holding peer
+        // names nobody is serving. Stopped rather than orphaned.
+        await runner?.stopAll()
         await connected.close()
     }
     // Not stdout: see the note at the top. A client learns what is here from initialize.

@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { RpcServer, type NamespaceSchema, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 import { networkTransports, type NetworkOptions } from './network.js'
+import { javascriptRuntime, pythonRuntime, type HandlerRuntime } from './handlers.js'
 
 /**
  * A peer built from a contract rather than from code: it answers every method the contract declares
@@ -28,13 +29,46 @@ export interface FakeScript {
     fails?: { [target: string]: string }
     /** Events to emit on a timer, for the receiving end of an HMI that has nothing to receive. */
     emits?: { event: string; every: number; params?: unknown[] }[]
+    /**
+     * Starting values for `state`, which the handlers below share and keep between calls.
+     *
+     * This is what makes a fake a simulator rather than a recording: a pump that ramps toward the
+     * setpoint it was last given cannot be expressed by `returns`, because the answer depends on
+     * what was called before it.
+     */
+    state?: { [key: string]: unknown }
+    /**
+     * `plant.read` -> a JavaScript function, as source. It is called with the arguments the caller
+     * sent and shares the mutable `state` above.
+     *
+     * Needs `--allow-exec`: this is the script author's code running in this process. See handlers.ts.
+     */
+    handlers?: { [target: string]: string }
+    /**
+     * A Python program answering calls, for a simulation with more arithmetic in it than a
+     * JavaScript one-liner wants to carry. Decorate functions with `@rpc('plant.read')`; the
+     * interpreter is started once and keeps its own state.
+     *
+     * Needs `--allow-exec`, and a `python3` on PATH.
+     */
+    python?: { program: string; targets: string[]; interpreter?: string }
 }
 
 export interface FakeOptions extends NetworkOptions {
     /** The contract to serve. Every namespace in it is exposed. */
     schema: RpcSchema
     script?: FakeScript
+    /**
+     * Permit `handlers` and `python`, which run code the script supplied. Off by default, and the
+     * container ships without it: the flag is the security boundary, so it has to be given
+     * deliberately rather than inherited from a config file somebody copied.
+     */
+    allowExec?: boolean
 }
+
+/** What a script asks for that only `--allow-exec` grants. Empty when it asks for neither. */
+export const execUsedBy = (script?: FakeScript) =>
+    [...(script?.handlers && Object.keys(script.handlers).length ? ['handlers'] : []), ...(script?.python ? ['python'] : [])]
 
 /** Whether something handed over as a contract is one, so the wrong object is refused kindly. */
 export const looksLikeSchema = (value: unknown): value is RpcSchema =>
@@ -133,18 +167,24 @@ export const sampleFor = (type: TypeNode | undefined, types: RpcSchema['types'],
  */
 class Fake extends EventEmitter {}
 
-const buildNamespace = (name: string, namespace: NamespaceSchema, types: RpcSchema['types'], script?: FakeScript) => {
+const buildNamespace = (name: string, namespace: NamespaceSchema, types: RpcSchema['types'], script?: FakeScript, runtimes: HandlerRuntime[] = []) => {
     // Named, so a console describing this peer says `Fake` where a real one names its class. That
     // line is the only place the browser says out loud that it is not talking to a device.
     const instance = new Fake() as Fake & { [method: string]: unknown }
     for (const [method, described] of Object.entries(namespace.methods)) {
         const target = `${name}.${method}`
-        instance[method] = async () => {
+        // The arguments are taken now, where before they were ignored: a handler is only worth
+        // having if it can see what it was called with.
+        instance[method] = async (...params: unknown[]) => {
             const failure = script?.fails?.[target]
             // Never answered rather than answered with a timeout: a caller has to see the call go
             // unanswered for its own timeout to be what fires, which is the behaviour being staged.
             if (failure === NEVER_ANSWERS) return await new Promise(() => {})
             if (failure) throw Object.assign(new Error(`${target} is set to fail`), { code: failure })
+            // Before `returns`, because a handler is the more specific instruction: a script that
+            // carries both means the canned value for everything the handler does not answer.
+            const runtime = runtimes.find((candidate) => candidate.handles(target))
+            if (runtime) return await runtime.call(target, params)
             if (script?.returns && target in script.returns) return script.returns[target]
             return sampleFor(described.returns, types)
         }
@@ -155,6 +195,21 @@ const buildNamespace = (name: string, namespace: NamespaceSchema, types: RpcSche
 export const startFake = async (options: FakeOptions) => {
     const namespaces = Object.entries(options.schema.namespaces).filter(([name]) => name !== 'msgrpc')
     if (!namespaces.length) throw new Error('startFake: the contract describes no namespaces to serve')
+
+    // Refused here rather than ignored. A script whose handlers were silently dropped would serve
+    // generated values that look plausible and answer nothing the simulation was written to answer,
+    // which is worse than not starting.
+    const wantsExec = execUsedBy(options.script)
+    if (wantsExec.length && !options.allowExec)
+        throw new Error(`startFake: this script uses ${wantsExec.join(' and ')}, which run code it supplied. Pass --allow-exec to permit that; it is off by default and not enabled in the container.`)
+
+    const runtimes: HandlerRuntime[] = []
+    if (options.allowExec && options.script?.handlers && Object.keys(options.script.handlers).length)
+        runtimes.push(javascriptRuntime(options.script.handlers, options.script.state ?? {}))
+    if (options.allowExec && options.script?.python)
+        runtimes.push(
+            await pythonRuntime(options.script.python.program, options.script.python.targets, options.script.python.interpreter)
+        )
 
     // Built here rather than through connectNetwork, which makes a window onto the network; this
     // one is a peer that serves. The schema is handed over so the fake refuses exactly what the real
@@ -170,7 +225,7 @@ export const startFake = async (options: FakeOptions) => {
 
     const instances = new Map<string, EventEmitter>()
     for (const [name, namespace] of namespaces) {
-        const instance = buildNamespace(name, namespace, options.schema.types, options.script)
+        const instance = buildNamespace(name, namespace, options.schema.types, options.script, runtimes)
         network.exposeObject(instance, name)
         instances.set(name, instance)
     }
@@ -194,6 +249,7 @@ export const startFake = async (options: FakeOptions) => {
         namespaces: namespaces.map(([name]) => name),
         close: async () => {
             for (const timer of timers) clearInterval(timer)
+            for (const runtime of runtimes) await runtime.close()
             await network.close()
         }
     }

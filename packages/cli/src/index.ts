@@ -118,6 +118,11 @@ const usage = `source-rpc <command> [options]
                                 unsafe by design: for a development bus, never a plant
     --contracts <dir>           let it save and load contracts here; without it those tools
                                 are not offered at all
+    --allow-exec                let start_fake take JavaScript or Python method bodies; without it
+                                those fields are not offered at all. Development only
+    --scripts <dir>             a directory of peers written as programs, which this can add to,
+                                change, start and stop; without it those tools are not offered at
+                                all. A script is a process with your privileges. Development only
                                 stdio carries the protocol, so it is not for interactive use
 
   serve
@@ -125,6 +130,9 @@ const usage = `source-rpc <command> [options]
     --script <file>             canned returns, deliberate failures and events on a timer
     --fail <ns.method=Code>     answer with that RPC error code, repeatable
                                 Timeout is the special one: the call is never answered at all
+    --allow-exec                let a script supply JavaScript or Python method bodies, so a fake
+                                can hold state and react. Off by default: it runs code the script
+                                supplied, on this machine. Development only
     --broker / --hub / --prefix / --timeout / --name / --sign as above
 
   record
@@ -405,6 +413,7 @@ const VALUE_FLAGS = new Set([
     '--against',
     '--speed',
     '--contracts',
+    '--scripts',
     '--rate',
     '--concurrency',
     '--idempotency-key',
@@ -508,11 +517,15 @@ const runFake = async (argv: string[]) => {
     }
 
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'serve', 'fake')
-    const running = await startFake({ ...network, schema, ...(Object.keys(script).length ? { script } : {}) })
+    const allowExec = argv.includes('--allow-exec')
+    const running = await startFake({ ...network, schema, ...(Object.keys(script).length ? { script } : {}), ...(allowExec ? { allowExec } : {}) })
     process.stdout.write(`source-rpc serve: ${network.name} answering ${running.namespaces.join(', ')} from ${contractPath}\n`)
     // Anything calling this is talking to a stand-in. Worth one line, since a fake that is mistaken
     // for the device is worse than no fake at all.
     process.stderr.write('source-rpc serve: this is a fake. It answers from the contract, not from a device.\n')
+    // Said out loud for the same reason the broker says it relays for anyone: the flag is the whole
+    // of the protection, so the run that has it should be visibly different from the run that does not.
+    if (allowExec) process.stderr.write('source-rpc serve: --allow-exec is on, so this fake runs code its script supplied. Development machines only.\n')
 
     const stop = () =>
         void running
@@ -800,7 +813,9 @@ const runBroker = async (argv: string[]) => {
 const runMcp = async (argv: string[]) => {
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'mcp', 'mcp')
     const contracts = argument(argv, '--contracts', '')
-    const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}) })
+    const scriptsDir = argument(argv, '--scripts', '')
+    const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
+        ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}) })
     // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
     const stop = () =>
         void running

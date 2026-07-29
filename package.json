@@ -1,7 +1,7 @@
 {
-    "name": "msgrpc-workspace",
+    "name": "source-rpc-workspace",
     "private": true,
-    "description": "msgrpc and its contract-extraction CLI",
+    "description": "Source RPC and its contract-extraction CLI",
     "type": "module",
     "license": "MIT",
     "workspaces": [

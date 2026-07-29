@@ -154,6 +154,9 @@ jobs:
                   image=ghcr.io/${{ github.repository_owner }}/rpc-cli
                   # Exact, minor and major, so a compose file can pin as tightly as it wants to.
                   echo "tags=${image}:${version},${image}:${version%.*},${image}:${version%%.*},${image}:latest" >> "$GITHUB_OUTPUT"
+                  # The development image is the same version with a suffix, and takes `dev` rather
+                  # than `latest`: whoever pulls the bare name should get the one meant for a plant.
+                  echo "devtags=${image}:${version}-dev,${image}:${version%.*}-dev,${image}:${version%%.*}-dev,${image}:dev" >> "$GITHUB_OUTPUT"
                   echo "version=${version}" >> "$GITHUB_OUTPUT"
 
             # arm64 is built on an amd64 runner, so the emulators have to be registered first.
@@ -161,6 +164,38 @@ jobs:
             # error, which reads like a broken Dockerfile rather than a missing setup step.
             - uses: docker/setup-qemu-action@v3
             - uses: docker/setup-buildx-action@v3
+
+            # Built once for amd64 and kept locally, so the scan below happens *before* anything is
+            # published. buildx caches the layers, so the multi-arch build that follows only pays
+            # for arm64.
+            - name: Build for scanning
+              uses: docker/build-push-action@v6
+              with:
+                  context: packages/cli
+                  file: packages/cli/Dockerfile
+                  platforms: linux/amd64
+                  build-args: VERSION=${{ steps.tags.outputs.version }}
+                  tags: rpc-cli:scan
+                  load: true
+
+            # Trivy rather than Scout: no registry credentials to hold, and it reads the built image
+            # rather than a published one.
+            #
+            # `ignore-unfixed` is the setting that makes this worth having rather than worth muting.
+            # An image inherits vulnerabilities from the Node runtime and from Alpine that have no
+            # patch yet - failing on those would mean every release is red for reasons nobody in this
+            # repository can act on, and a check that is always red is one nobody reads. Failing only
+            # on what has a fix available means a red build is always a rebuild away from green:
+            # `apk upgrade` in the Dockerfile picks up the Alpine ones, and a base-image bump picks
+            # up the rest.
+            - name: Scan the image
+              uses: aquasecurity/trivy-action@v0.36.0
+              with:
+                  image-ref: rpc-cli:scan
+                  format: table
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: '1'
 
             - name: Build and push
               uses: docker/build-push-action@v6
@@ -173,3 +208,29 @@ jobs:
                   build-args: VERSION=${{ steps.tags.outputs.version }}
                   tags: ${{ steps.tags.outputs.tags }}
                   push: true
+
+            # The development image: the same CLI with npm and python3, which `--scripts` and the
+            # Python half of `--allow-exec` need in order to work at all.
+            - name: Build and push the development image
+              uses: docker/build-push-action@v6
+              with:
+                  context: packages/cli
+                  file: packages/cli/Dockerfile
+                  target: dev
+                  platforms: linux/amd64,linux/arm64
+                  build-args: VERSION=${{ steps.tags.outputs.version }}
+                  tags: ${{ steps.tags.outputs.devtags }}
+                  push: true
+
+            # Reported, not enforced. This image ships npm on purpose, and npm brings its own bundled
+            # dependencies and their advisories with it - that is the trade the target exists to make.
+            # Failing the release on them would mean never releasing, so the finding is printed where
+            # somebody deciding whether to run it can read it.
+            - name: Scan the development image
+              uses: aquasecurity/trivy-action@v0.36.0
+              with:
+                  image-ref: ghcr.io/${{ github.repository_owner }}/rpc-cli:${{ steps.tags.outputs.version }}-dev
+                  format: table
+                  severity: CRITICAL,HIGH
+                  ignore-unfixed: true
+                  exit-code: '0'
