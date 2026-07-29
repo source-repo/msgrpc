@@ -189,17 +189,19 @@ Mostly the feature set MQTT monitors have converged on, and mostly missing:
 - **Presence timeline.** Arrivals and departures with timestamps. A flapping device is a classic
   field problem and the console renders it as a dot that changes colour and forgets.
 
-## 9. Somewhere to put a contract, and something to start from it
+## 9. Somewhere to put a contract, and something to start from it — done in msgrpc-cli 2.5.0
 
-Anders' idea, and a good one: a model can write a contract JSON easily enough, but *where it goes*
-and *how to stand something up from it* are steps that need a shell and a convention. An MCP tool
-pair - write a contract to a known place, start and stop a fake from it - would close the loop, so a
-model could scaffold a device, point an HMI at it and drive the whole thing without leaving the
-conversation.
+Anders' idea. The design that fell out is better than the sketch: the answer to "where do the files
+go" turned out to be **that they do not have to**. `start_fake` takes a contract inline and stands a
+peer up in-process, so there is no file and no process to manage; `save_contract` exists for when you
+want one on disk to commit or to hand to the CLI, and appears only when `--contracts` names a
+directory.
 
-Worth designing carefully rather than quickly, because it widens what the MCP server can do from
-"call things on a network" to "write files and start processes". The existing warning that anything
-a model can reach it can call would need a companion.
+The guard worth remembering: a fake refuses a name a peer already answers to. Displacing a live
+device with a stand-in that agrees with everything is the worst thing this could have done.
+
+Still open: a model cannot yet record or replay from MCP. `watch_traffic` covers looking; capturing
+to a file would need the contracts-directory treatment.
 
 ## 10. The page sometimes fails to reach the console on load
 

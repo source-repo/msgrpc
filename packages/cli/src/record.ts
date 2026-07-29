@@ -1,5 +1,5 @@
 import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
-import { RpcMessageType, type RpcSchema } from '@source-repo/msgrpc'
+import { RpcMessageType } from '@source-repo/msgrpc'
 import { awaitPeer, connectNetwork, type NetworkOptions } from './network.js'
 import { openTap } from './tapping.js'
 import type { TapFilter, TappedFrame } from './bus.js'
@@ -262,7 +262,3 @@ export const replaySession = async (options: ReplayOptions, onCall?: (call: Repl
         sent: results.filter((call) => call.outcome === 'sent').length
     }
 }
-
-/** Whether a contract file looks like one, so `serve` and `replay` refuse the wrong file kindly. */
-export const looksLikeSchema = (value: unknown): value is RpcSchema =>
-    !!value && typeof value === 'object' && typeof (value as RpcSchema).namespaces === 'object'

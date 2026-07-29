@@ -55,6 +55,24 @@
   before it starts, then one row per frame colour-coded by kind, a search box and a pause. It stays
   tapping while another tab is showing — unmounting it would have stopped the watching exactly while
   you looked away — and the count on the tab label is what arrived meanwhile.
+- **The MCP server can stand a peer up, and reaches the rest of this release.** Asking a model to
+  test a device runs into the device having to exist first, and the steps that closed that gap -
+  write a JSON file somewhere, open a second terminal, start the CLI - are exactly the ones a
+  conversation cannot take. `start_fake` takes a contract **inline** and puts a peer on the network
+  that answers from it; `stop_fake` and `list_fakes` manage them. They run inside the MCP server
+  rather than as spawned processes, so they stop when it does and none are left behind.
+  - **A fake will not take a name a peer already answers to.** Standing one up under a live device's
+    name would displace it, and calls meant for the plant would reach a stand-in that agrees with
+    everything. Refused, not resolved.
+  - `check_peer` and `diff_peers` are the conformance verbs; `watch_traffic` returns what other
+    peers said to each other over a few seconds, and `watch_events` what one peer emitted, dropping
+    the subscription again so looking leaves nothing behind. Both are bounded, since a model asking
+    for an hour would get one and the conversation would look hung.
+  - `save_contract` and `list_contracts` appear **only when `--contracts <dir>` names somewhere to
+    write**. A server that cannot write files should not advertise tools claiming it can. Contracts
+    are written as `<name>.types.json` in that directory and nowhere else - a name that would climb
+    out of it is refused rather than resolved - and the file is the one `msgrpc serve --contract`
+    and `msgrpc check --peer --against` already read, so the loop closes.
 - **`msgrpc check --peer`** points the build-time check at a device. `check` against source catches a
   change before it ships; what it could not answer is the question asked on site - the contract says
   this device offers `writeSetpoint(value, mode?)`, is that what the box on the wall is running? The

@@ -43,6 +43,7 @@ msgrpc watch     stream a peer's events as jsonl until Ctrl-C
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |
 | `--sign <keyfile>` | console, mcp, verbs, serve | — | HMAC keys, so it can talk to a signed network |
+| `--contracts <dir>` | mcp | — | let it save and load contracts here; without it those tools are not offered |
 | `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
 | `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
 | `--fail <ns.method=Code>` | serve | — | answer with that RPC error code; repeatable. `Timeout` never answers |
@@ -636,13 +637,53 @@ Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdi
 look at a plant the way a person looks at the console. It takes the same network flags as `console`,
 including `--sign`.
 
-Three tools, which are the console's three verbs:
-
 | tool | what it does |
 | --- | --- |
 | `list_peers` | who is on the network right now |
 | `describe_peer` | one peer's namespaces, methods, argument names and types, and events |
 | `call_method` | call a method, with positional arguments, and return what it returns |
+| `start_fake` | stand a peer up from a contract and put it on this network |
+| `stop_fake` / `list_fakes` | take one off again; what is being served here |
+| `check_peer` | compare a live peer with a contract and report what would break |
+| `diff_peers` | what two live peers expose differently |
+| `watch_traffic` | what other peers are saying to each other, for a few seconds |
+| `watch_events` | what one peer emitted, for a few seconds |
+| `save_contract` / `list_contracts` | only with `--contracts <dir>` |
+
+### Standing something up
+
+The awkward part of asking a model to test a device is that the device has to exist. `start_fake`
+takes a contract **inline** — no file, no shell, no second terminal — and puts a peer on the network
+that answers from it:
+
+```
+start_fake { name: "fakePlant", schema: {…}, script: { returns: { "plant.read": { celsius: 84 } } } }
+→ fakePlant is on the network, answering plant from the contract. It is a fake: it answers from
+  the contract, not from a device.
+```
+
+From there the ordinary verbs reach it, and it **refuses what the contract refuses** — so a model
+can check that its caller handles `InvalidParams` without touching anything real. `script` supplies
+canned returns, deliberate failures and timed events, including the `Timeout` code that never
+answers at all.
+
+**A fake will not take a name a peer already answers to.** Standing one up under a live device's
+name would displace it, and calls meant for the plant would reach a stand-in that agrees with
+everything. That is refused, not resolved.
+
+Fakes run inside the MCP server rather than as spawned processes, so they stop when it does and
+none are left behind.
+
+### Where contracts go
+
+`--contracts <dir>` is what makes `save_contract` and `list_contracts` exist at all. Without it they
+are **not in the tool list**, because a server that cannot write files should not advertise tools
+claiming it can. With it, a contract is written as `<name>.types.json` in that directory and nowhere
+else — a name that would climb out of it is refused rather than resolved — and what is written is
+the same file `msgrpc serve --contract` and `msgrpc check --peer --against` read.
+
+So the loop closes: a model can draft a contract, save it where the CLI will find it, stand a peer
+up from it, drive that peer, and check a real device against the same file.
 
 Not one tool per method on the network. A peer set that changes while a model is mid-conversation
 would mean re-issuing the tool list on every arrival and departure; `describe_peer` hands over the
@@ -671,6 +712,11 @@ directly, and this package is about not needing a second RPC framework.
 happily invoke one that opens a valve. Point it at a network where that is acceptable, or give it
 credentials that restrict it: `--sign` makes it a peer with an identity, and `authorize` on the
 servers decides what that identity may do.
+
+**And it can put peers on that network.** `start_fake` adds one — it calls nothing and changes no
+device, and it refuses a name already in use, but it is a peer other things can find and call. The
+same `authorize` and `--sign` machinery governs what it may do once it is there. Writing files is
+the one capability that stays off unless asked for: no `--contracts`, no tools that write.
 
 ## console
 

@@ -81,6 +81,8 @@ const usage = `msgrpc <command> [options]
     --timeout <ms>              call timeout, default 10000
     --name <peer>               how it identifies itself, default mcp-<three words>
     --sign <keyfile>            HMAC keys, for a signed network
+    --contracts <dir>           let it save and load contracts here; without it those tools
+                                are not offered at all
                                 stdio carries the protocol, so it is not for interactive use
 
   serve
@@ -246,7 +248,8 @@ const VALUE_FLAGS = new Set([
     '--namespace',
     '--for',
     '--against',
-    '--speed'
+    '--speed',
+    '--contracts'
 ])
 
 const positionals = (argv: string[]) => {
@@ -560,7 +563,8 @@ const runBroker = async (argv: string[]) => {
 
 const runMcp = async (argv: string[]) => {
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'mcp', 'mcp')
-    const running = await startMcp(network)
+    const contracts = argument(argv, '--contracts', '')
+    const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}) })
     // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
     const stop = () =>
         void running

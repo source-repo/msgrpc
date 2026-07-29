@@ -36,6 +36,10 @@ export interface FakeOptions extends NetworkOptions {
     script?: FakeScript
 }
 
+/** Whether something handed over as a contract is one, so the wrong object is refused kindly. */
+export const looksLikeSchema = (value: unknown): value is RpcSchema =>
+    !!value && typeof value === 'object' && !!(value as RpcSchema).namespaces && typeof (value as RpcSchema).namespaces === 'object'
+
 /** The code that means "never answer" rather than "answer with this error". */
 const NEVER_ANSWERS = 'Timeout'
 

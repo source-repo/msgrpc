@@ -79,9 +79,8 @@ const describe = async (connected: ConnectedNetwork, peer: string) => {
  * orientation `check` uses against source - so "argument 0 narrowed" means the same thing here as
  * it does in CI, and means it about the box rather than the branch.
  */
-export const checkPeer = async (options: NetworkOptions & { peer: string; stored: RpcSchema; wait?: number }): Promise<ConformanceReport> => {
-    const connected = await connectNetwork(options)
-    try {
+export const checkPeerOn = async (connected: ConnectedNetwork, options: { peer: string; stored: RpcSchema; wait?: number }): Promise<ConformanceReport> => {
+    {
         if (!(await awaitPeer(connected, options.peer, options.wait ?? 5000)))
             throw Object.assign(new Error(`${options.peer} did not appear within ${options.wait ?? 5000} ms`), { code: 'ClassNotFound' })
         const description = await describe(connected, options.peer)
@@ -107,6 +106,14 @@ export const checkPeer = async (options: NetworkOptions & { peer: string; stored
             report.problems.push(...namespaceProblems(stored, live.namespaces[name], types).map((problem) => ({ ...problem, namespace: name })))
         }
         return report
+    }
+}
+
+/** The same, opening a connection of its own - what the command line wants. */
+export const checkPeer = async (options: NetworkOptions & { peer: string; stored: RpcSchema; wait?: number }): Promise<ConformanceReport> => {
+    const connected = await connectNetwork(options)
+    try {
+        return await checkPeerOn(connected, options)
     } finally {
         await connected.close()
     }
@@ -128,9 +135,8 @@ export interface PeerDifference {
  * Signatures are compared as they read rather than structurally, because the answer is going to be
  * read by a person standing in front of two cabinets.
  */
-export const diffPeers = async (options: NetworkOptions & { left: string; right: string; wait?: number }) => {
-    const connected = await connectNetwork(options)
-    try {
+export const diffPeersOn = async (connected: ConnectedNetwork, options: { left: string; right: string; wait?: number }) => {
+    {
         for (const peer of [options.left, options.right])
             if (!(await awaitPeer(connected, peer, options.wait ?? 5000)))
                 throw Object.assign(new Error(`${peer} did not appear within ${options.wait ?? 5000} ms`), { code: 'ClassNotFound' })
@@ -168,6 +174,14 @@ export const diffPeers = async (options: NetworkOptions & { left: string; right:
         }
 
         return { left: options.left, right: options.right, differences }
+    }
+}
+
+/** The same, opening a connection of its own - what the command line wants. */
+export const diffPeers = async (options: NetworkOptions & { left: string; right: string; wait?: number }) => {
+    const connected = await connectNetwork(options)
+    try {
+        return await diffPeersOn(connected, options)
     } finally {
         await connected.close()
     }
