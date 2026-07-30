@@ -1,77 +1,79 @@
 {
-  "name": "@source-repo/rpc-cli",
-  "version": "3.1.0",
-  "description": "Source RPC tooling: extract a contract from TypeScript, check it against a build or a live device, and browse, tap, fake, record and bench a live network",
-  "keywords": [
-    "rpc",
-    "mqtt",
-    "websocket",
-    "socket.io",
-    "typescript",
-    "cli",
-    "mcp",
-    "contract-testing",
-    "iot",
-    "industrial"
-  ],
-  "type": "module",
-  "license": "MIT",
-  "engines": {
-    "node": ">=18.17"
-  },
-  "bin": {
-    "source-rpc": "./dist/index.js"
-  },
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "files": [
-    "dist",
-    "!dist/**/*.test.*",
-    "!dist/fixture"
-  ],
-  "scripts": {
-    "build": "vite build --config web/vite.config.ts && tsc -p tsconfig.json",
-    "clean": "rimraf dist",
-    "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "npm run clean && npm run build && ava",
-    "prepack": "npm run clean && npm run build",
-    "contract": "npm run contract:console && npm run contract:bus && npm run contract:chat && npm run contract:rpc",
-    "contract:console": "node dist/index.js extract --project tsconfig.contract.json --out src/console.types.json",
-    "contract:bus": "node dist/index.js extract --project tsconfig.bus.json --out src/bus.types.json",
-    "contract:chat": "node dist/index.js extract --project web/tsconfig.contract.json --out web/src/chat.types.json",
-    "check:contract": "npm run check:contract:console && npm run check:contract:bus && npm run check:contract:chat && npm run check:contract:rpc",
-    "check:contract:console": "node dist/index.js check --project tsconfig.contract.json --against src/console.types.json",
-    "check:contract:bus": "node dist/index.js check --project tsconfig.bus.json --against src/bus.types.json",
-    "check:contract:chat": "node dist/index.js check --project web/tsconfig.contract.json --against web/src/chat.types.json",
-    "build:web": "vite build --config web/vite.config.ts",
-    "dev:web": "vite --config web/vite.config.ts",
-    "contract:rpc": "node dist/index.js extract --project ../rpc/tsconfig.contract.json --out ../rpc/src/RPC/Introspection.types.json",
-    "check:contract:rpc": "node dist/index.js check --project ../rpc/tsconfig.contract.json --against ../rpc/src/RPC/Introspection.types.json"
-  },
-  "dependencies": {
-    "@source-repo/rpc": "^3.1.0",
-    "ts-morph": "^28.0.0"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.2",
-    "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "ava": "^8.0.1",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
-    "rimraf": "^6.0.1",
-    "typescript": "^7.0.2",
-    "vite": "^7.3.6"
-  },
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/source-repo/rpc.git",
-    "directory": "packages/cli"
-  },
-  "homepage": "https://github.com/source-repo/rpc/tree/main/packages/cli#readme",
-  "bugs": {
-    "url": "https://github.com/source-repo/rpc/issues"
-  }
+    "name": "@source-repo/rpc-cli",
+    "version": "3.1.0",
+    "description": "Source RPC tooling: extract a contract from TypeScript, check it against a build or a live device, and browse, tap, fake, record and bench a live network",
+    "keywords": [
+        "rpc",
+        "mqtt",
+        "websocket",
+        "socket.io",
+        "typescript",
+        "cli",
+        "mcp",
+        "contract-testing",
+        "iot",
+        "industrial"
+    ],
+    "type": "module",
+    "license": "MIT",
+    "engines": {
+        "node": ">=18.17"
+    },
+    "bin": {
+        "source-rpc": "./dist/index.js"
+    },
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist",
+        "!dist/**/*.test.*",
+        "!dist/fixture"
+    ],
+    "scripts": {
+        "build": "vite build --config web/vite.config.ts && tsc -p tsconfig.json",
+        "clean": "rimraf dist",
+        "postbuild": "node -e \"require('fs').chmodSync('dist/index.js', 0o755)\"",
+        "typecheck": "tsc --noEmit -p tsconfig.json",
+        "test": "npm run clean && npm run build && ava",
+        "prepack": "npm run clean && npm run build",
+        "contract": "npm run contract:console && npm run contract:bus && npm run contract:chat && npm run contract:scripting && npm run contract:rpc",
+        "contract:console": "node dist/index.js extract --project tsconfig.contract.json --out src/console.types.json",
+        "contract:bus": "node dist/index.js extract --project tsconfig.bus.json --out src/bus.types.json",
+        "contract:chat": "node dist/index.js extract --project web/tsconfig.contract.json --out web/src/chat.types.json",
+        "contract:scripting": "node dist/index.js extract --project tsconfig.scripting.json --out src/scripting.types.json",
+        "check:contract": "npm run check:contract:console && npm run check:contract:bus && npm run check:contract:chat && npm run check:contract:scripting && npm run check:contract:rpc",
+        "check:contract:console": "node dist/index.js check --project tsconfig.contract.json --against src/console.types.json",
+        "check:contract:bus": "node dist/index.js check --project tsconfig.bus.json --against src/bus.types.json",
+        "check:contract:chat": "node dist/index.js check --project web/tsconfig.contract.json --against web/src/chat.types.json",
+        "check:contract:scripting": "node dist/index.js check --project tsconfig.scripting.json --against src/scripting.types.json",
+        "build:web": "vite build --config web/vite.config.ts",
+        "dev:web": "vite --config web/vite.config.ts",
+        "contract:rpc": "node dist/index.js extract --project ../rpc/tsconfig.contract.json --out ../rpc/src/RPC/Introspection.types.json",
+        "check:contract:rpc": "node dist/index.js check --project ../rpc/tsconfig.contract.json --against ../rpc/src/RPC/Introspection.types.json"
+    },
+    "dependencies": {
+        "@source-repo/rpc": "^3.1.0",
+        "ts-morph": "^28.0.0"
+    },
+    "devDependencies": {
+        "@types/node": "^26.1.2",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "@vitejs/plugin-react": "^5.2.0",
+        "ava": "^8.0.1",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "rimraf": "^6.0.1",
+        "typescript": "^7.0.2",
+        "vite": "^7.3.6"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/source-repo/rpc.git",
+        "directory": "packages/cli"
+    },
+    "homepage": "https://github.com/source-repo/rpc/tree/main/packages/cli#readme",
+    "bugs": {
+        "url": "https://github.com/source-repo/rpc/issues"
+    }
 }

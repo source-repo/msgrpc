@@ -793,6 +793,48 @@ Note what the compose file does with the console, because it is the part that is
 
 **The tap is only as gated as the broker is.** Anyone who can reach an unauthenticated broker can call `bus.tap()` and mirror everything crossing it. They could always have read the same traffic by impersonating a peer; this is merely one call. `authenticate` and `relay` are what restrict it, and the broker says as much on startup.
 
+## Scripting another node
+
+`--scripts` lets a model write and run programs on the machine it is talking to. On a bench with a
+Linux box, a Windows PLC and a couple of devices, the time goes on the machines it cannot reach — a
+remote desktop each, a file copied by hand, and the mistake you make on the fourth one.
+
+`--scriptable-by <peer>` offers that same capability to a named peer as an ordinary RPC namespace,
+so every script tool takes a `node` argument and one of them reaches the next machine along:
+
+```
+save_script  { name: "ramp", source: "…" }                  # this node, the default
+save_script  { name: "ramp", source: "…", node: "plc-3" }   # the machine across the hall
+```
+
+**The grant is made on the node being scripted, not by the one doing the scripting.** Name nobody —
+the default — and the namespace is not published at all, so a machine with `--scripts` can script
+itself and nothing can script it.
+
+### It has to be signed through a bus
+
+Identity is per connection, and **does not survive a relay**. A bench authenticates to the bus; the
+node being scripted is connected to the bus as well, so it has no connection to the bench and no way
+to learn who it is. It refuses, which is correct — the alternative is trusting a name that arrived
+through a third party. No flag changes this, because the information is not there to have.
+
+A signature is on the frame rather than on the link, so it survives whatever the broker did in
+between. A relayed test hall is therefore MQTT with `--sign` at both ends, each key file naming the
+other peer:
+
+```
+# on the node being scripted
+source-rpc mcp --broker mqtt://bus:1883 --sign node.json --scripts ./scripts --scriptable-by bench
+
+# on the bench
+source-rpc mcp --broker mqtt://bus:1883 --sign bench.json --scripts ./scripts
+```
+
+The two arrangements that work — this one, and a bench connected directly to the node — each have a
+test. The secret in those key files is what has to reach the far machine out of band: a remote
+desktop, a phone call, paper. Deliberately not something the bus can hand over, since a bus able to
+distribute the key to script a node is a bus able to script the node.
+
 ## mcp
 
 ```
@@ -966,6 +1008,7 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--insecure-tls` | console, mcp, verbs, serve | off | accept any certificate on an `https`/`wss`/`mqtts` link. Unsafe by design: for a development bus with a self-signed certificate, never a plant |
 | `--cert <file>` `--key <file>` | console, broker | — | serve TLS. Together they make the console HTTPS and the bus WSS, and move the default port to 8844 / 8843 |
 | `--contracts <dir>` | mcp | — | let it save and load contracts here; without it those tools are not offered |
+| `--scriptable-by <peer>` | mcp | — | let that peer script this node over the network, repeatable; needs `--scripts`. Without it nothing can script this machine. See [Scripting another node](#scripting-another-node) |
 | `--contract <file>` | serve | — | the contract to serve; every namespace in it is exposed |
 | `--script <file>` | serve | — | canned returns, deliberate failures and events on a timer |
 | `--fail <ns.method=Code>` | serve | — | answer with that RPC error code; repeatable. `Timeout` never answers |

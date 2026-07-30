@@ -1,0 +1,6 @@
+{
+    // Only the scripting namespace. A contract file describes one server's surface, and a node
+    // offering this offers exactly this - the console's service and the broker's tap are elsewhere.
+    "extends": "./tsconfig.json",
+    "include": ["src/scripting.ts"]
+}

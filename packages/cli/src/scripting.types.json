@@ -1,0 +1,463 @@
+{
+  "schema": 1,
+  "types": {
+    "ScriptLanguage": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "literal",
+          "value": "ts"
+        },
+        {
+          "kind": "literal",
+          "value": "mjs"
+        }
+      ]
+    }
+  },
+  "namespaces": {
+    "scripting": {
+      "version": "1",
+      "methods": {
+        "list": {
+          "params": [],
+          "returns": {
+            "kind": "array",
+            "items": {
+              "kind": "object",
+              "fields": {
+                "ended": {
+                  "type": {
+                    "kind": "object",
+                    "fields": {
+                      "code": {
+                        "type": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "null"
+                            },
+                            {
+                              "kind": "number"
+                            }
+                          ]
+                        },
+                        "optional": true
+                      },
+                      "signal": {
+                        "type": {
+                          "kind": "union",
+                          "options": [
+                            {
+                              "kind": "null"
+                            },
+                            {
+                              "kind": "string"
+                            }
+                          ]
+                        },
+                        "optional": true
+                      },
+                      "at": {
+                        "type": {
+                          "kind": "number"
+                        }
+                      }
+                    }
+                  },
+                  "optional": true
+                },
+                "running": {
+                  "type": {
+                    "kind": "boolean"
+                  }
+                },
+                "name": {
+                  "type": {
+                    "kind": "string"
+                  }
+                },
+                "language": {
+                  "type": {
+                    "kind": "ref",
+                    "name": "ScriptLanguage"
+                  }
+                }
+              }
+            }
+          },
+          "semantics": "query"
+        },
+        "save": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "string"
+                },
+                {
+                  "kind": "literal",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "name",
+            "source",
+            "language"
+          ],
+          "returns": {
+            "kind": "string"
+          },
+          "semantics": "idempotent-command"
+        },
+        "read": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "string"
+          },
+          "semantics": "query"
+        },
+        "remove": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "string"
+          },
+          "semantics": "idempotent-command"
+        },
+        "start": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "name": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "pid": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "number"
+                    }
+                  ]
+                },
+                "optional": true
+              },
+              "startedAt": {
+                "type": {
+                  "kind": "number"
+                }
+              }
+            }
+          },
+          "semantics": "idempotent-command"
+        },
+        "stop": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "name": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "ended": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "code": {
+                          "type": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "null"
+                              },
+                              {
+                                "kind": "number"
+                              }
+                            ]
+                          },
+                          "optional": true
+                        },
+                        "signal": {
+                          "type": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "null"
+                              },
+                              {
+                                "kind": "string"
+                              }
+                            ]
+                          },
+                          "optional": true
+                        },
+                        "at": {
+                          "type": {
+                            "kind": "number"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "optional": true
+              }
+            }
+          },
+          "semantics": "idempotent-command"
+        },
+        "output": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "name": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "output": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string"
+                  }
+                }
+              },
+              "ended": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "object",
+                      "fields": {
+                        "code": {
+                          "type": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "null"
+                              },
+                              {
+                                "kind": "number"
+                              }
+                            ]
+                          },
+                          "optional": true
+                        },
+                        "signal": {
+                          "type": {
+                            "kind": "union",
+                            "options": [
+                              {
+                                "kind": "null"
+                              },
+                              {
+                                "kind": "string"
+                              }
+                            ]
+                          },
+                          "optional": true
+                        },
+                        "at": {
+                          "type": {
+                            "kind": "number"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "optional": true
+              },
+              "running": {
+                "type": {
+                  "kind": "boolean"
+                }
+              }
+            }
+          },
+          "semantics": "query"
+        },
+        "packages": {
+          "params": [],
+          "returns": {
+            "kind": "array",
+            "items": {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "object",
+                  "fields": {
+                    "installed": {
+                      "type": {
+                        "kind": "string"
+                      }
+                    },
+                    "name": {
+                      "type": {
+                        "kind": "string"
+                      }
+                    },
+                    "range": {
+                      "type": {
+                        "kind": "string"
+                      }
+                    }
+                  }
+                },
+                {
+                  "kind": "object",
+                  "fields": {
+                    "installed": {
+                      "type": {
+                        "kind": "null"
+                      }
+                    },
+                    "name": {
+                      "type": {
+                        "kind": "string"
+                      }
+                    },
+                    "range": {
+                      "type": {
+                        "kind": "string"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "semantics": "query"
+        },
+        "addPackage": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "boolean"
+                },
+                {
+                  "kind": "literal",
+                  "value": null
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "spec",
+            "allowInstallScripts"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "ok": {
+                "type": {
+                  "kind": "boolean"
+                }
+              },
+              "output": {
+                "type": {
+                  "kind": "string"
+                }
+              }
+            }
+          },
+          "semantics": "non-repeatable-command"
+        },
+        "removePackage": {
+          "params": [
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "name"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "ok": {
+                "type": {
+                  "kind": "boolean"
+                }
+              },
+              "output": {
+                "type": {
+                  "kind": "string"
+                }
+              }
+            }
+          },
+          "semantics": "non-repeatable-command"
+        }
+      }
+    }
+  }
+}

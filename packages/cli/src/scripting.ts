@@ -94,6 +94,12 @@ export const scriptingAuthorizer = (options: ScriptingOptions, inner?: RpcAuthor
     }
 }
 
+/**
+ * The namespace name, for the guard to compare against. Written out again in the decorator below
+ * rather than referenced, because the extraction CLI reads the source rather than running it and
+ * only understands a string literal there - a constant produces a contract with no namespaces in
+ * it, and the only sign is the count in the line it prints.
+ */
 export const SCRIPTING_NAMESPACE = 'scripting'
 
 /**
@@ -104,7 +110,7 @@ export const SCRIPTING_NAMESPACE = 'scripting'
  * because a caller deciding whether to retry after a lost answer needs them: installing a package
  * twice is not the same as listing them twice.
  */
-@rpcNamespace(SCRIPTING_NAMESPACE, { version: '1', execution: 'serial' })
+@rpcNamespace('scripting', { version: '1', execution: 'serial' })
 export class ScriptingService {
     private runner: ScriptRunner
 

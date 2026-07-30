@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Scripting a node from another node
+
+`--scripts` could only reach the machine it was running on. `--scriptable-by <peer>` offers the same capability as an ordinary RPC namespace, so a bench drives a hall of nodes instead of a row of remote desktops. Every MCP script tool gains a `node` argument, absent meaning this one.
+
+- **A service, not a server subclass** — `ScriptingService` composes onto whatever a node already is, the way `BusService` and `ConsoleService` do. Everything built for calling a peer then works on it: argument checking from the contract, `describe()`, the verbs, and the command semantics, which are declared and now committed as a contract that `check` polices.
+- **The grant is made on the node being scripted.** Name nobody, the default, and the namespace is not published at all — `--scripts` alone is a machine that can script itself and cannot be scripted. A call arriving over RPC is refused unless the caller is authenticated *and* named; local use is the object held directly, with no RPC involved.
+- **Through a bus it has to be signed.** Identity is per connection and does not survive a relay, so a hall of nodes on one socket.io bus cannot use this and no flag makes it — the information is not there. A signature is on the frame, so MQTT with `--sign` at both ends is the arrangement that works. Both working shapes have tests.
+
+### Fixed
+
+- **A Python simulator whose interpreter stopped reading took the whole fake down.** Writing to a dead child's stdin raises EPIPE, and an unhandled `'error'` on a stream is an uncaught exception. Failed calls now, rather than a failed process.
+- **`npm` could not be run on Windows.** It was reached through `npm.cmd`, which Node refuses to spawn without a shell since the fix for CVE-2024-27980 — and a shell would have turned the `>`, `<`, `|` and `^` that are legal in a version range into a command line. It goes through `npm-cli.js` and the current Node instead.
+- **`python3` is not the interpreter name on Windows.** Candidates are per platform now, `py` first there, and probed rather than assumed, since Windows ships a `python` that is a Store stub and fails like a missing one.
+- `--scripts` announces itself on startup the way `--allow-exec` does. It is the larger grant of the two and was the quieter one.
+
+### Also
+
+- CI runs build, typecheck and the suite on `windows-latest`. No broker there — service containers are Linux-only — so the MQTT tests skip, and why that is an acceptable gap is written in the workflow.
+- The suite passes against Mosquitto as well as EMQX, so what it tests is MQTT 5 rather than one vendor's reading of it.
+
 ## Source RPC 3.1.0
 
 Additive throughout: new modules, optional fields on existing interfaces, new flags. Nothing that existed in 3.0.0 changes behaviour.
