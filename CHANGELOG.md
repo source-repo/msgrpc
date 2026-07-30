@@ -1,5 +1,14 @@
 # Changelog
 
+## Source RPC 3.4.3
+
+**Nothing in either package has changed.** Both exclude tests from what they publish, and the two commits since 3.4.2 are a test and two workflow files, so the tarballs are the same code 3.4.2 shipped. The release is worth making for the image, which floats on `node:24-alpine` and runs `apk upgrade`, so rebuilding is how it picks up whatever has been fixed in the base since — the case the scheduled scan exists to notice.
+
+### Also
+
+- **A test waited on the wrong party.** The discovery test that calls between two servers waited for the hub to hold a socket for the callee before calling it. That says the callee has connected; it says nothing about whether the announcement has reached the caller, which is what decides whether the call can be routed — and the second call, made the other way, waited for nothing at all. Fast enough to pass everywhere until a loaded Windows runner lost the race and failed with `no route to …`, which is the switch refusing rather than silently dropping. Each caller now waits on its own registry.
+- **The workflow actions are off the deprecated Node 20 runtime.** `checkout` and `setup-node` to v7; `build-push-action` to v7 and `login`, `setup-buildx` and `setup-qemu` to v4. Every one of those majors is the same change underneath — Node 24 as the default runtime, and a move to ESM. `trivy-action` stays pinned where it was.
+
 ## Source RPC 3.4.2
 
 ### Fixed
