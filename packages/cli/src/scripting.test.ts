@@ -3,6 +3,9 @@ import { randomUUID } from 'crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { dirname, resolve } from 'node:path'
 import { createTokenAuthenticator, RpcServer } from '@source-repo/rpc'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 
@@ -156,4 +159,78 @@ test('nobody is named by default, so exposing it locally does not open it to the
     t.false(
         await guard({ identity: { name: 'anyone' }, source: 'anyone', instanceName: 'scripting', method: 'list', params: [], subscription: false })
     )
+})
+
+// ---------------------------------------------------------------- driven the way a model drives it
+
+const here = dirname(fileURLToPath(import.meta.url))
+const cli = resolve(here, 'index.js')
+
+/** The MCP server as a child process, spoken to over its stdio the way a client would. */
+const mcpClient = (argv: string[], token?: string) => {
+    const child = spawn(process.execPath, [cli, 'mcp', ...argv], {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        // The hub authenticates, and a secret reaches the CLI through the environment rather than a
+        // flag - `ps` being readable by everyone on the box.
+        env: { ...process.env, ...(token ? { SOURCE_RPC_TOKEN: token } : {}) }
+    })
+    let buffer = ''
+    const waiting = new Map<number, (value: Record<string, unknown>) => void>()
+    child.stdout.on('data', (chunk: Buffer) => {
+        buffer += chunk.toString()
+        for (let cut = buffer.indexOf('\n'); cut >= 0; cut = buffer.indexOf('\n')) {
+            const line = buffer.slice(0, cut).trim()
+            buffer = buffer.slice(cut + 1)
+            if (!line) continue
+            const message = JSON.parse(line) as { id?: number }
+            if (message.id !== undefined) waiting.get(message.id)?.(message as Record<string, unknown>)
+        }
+    })
+    let id = 0
+    return {
+        child,
+        send: (method: string, params?: unknown) =>
+            new Promise<Record<string, unknown>>((resolve) => {
+                const mine = ++id
+                waiting.set(mine, resolve)
+                child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: mine, method, ...(params ? { params } : {}) })}\n`)
+            }),
+        close: () => child.kill()
+    }
+}
+
+const textOf = (response: Record<string, unknown>) =>
+    ((response.result as { content?: { text?: string }[] } | undefined)?.content ?? []).map((part) => part.text ?? '').join('')
+
+test('a model reaches the node across the hall through the same tool, by naming it', async (t) => {
+    // The whole point of the exercise: one tool, one method name, and the only difference between
+    // this machine and the next one is an argument.
+    const node = await nodeOffering(7563, [peer('mcp-bench')], { 'mcp-key': peer('mcp-bench') })
+    const localDirectory = scriptsDir()
+
+    const client = mcpClient([
+        '--hub',
+        'http://localhost:7563',
+        '--name',
+        peer('mcp-bench'),
+        '--scripts',
+        localDirectory
+    ], 'mcp-key')
+    await client.send('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+
+    // Every script tool now advertises where it can be aimed.
+    const tools = (await client.send('tools/list')).result as { tools: { name: string; inputSchema: { properties?: Record<string, unknown> } }[] }
+    const save = tools.tools.find((tool) => tool.name === 'save_script')!
+    t.truthy(save.inputSchema.properties?.node, 'save_script should say it can be aimed at a node')
+    const peers = tools.tools.find((tool) => tool.name === 'list_peers')!
+    t.falsy(peers.inputSchema.properties?.node, 'a tool that is not about scripts should not have grown one')
+
+    // Local still works, and is the default when no node is named.
+    const savedHere = await client.send('tools/call', { name: 'save_script', arguments: { name: 'here', source: "console.log('local')\n", language: 'mjs' } })
+    t.regex(textOf(savedHere), /Saved/)
+    t.regex(textOf(await client.send('tools/call', { name: 'list_scripts', arguments: {} })), /here/)
+
+    client.close()
+    await node.close()
+    rmSync(localDirectory, { recursive: true, force: true })
 })

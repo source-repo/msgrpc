@@ -3,8 +3,8 @@ import { join, resolve, sep } from 'node:path'
 import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
-import { ScriptRunner, deleteScript, environmentFor, listScripts, readScript, saveScript } from './scripts.js'
-import { addPackage, listPackages, removePackage } from './packages.js'
+import { environmentFor } from './scripts.js'
+import { ScriptingService } from './scripting.js'
 import { checkPeerOn, diffPeersOn } from './conform.js'
 import { openTap } from './tapping.js'
 import type { TappedFrame } from './bus.js'
@@ -273,7 +273,12 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
                       properties: {
                           name: { type: 'string', description: 'A name; the file becomes <name>.ts (or <name>.mjs) in the scripts directory.' },
                           source: { type: 'string', description: 'The program. TypeScript by default - Node runs it directly - so `import type { Pump } from ...` gives a typed proxy.' },
-                          language: { type: 'string', enum: ['ts', 'mjs'], description: 'Default ts. Use mjs for plain JavaScript, or when the server runs on a Node older than 22.6.' }
+                          language: { type: 'string', enum: ['ts', 'mjs'], description: 'Default ts. Use mjs for plain JavaScript, or when the server runs on a Node older than 22.6.' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
                       },
                       required: ['name', 'source'],
                       additionalProperties: false
@@ -282,32 +287,100 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
               {
                   name: 'list_scripts',
                   description: 'The scripts in the directory, and which of them are running here.',
-                  inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'read_script',
                   description: 'The source of one saved script, for changing a part of it rather than rewriting the whole.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'delete_script',
                   description: 'Remove a script from the directory. It is stopped first if it is running.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'start_script',
                   description: 'Run a saved script as its own process. Returns immediately; use script_output to see what it printed.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'stop_script',
                   description: 'Stop a running script. Scripts are stopped anyway when this server exits.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'list_packages',
                   description: 'The npm packages a script in this directory may import, with what is declared and what is actually installed.',
-                  inputSchema: { type: 'object', properties: {}, additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'add_package',
@@ -318,7 +391,12 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
                       type: 'object',
                       properties: {
                           spec: { type: 'string', description: 'Package name, optionally with a version range.' },
-                          allowInstallScripts: { type: 'boolean', description: 'Permit the package to run its own install hooks. Default false.' }
+                          allowInstallScripts: { type: 'boolean', description: 'Permit the package to run its own install hooks. Default false.' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
                       },
                       required: ['spec'],
                       additionalProperties: false
@@ -327,12 +405,36 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
               {
                   name: 'remove_package',
                   description: 'Uninstall an npm package from the scripts directory.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               },
               {
                   name: 'script_output',
                   description: 'The most recent output of a script, running or finished, with stderr lines marked "! ". This is how a script reports; it has no other channel.',
-                  inputSchema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'], additionalProperties: false }
+                  inputSchema: {
+                      type: 'object',
+                      properties: {
+                          name: { type: 'string' },
+                          node: {
+                                  type: 'string',
+                                  description:
+                                      'Which node to do this on. Absent means this one. Another peer works only if that node has named this one as permitted to script it, which is arranged there and not here.'
+                              }
+                      },
+                      required: ['name'],
+                      additionalProperties: false
+                  }
               }
           ]
         : [])
@@ -365,7 +467,28 @@ export const startMcp = async (options: McpOptions) => {
     const fakes = new Map<string, { namespaces: string[]; close: () => Promise<void> }>()
     // Given the same network this server joined, so a script reads its broker url rather than
     // inventing one that is right on this machine and wrong on the next.
-    const runner = options.scripts ? new ScriptRunner(options.scripts, environmentFor(options)) : undefined
+    // The same service a node exposes to the bus, held directly rather than called over RPC - which
+    // is what "local" means for the guard: not a peer name to compare, but no RPC at all.
+    const scripting = options.scripts ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options) }) : undefined
+
+    /**
+     * Whichever node a tool was aimed at. Absent, or this server's own name, is the local object;
+     * anything else is that peer's `scripting` namespace, reached the ordinary way.
+     *
+     * This is the whole of what makes a test hall one place. The tools below do not know which they
+     * are talking to, because there is nothing to know - the method names are the same either way,
+     * which is the point of having made it a namespace rather than a set of tool handlers.
+     */
+    const scriptingOn = async (node: unknown): Promise<ScriptingService> => {
+        const target = typeof node === 'string' && node.trim() ? node.trim() : undefined
+        if (!target || target === options.name) {
+            if (!scripting) throw new Error('scripting is not enabled here - start this server with --scripts <dir>')
+            return scripting
+        }
+        if (!(await connected.network.awaitPeer(target, 5000)))
+            throw new Error(`'${target}' is not on this network. Run list_peers to see who is.`)
+        return (await connected.network.proxy<ScriptingService>('scripting', target)).remote!
+    }
 
     /** A contract given inline, or the name of one saved in the contracts directory. */
     const contractFrom = async (args: { [key: string]: unknown }): Promise<{ schema: RpcSchema } | { problem: string }> => {
@@ -436,85 +559,71 @@ export const startMcp = async (options: McpOptions) => {
             }
         }
 
-        if (runner && options.scripts) {
-            const directory = options.scripts
+        if (scripting && options.scripts) {
             const scriptName = String(args.name ?? '')
+            // One shape for every one of these: find the node, call the method, report what came
+            // back. A refusal from the far end arrives as Forbidden, and saying what that means is
+            // worth more than the code - a key is exchanged out of band, never over this bus.
+            const on = async (act: (target: ScriptingService) => Promise<{ text: string; isError?: boolean }>) => {
+                let target: ScriptingService
+                try {
+                    target = await scriptingOn(args.node)
+                } catch (e) {
+                    return { text: failureText(e), isError: true }
+                }
+                try {
+                    return await act(target)
+                } catch (e) {
+                    const refused = /Forbidden/.test(failureText(e))
+                    return {
+                        text: refused
+                            ? `${String(args.node)} refused: it has not named this peer as one that may script it. That is granted on the far node and the key comes to you out of band - it is deliberately not something this bus can hand over.`
+                            : failureText(e),
+                        isError: true
+                    }
+                }
+            }
+
             if (name === 'save_script') {
                 if (!scriptName || args.source === undefined) return { text: 'save_script needs name and source.', isError: true }
-                try {
-                    const language = args.language === 'mjs' ? 'mjs' : 'ts'
-                    return { text: `Saved ${saveScript(directory, scriptName, String(args.source), language)}. It is not running; start_script runs it.` }
-                } catch (e) {
-                    return { text: `could not save '${scriptName}': ${failureText(e)}`, isError: true }
-                }
+                return await on(async (target) => ({
+                    text: `Saved ${await target.save(scriptName, String(args.source), args.language === 'mjs' ? 'mjs' : 'ts')}. It is not running; start_script runs it.`
+                }))
             }
-            if (name === 'list_scripts')
-                return {
-                    text: JSON.stringify(
-                        listScripts(directory).map((script) => ({
-                            ...script,
-                            running: runner.isRunning(script.name),
-                            ...(runner.status(script.name)?.ended ? { ended: runner.status(script.name)!.ended } : {})
-                        })),
-                        null,
-                        2
-                    )
-                }
-            if (name === 'read_script') {
-                try {
-                    return { text: readScript(directory, scriptName) }
-                } catch (e) {
-                    return { text: `could not read '${scriptName}': ${failureText(e)}`, isError: true }
-                }
-            }
-            if (name === 'delete_script') {
-                try {
-                    if (runner.isRunning(scriptName)) await runner.stop(scriptName)
-                    deleteScript(directory, scriptName)
+            if (name === 'list_scripts') return await on(async (target) => ({ text: JSON.stringify(await target.list(), null, 2) }))
+            if (name === 'read_script') return await on(async (target) => ({ text: await target.read(scriptName) }))
+            if (name === 'delete_script')
+                return await on(async (target) => {
+                    await target.remove(scriptName)
                     return { text: `${scriptName} deleted.` }
-                } catch (e) {
-                    return { text: `could not delete '${scriptName}': ${failureText(e)}`, isError: true }
-                }
-            }
-            if (name === 'start_script') {
-                try {
-                    const started = runner.start(scriptName)
+                })
+            if (name === 'start_script')
+                return await on(async (target) => {
+                    const started = await target.start(scriptName)
                     return { text: `${scriptName} started as pid ${started.pid ?? 'unknown'}. It is a process of its own; script_output is how it reports.` }
-                } catch (e) {
-                    return { text: `could not start '${scriptName}': ${failureText(e)}`, isError: true }
-                }
-            }
-            if (name === 'stop_script') {
-                try {
-                    await runner.stop(scriptName)
+                })
+            if (name === 'stop_script')
+                return await on(async (target) => {
+                    await target.stop(scriptName)
                     return { text: `${scriptName} stopped.` }
-                } catch (e) {
-                    return { text: failureText(e), isError: true }
-                }
-            }
-            if (name === 'list_packages') return { text: JSON.stringify(listPackages(directory), null, 2) }
-            if (name === 'add_package') {
-                try {
-                    const result = await addPackage(directory, String(args.spec ?? ''), args.allowInstallScripts === true)
+                })
+            if (name === 'list_packages') return await on(async (target) => ({ text: JSON.stringify(await target.packages(), null, 2) }))
+            if (name === 'add_package')
+                return await on(async (target) => {
+                    const result = await target.addPackage(String(args.spec ?? ''), args.allowInstallScripts === true)
                     return { text: result.output || 'Installed.', isError: !result.ok }
-                } catch (e) {
-                    return { text: failureText(e), isError: true }
-                }
-            }
-            if (name === 'remove_package') {
-                try {
-                    const result = await removePackage(directory, scriptName)
+                })
+            if (name === 'remove_package')
+                return await on(async (target) => {
+                    const result = await target.removePackage(scriptName)
                     return { text: result.output || 'Removed.', isError: !result.ok }
-                } catch (e) {
-                    return { text: failureText(e), isError: true }
-                }
-            }
-            if (name === 'script_output') {
-                const record = runner.status(scriptName)
-                if (!record) return { text: `'${scriptName}' has not been started here.`, isError: true }
-                const ended = record.ended ? `\n(ended: code ${String(record.ended.code)}${record.ended.signal ? `, signal ${record.ended.signal}` : ''})` : ''
-                return { text: (record.output.length ? record.output.join('\n') : 'It has printed nothing yet.') + ended }
-            }
+                })
+            if (name === 'script_output')
+                return await on(async (target) => {
+                    const record = await target.output(scriptName)
+                    const ended = record.ended ? `\n(ended: code ${String(record.ended.code)}${record.ended.signal ? `, signal ${record.ended.signal}` : ''})` : ''
+                    return { text: (record.output.length ? record.output.join('\n') : 'It has printed nothing yet.') + ended }
+                })
         }
 
         if (name === 'start_fake') return await startFakeTool(args)
@@ -717,7 +826,7 @@ export const startMcp = async (options: McpOptions) => {
         fakes.clear()
         // Scripts are separate processes, so they would outlive this one and go on holding peer
         // names nobody is serving. Stopped rather than orphaned.
-        await runner?.stopAll()
+        await scripting?.close()
         await connected.close()
     }
     // Not stdout: see the note at the top. A client learns what is here from initialize.
