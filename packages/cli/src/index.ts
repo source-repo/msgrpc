@@ -20,6 +20,7 @@ import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
+import { startNode } from './node.js'
 import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
@@ -41,6 +42,7 @@ const usage = `source-rpc <command> [options]
   check     compare the source against a written contract and fail on a breaking change
   console   browse a live network in a browser: peers, what they expose, calls and events
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
+  node      make this machine scriptable from another one, and nothing else, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
 
   bench     call one method over and over and report what it cost
@@ -152,6 +154,15 @@ const usage = `source-rpc <command> [options]
     --speed <n>                 higher is faster, default 1; 0 sends with no waiting
     --json                      machine-readable summary
                                 exits 1 if any answer differed or any call failed
+
+  node
+    --scripts <dir>             where scripts are kept and run. Required
+    --scriptable-by <peer>      who may script this machine, repeatable. Required - a node that
+                                names nobody offers nothing to anybody
+    --broker / --hub / --prefix / --timeout / --name / --sign as above
+                                on a broker, --sign at both ends is what makes the grant work:
+                                without it nothing can prove who a caller is and every call is
+                                refused
 
   broker
     --port <n>                  default 7843, or 8843 with --cert; on every interface
@@ -843,6 +854,43 @@ const runMcp = async (argv: string[]) => {
     process.stdin.on('end', stop)
 }
 
+const runNode = async (argv: string[]) => {
+    const { signing, ...network } = resolveNetworkFlags(argv, 'node', 'node')
+    const scriptsDir = argument(argv, '--scripts', '')
+    const scriptableBy = argumentList(argv, '--scriptable-by')
+    // Both, or this joins the bus, occupies a peer name and offers nothing - a configuration that
+    // reads as though it is working. `mcp` can take one without the other because it has other work.
+    if (!scriptsDir || !scriptableBy.length) {
+        process.stderr.write('source-rpc node: needs --scripts <dir> and at least one --scriptable-by <peer>, or it offers nothing to anybody\n')
+        process.exit(1)
+    }
+
+    const running = await startNode({ ...network, scripts: resolve(scriptsDir), scriptableBy }).catch((e: Error) => {
+        process.stderr.write(`source-rpc node: cannot start: ${e.message}\n`)
+        process.exit(1)
+    })
+    process.stdout.write(
+        `source-rpc node ${network.name} on ${[network.broker, network.hub].filter(Boolean).join(' and ')}, scriptable by ${scriptableBy.join(' and ')}${signing ? ', signing frames' : ''}\n`
+    )
+    if (!signing && network.broker)
+        // Without signatures an MQTT peer has no identity, so the guard refuses everyone and this
+        // node is unreachable for the thing it exists to do. Said now rather than discovered as a
+        // Forbidden on the other machine.
+        process.stderr.write(
+            'source-rpc node: on a broker without --sign nothing can prove who a caller is, so every scripting call will be refused. Give both ends keys.\n'
+        )
+    const stop = () =>
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch((e: unknown) => {
+                process.stderr.write(`source-rpc node: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.exit(1)
+            })
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+}
+
 const runConsole = async (argv: string[]) => {
     const { signing, ...network } = resolveNetworkFlags(argv, 'console', 'console')
     const host = argument(argv, '--host', '127.0.0.1')
@@ -898,6 +946,10 @@ const main = () => {
     }
     if (command === 'broker') {
         void runBroker(argv).catch(fail)
+        return
+    }
+    if (command === 'node') {
+        void runNode(argv).catch(fail)
         return
     }
     if (command === 'console') {

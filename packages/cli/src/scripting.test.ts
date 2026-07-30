@@ -350,3 +350,48 @@ test('a node that names nobody offers no scripting namespace at all', async (t) 
     await bus.close()
     rmSync(nodeDirectory, { recursive: true, force: true })
 })
+
+test('a node command is scriptable and nothing else, and says so when it cannot be', async (t) => {
+    if (skipWithoutBroker(t)) return
+    // The shape for a machine with no model attached: no stdio protocol, no tools, just a peer that
+    // can be scripted by whoever it names.
+    const prefix = `msgrpc/node-cmd-${run}`
+    const keyDirectory = mkdtempSync(join(tmpdir(), 'source-rpc-keys-'))
+    const nodeKeys = join(keyDirectory, 'node.json')
+    // The node signs as itself and knows the bench's key, which is what lets it put a name to the
+    // caller. That secret is the thing that travels out of band.
+    writeFileSync(nodeKeys, JSON.stringify({ name: peer('plc'), secret: 'plc-secret', peers: { [peer('hall')]: 'hall-secret' } }))
+    const scripts = scriptsDir()
+
+    const child = spawn(process.execPath, [cli, 'node', '--broker', BROKER_URL, '--prefix', prefix, '--sign', nodeKeys, '--scripts', scripts, '--scriptable-by', peer('hall')])
+    const said: string[] = []
+    child.stdout.on('data', (chunk: Buffer) => said.push(chunk.toString()))
+    child.stderr.on('data', (chunk: Buffer) => said.push(chunk.toString()))
+
+    const bench = new RpcServer({
+        name: peer('hall'),
+        transports: [
+            new MqttTransport(peer('hall'), BROKER_URL, {
+                prefix,
+                sessionExpirySeconds: 10,
+                sign: createHmacSigner('hall-secret'),
+                verify: createHmacVerifier((who) => (who === peer('plc') ? 'plc-secret' : undefined))
+            })
+        ],
+        readyTimeout: 15000
+    })
+    await bench.ready()
+    t.true(await bench.awaitPeer(peer('plc'), 15000), `the node never appeared: ${said.join('')}`)
+
+    const remote = (await bench.proxy<Scripting>('scripting', peer('plc'))).remote!
+    await remote.save('on-the-plc', "console.log('ran on the plc')\n", 'mjs')
+    t.deepEqual(
+        (await remote.list()).map((entry) => entry.name),
+        ['on-the-plc']
+    )
+
+    child.kill()
+    await bench.close()
+    rmSync(keyDirectory, { recursive: true, force: true })
+    rmSync(scripts, { recursive: true, force: true })
+})

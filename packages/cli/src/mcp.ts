@@ -480,9 +480,19 @@ export const startMcp = async (options: McpOptions) => {
     // construction rather than afterwards, so there is no instant where the namespace is reachable
     // and unguarded.
     const scriptableBy = options.scriptableBy?.filter((entry) => entry.trim()) ?? []
+    const scripting = options.scripts
+        ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options), allow: scriptableBy })
+        : undefined
     const connected = await connectNetwork({
         ...options,
-        ...(scriptableBy.length ? { authorize: scriptingAuthorizer({ directory: options.scripts ?? '', allow: scriptableBy }) } : {})
+        ...(scriptableBy.length
+            ? {
+                  authorize: scriptingAuthorizer({ directory: options.scripts ?? '', allow: scriptableBy }),
+                  // Before ready(), so a queued request cannot arrive at a peer that has not exposed
+                  // the namespace yet - see the note on `expose`.
+                  expose: (network) => network.exposeClassInstance(scripting!)
+              }
+            : {})
     })
     const { network, online } = connected
 
@@ -492,13 +502,8 @@ export const startMcp = async (options: McpOptions) => {
     // inventing one that is right on this machine and wrong on the next.
     // The same service a node exposes to the bus, held directly rather than called over RPC - which
     // is what "local" means for the guard: not a peer name to compare, but no RPC at all.
-    const scripting = options.scripts
-        ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options), allow: scriptableBy })
-        : undefined
-    // Offered to the bus only when somebody has been named. Without that the object is held for this
-    // server's own use and no peer can reach it, which is the difference between a node that can
-    // script itself and one that can be scripted.
-    if (scripting && scriptableBy.length) connected.network.exposeClassInstance(scripting)
+    // The object is held for this server's own use whether or not it was exposed above: that is the
+    // difference between a node that can script itself and one that can be scripted.
 
     /**
      * Whichever node a tool was aimed at. Absent, or this server's own name, is the local object;

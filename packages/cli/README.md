@@ -48,6 +48,7 @@ source-rpc diff      compare what two live peers expose
 ```
 source-rpc console   browse it in a browser: peers, what they expose, calls and events
 source-rpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
+source-rpc node      make this machine scriptable from another one, and nothing else
 source-rpc mcp       serve the network to an MCP client over stdio
 source-rpc peers     who is on the network right now
 source-rpc describe  what one peer exposes
@@ -829,6 +830,18 @@ source-rpc mcp --broker mqtt://bus:1883 --sign node.json --scripts ./scripts --s
 # on the bench
 source-rpc mcp --broker mqtt://bus:1883 --sign bench.json --scripts ./scripts
 ```
+
+On a machine with no model attached — a PLC in the corner of the hall — run `node` instead of `mcp`.
+Same capability, nothing else in it, and no stdio protocol sitting unused beside the part that
+matters:
+
+```
+source-rpc node --scripts ./scripts --scriptable-by bench --broker mqtt://bus:1883 --sign plc.json
+```
+
+Both flags are required there. A node with no directory has nothing to offer and one that names
+nobody offers it to nobody; either way it would join the bus, take a peer name and do nothing, which
+is a configuration that reads as though it works.
 
 The two arrangements that work — this one, and a bench connected directly to the node — each have a
 test. The secret in those key files is what has to reach the far machine out of band: a remote

@@ -40,6 +40,15 @@ export interface NetworkOptions {
      */
     authorize?: RpcAuthorizer
     /**
+     * Given the server to expose things on, before `ready()` is awaited.
+     *
+     * The ordering is not fussiness. A resumed MQTT session is handed its queued messages the
+     * instant it connects, so anything exposed after ready() is exposed too late for the requests
+     * that were waiting - and those callers get ClassNotFound from a peer that does serve the
+     * namespace, a second after it started. The frame spec lists this under known limits.
+     */
+    expose?: (network: RpcServer) => void
+    /**
      * Talk to an `https://`, `wss://` or `mqtts://` peer without checking its certificate.
      *
      * Deliberately unsafe, and off. It exists because a plant's development bus often has a
@@ -100,6 +109,7 @@ export const connectNetwork = async (options: NetworkOptions): Promise<Connected
         transports: networkTransports(options),
         ...(options.authorize ? { authorize: options.authorize } : {})
     })
+    options.expose?.(network)
     await network.ready()
     for (const peer of network.peers.names()) if (peer !== options.name) online.add(peer)
     for (const transport of network.transports) {
