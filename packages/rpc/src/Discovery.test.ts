@@ -228,7 +228,15 @@ test.serial('a server calls out over its own connection, under its own name', as
     const oven = new RpcServer({ name: peer('oven6'), transports: [{ connect: 'http://localhost:3977' }], callTimeout: 4000 })
     oven.exposeClassInstance(new Boiler('the oven'), 'boiler')
     await oven.ready()
-    await waitFor(() => (hub.transports[0] as unknown as { peerSockets: Map<string, unknown> }).peerSockets.has(peer('oven6')))
+    // Waited for on the callers, not on the hub. What decides whether the next line can be routed
+    // is whether the announcement has reached `cell` - the hub having a socket for the oven says
+    // only that the oven has connected, which happens first and says nothing about who has heard.
+    // Both directions, because the second call is made the other way and was waiting for nothing at
+    // all. This passed everywhere until a loaded Windows runner lost the race and reported it as
+    // 'no route to oven6', which is the switch refusing rather than dropping - the whole point of
+    // making that throw.
+    await waitFor(() => cell.peers.names().includes(peer('oven6')))
+    await waitFor(() => oven.peers.names().includes(peer('cell6')))
 
     t.is(await (await cell.proxy<Boiler>('boiler', peer('oven6'))).remote!.whoAnswered(), 'the oven')
     t.is(await (await oven.proxy<Boiler>('boiler', peer('cell6'))).remote!.whoAnswered(), 'the cell')
