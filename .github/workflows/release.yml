@@ -31,10 +31,10 @@ jobs:
             MSGRPC_TEST_BROKER: mqtt://localhost:1883
             SOURCE_RPC_REQUIRE_BROKER: '1'
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   ref: ${{ github.event.inputs.ref || github.ref }}
-            - uses: actions/setup-node@v4
+            - uses: actions/setup-node@v7
               with:
                   node-version: 22
                   cache: npm
@@ -82,10 +82,10 @@ jobs:
             # tarballs were built using this run's OIDC identity. Needs a public repository.
             id-token: write
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   ref: ${{ github.event.inputs.ref || github.ref }}
-            - uses: actions/setup-node@v4
+            - uses: actions/setup-node@v7
               with:
                   node-version: 22
                   cache: npm
@@ -133,7 +133,7 @@ jobs:
             contents: read
             packages: write
         steps:
-            - uses: actions/checkout@v4
+            - uses: actions/checkout@v7
               with:
                   ref: ${{ github.event.inputs.ref || github.ref }}
 
