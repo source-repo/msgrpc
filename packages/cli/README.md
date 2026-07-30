@@ -73,7 +73,7 @@ source-rpc bench     call one method over and over and report what it cost
 
 **Testing against it** — [serve](#serve) · [record and replay](#record-and-replay) · [bench](#bench)
 
-**Running it** — [broker](#broker) · [mcp](#mcp) · [Ports](#ports) · [Flags](#flags)
+**Running it** — [broker](#broker) · [mcp](#mcp) · [Scripting another node](#scripting-another-node) · [Ports](#ports) · [Flags](#flags)
 
 ## console
 
@@ -794,60 +794,6 @@ Note what the compose file does with the console, because it is the part that is
 
 **The tap is only as gated as the broker is.** Anyone who can reach an unauthenticated broker can call `bus.tap()` and mirror everything crossing it. They could always have read the same traffic by impersonating a peer; this is merely one call. `authenticate` and `relay` are what restrict it, and the broker says as much on startup.
 
-## Scripting another node
-
-`--scripts` lets a model write and run programs on the machine it is talking to. On a bench with a
-Linux box, a Windows PLC and a couple of devices, the time goes on the machines it cannot reach — a
-remote desktop each, a file copied by hand, and the mistake you make on the fourth one.
-
-`--scriptable-by <peer>` offers that same capability to a named peer as an ordinary RPC namespace,
-so every script tool takes a `node` argument and one of them reaches the next machine along:
-
-```
-save_script  { name: "ramp", source: "…" }                  # this node, the default
-save_script  { name: "ramp", source: "…", node: "plc-3" }   # the machine across the hall
-```
-
-**The grant is made on the node being scripted, not by the one doing the scripting.** Name nobody —
-the default — and the namespace is not published at all, so a machine with `--scripts` can script
-itself and nothing can script it.
-
-### It has to be signed through a bus
-
-Identity is per connection, and **does not survive a relay**. A bench authenticates to the bus; the
-node being scripted is connected to the bus as well, so it has no connection to the bench and no way
-to learn who it is. It refuses, which is correct — the alternative is trusting a name that arrived
-through a third party. No flag changes this, because the information is not there to have.
-
-A signature is on the frame rather than on the link, so it survives whatever the broker did in
-between. A relayed test hall is therefore MQTT with `--sign` at both ends, each key file naming the
-other peer:
-
-```
-# on the node being scripted
-source-rpc mcp --broker mqtt://bus:1883 --sign node.json --scripts ./scripts --scriptable-by bench
-
-# on the bench
-source-rpc mcp --broker mqtt://bus:1883 --sign bench.json --scripts ./scripts
-```
-
-On a machine with no model attached — a PLC in the corner of the hall — run `node` instead of `mcp`.
-Same capability, nothing else in it, and no stdio protocol sitting unused beside the part that
-matters:
-
-```
-source-rpc node --scripts ./scripts --scriptable-by bench --broker mqtt://bus:1883 --sign plc.json
-```
-
-Both flags are required there. A node with no directory has nothing to offer and one that names
-nobody offers it to nobody; either way it would join the bus, take a peer name and do nothing, which
-is a configuration that reads as though it works.
-
-The two arrangements that work — this one, and a bench connected directly to the node — each have a
-test. The secret in those key files is what has to reach the far machine out of band: a remote
-desktop, a phone call, paper. Deliberately not something the bus can hand over, since a bus able to
-distribute the key to script a node is a bus able to script the node.
-
 ## mcp
 
 ```
@@ -984,6 +930,43 @@ To wire it into a client, give it the command and its flags:
 **Anything a model can reach, it can call.** The peers this lists are real, and `call_method` will happily invoke one that opens a valve. Point it at a network where that is acceptable, or give it credentials that restrict it: `--sign` makes it a peer with an identity, and `authorize` on the servers decides what that identity may do.
 
 **And it can put peers on that network.** `start_fake` adds one — it calls nothing and changes no device, and it refuses a name already in use, but it is a peer other things can find and call. The same `authorize` and `--sign` machinery governs what it may do once it is there. Writing files is the one capability that stays off unless asked for: no `--contracts`, no tools that write.
+
+## Scripting another node
+
+[`--scripts`](#peers-kept-as-scripts) is the local case: a model writing and running programs on the machine it is talking to. On a bench with a Linux box, a Windows PLC and a couple of devices, the time goes on the machines it cannot reach — a remote desktop each, a file copied by hand, and the mistake you make on the fourth one.
+
+`--scriptable-by <peer>` offers that same capability to a named peer as an ordinary RPC namespace, so every script tool takes a `node` argument and one of them reaches the next machine along:
+
+```
+save_script  { name: "ramp", source: "…" }                  # this node, the default
+save_script  { name: "ramp", source: "…", node: "plc-3" }   # the machine across the hall
+```
+
+**The grant is made on the node being scripted, not by the one doing the scripting.** Name nobody — the default — and the namespace is not published at all, so a machine with `--scripts` can script itself and nothing can script it.
+
+### It has to be signed through a bus
+
+Identity is per connection, and **does not survive a relay**. A bench authenticates to the bus; the node being scripted is connected to the bus as well, so it has no connection to the bench and no way to learn who it is. It refuses, which is correct — the alternative is trusting a name that arrived through a third party. No flag changes this, because the information is not there to have.
+
+A signature is on the frame rather than on the link, so it survives whatever the broker did in between. A relayed test hall is therefore MQTT with `--sign` at both ends, each key file naming the other peer:
+
+```
+# on the node being scripted
+source-rpc mcp --broker mqtt://bus:1883 --sign node.json --scripts ./scripts --scriptable-by bench
+
+# on the bench
+source-rpc mcp --broker mqtt://bus:1883 --sign bench.json --scripts ./scripts
+```
+
+On a machine with no model attached — a PLC in the corner of the hall — run `node` instead of `mcp`. Same capability, nothing else in it, and no stdio protocol sitting unused beside the part that matters:
+
+```
+source-rpc node --scripts ./scripts --scriptable-by bench --broker mqtt://bus:1883 --sign plc.json
+```
+
+Both flags are required there. A node with no directory has nothing to offer and one that names nobody offers it to nobody; either way it would join the bus, take a peer name and do nothing, which is a configuration that reads as though it works.
+
+The two arrangements that work — this one, and a bench connected directly to the node — each have a test. The secret in those key files is what has to reach the far machine out of band: a remote desktop, a phone call, paper. Deliberately not something the bus can hand over, since a bus able to distribute the key to script a node is a bus able to script the node.
 
 ## Ports
 

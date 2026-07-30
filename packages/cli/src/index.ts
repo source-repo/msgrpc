@@ -44,6 +44,7 @@ const usage = `source-rpc <command> [options]
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   node      make this machine scriptable from another one, and nothing else, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
+            stdio carries the protocol, so it is not for interactive use
 
   bench     call one method over and over and report what it cost
   diff      compare what two live peers expose, when one of them behaves differently
@@ -130,7 +131,6 @@ const usage = `source-rpc <command> [options]
                                 nothing can script it. The peer must authenticate as that name,
                                 so the key it presents reaches it out of band - deliberately not
                                 something this bus can hand over
-                                stdio carries the protocol, so it is not for interactive use
 
   serve
     --contract <file>           the contract to serve; every namespace in it is exposed
