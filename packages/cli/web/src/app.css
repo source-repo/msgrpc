@@ -802,6 +802,17 @@ textarea.control {
     color: #ffb3b3;
 }
 
+/* Unread messages from a peer, so the count on the chat tab has somewhere to point. Sits before
+   .link, which takes the remaining space with margin-left: auto. */
+.peer .count {
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--accent-dim);
+    color: #cfe6ff;
+    font-size: 10px;
+}
+
 /* The link a peer was found on, next to its name in the list. */
 .peer .link {
     margin-left: auto;

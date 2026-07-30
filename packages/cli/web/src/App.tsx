@@ -159,6 +159,16 @@ type SideTab = 'chat' | 'events' | 'traffic' | 'problems' | 'presence'
 export const App = () => {
     const { service, status, me, events, peerChange, said, frames, problems, peer } = useConsole()
     const [chats, setChats] = useState<{ [peer: string]: ChatMessage[] }>({})
+    /**
+     * Messages that have arrived and not been looked at, per peer.
+     *
+     * Without this a message changes nothing on screen at all: the log is keyed by the peer selected
+     * in the sidebar and the chat tab is one of five, so unless you already had that exact peer
+     * selected with that tab open, a peer could say hello and you would never learn it had. Traffic
+     * and problems have carried a count since they were written; chat was the one that let its
+     * arrivals pass in silence.
+     */
+    const [unread, setUnread] = useState<{ [peer: string]: number }>({})
     const [peers, setPeers] = useState<string[]>([])
     const [offline, setOffline] = useState<Set<string>>(new Set())
     const [selected, setSelected] = useState<string | null>(null)
@@ -193,9 +203,23 @@ export const App = () => {
     }, [me])
 
     useEffect(() => {
-        said.current = (from, text) =>
+        said.current = (from, text) => {
             setChats((current) => ({ ...current, [from]: [...(current[from] ?? []), { from, text, at: Date.now(), mine: false }] }))
+            // Counted unconditionally and cleared below when it is genuinely on screen. Deciding it
+            // here would mean reading `tab` and `selected` out of a closure this effect installs
+            // once, so every message after the first would be judged against a stale view.
+            setUnread((current) => ({ ...current, [from]: (current[from] ?? 0) + 1 }))
+        }
     }, [said])
+
+    // What you are looking at is not unread. An effect rather than something folded into `select`
+    // and the tab buttons, because a message can arrive while its own chat is already open, and
+    // that one has to clear too. Returning `current` unchanged when there is nothing to clear is
+    // what keeps this from setting state on every render for ever.
+    useEffect(() => {
+        if (tab !== 'chat' || !selected) return
+        setUnread((current) => (current[selected] ? { ...current, [selected]: 0 } : current))
+    }, [tab, selected, chats])
 
     /** Calls the peer's own chat service - the page at the other end, not the console. */
     const sendChat = async (text: string) => {
@@ -282,6 +306,7 @@ export const App = () => {
 
     const failed = described && 'error' in described ? described : null
     const description = described && !('error' in described) ? described : null
+    const unreadTotal = Object.values(unread).reduce((total, count) => total + count, 0)
 
     return (
         <div className="app">
@@ -308,6 +333,9 @@ export const App = () => {
                         <span className={`dot${offline.has(peer) ? ' off' : ''}`} />
                         {peer}
                         {peer === me && <span className="you">you</span>}
+                        {/* Which peer to select. The tab count says a message is waiting; without
+                            this you would have to click through every peer to find out whose. */}
+                        {unread[peer] > 0 && <span className="count">{unread[peer]}</span>}
                         {/* Which link it was found on. On a plant with the devices on a broker and
                             the HMIs on a hub, that is the first thing worth knowing about a peer. */}
                         {/* Learned from a description already made, so peers label themselves as
@@ -404,6 +432,7 @@ export const App = () => {
                             {name}
                             {name === 'traffic' && traffic.length > 0 && <span className="count">{traffic.length}</span>}
                             {name === 'problems' && trouble.length > 0 && <span className="count bad">{trouble.length}</span>}
+                            {name === 'chat' && unreadTotal > 0 && <span className="count">{unreadTotal}</span>}
                         </button>
                     ))}
                 </nav>
