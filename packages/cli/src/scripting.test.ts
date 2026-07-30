@@ -6,7 +6,9 @@ import { join } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { createTokenAuthenticator, RpcServer } from '@source-repo/rpc'
+import { connectAsync } from 'mqtt'
+import { writeFileSync } from 'node:fs'
+import { createHmacSigner, createHmacVerifier, createTokenAuthenticator, MqttTransport, RpcServer } from '@source-repo/rpc'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 
 /**
@@ -21,6 +23,27 @@ const run = randomUUID().slice(0, 8)
 const peer = (name: string) => `${name}-${run}`
 
 const scriptsDir = () => mkdtempSync(join(tmpdir(), 'source-rpc-scripting-'))
+
+const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
+const brokerAvailable = async () => {
+    try {
+        const probe = await connectAsync(BROKER_URL, { connectTimeout: 1500, reconnectPeriod: 0 })
+        await probe.endAsync()
+        return true
+    } catch {
+        return false
+    }
+}
+let haveBroker = false
+test.before(async () => {
+    haveBroker = await brokerAvailable()
+    if (!haveBroker && process.env.SOURCE_RPC_REQUIRE_BROKER)
+        throw new Error(`SOURCE_RPC_REQUIRE_BROKER is set, but no MQTT broker answered at ${BROKER_URL} - these tests must not be skipped here`)
+})
+const skipWithoutBroker = (t: { pass: (m?: string) => void }) => {
+    if (!haveBroker) t.pass(`no MQTT broker at ${BROKER_URL} - skipped`)
+    return !haveBroker
+}
 
 const waitFor = async (condition: () => boolean | Promise<boolean>, timeout = 8000) => {
     const deadline = Date.now() + timeout
@@ -233,4 +256,97 @@ test('a model reaches the node across the hall through the same tool, by naming 
     client.close()
     await node.close()
     rmSync(localDirectory, { recursive: true, force: true })
+})
+
+test('through a bus, the grant rests on signed frames rather than the connection', async (t) => {
+    // The finding that made this worth prototyping. A peer authenticates to the *bus*, and the node
+    // being scripted is connected to the bus too - so the node has no connection to the caller and
+    // no way to know who it is. Identity is per-connection and does not survive a relay.
+    //
+    // On MQTT it does, because the signature is on the frame: it is checked by whoever ends up
+    // reading it, whatever the broker did in between. So a relayed test hall has to sign, and this
+    // is the arrangement that works rather than the one that reads as though it should.
+    if (skipWithoutBroker(t)) return
+    const prefix = `msgrpc/scripting-${run}`
+    const nodeKeys = join(mkdtempSync(join(tmpdir(), 'source-rpc-keys-')), 'node.json')
+    const benchKeys = join(dirname(nodeKeys), 'bench.json')
+    writeFileSync(nodeKeys, JSON.stringify({ name: peer('signNode'), secret: 'node-secret', peers: { [peer('signBench')]: 'bench-secret' } }))
+    writeFileSync(benchKeys, JSON.stringify({ name: peer('signBench'), secret: 'bench-secret', peers: { [peer('signNode')]: 'node-secret' } }))
+
+    const nodeDirectory = scriptsDir()
+    const offered = mcpClient([
+        '--broker',
+        BROKER_URL,
+        '--prefix',
+        prefix,
+        '--sign',
+        nodeKeys,
+        '--scripts',
+        nodeDirectory,
+        '--scriptable-by',
+        peer('signBench')
+    ])
+    await offered.send('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+
+    const bench = new RpcServer({
+        name: peer('signBench'),
+        transports: [
+            new MqttTransport(peer('signBench'), BROKER_URL, {
+                prefix,
+                sessionExpirySeconds: 10,
+                sign: createHmacSigner('bench-secret'),
+                verify: createHmacVerifier((who) => (who === peer('signNode') ? 'node-secret' : undefined))
+            })
+        ],
+        readyTimeout: 15000
+    })
+    await bench.ready()
+    t.true(await bench.awaitPeer(peer('signNode'), 12000), 'the offering node never appeared on the broker')
+
+    const remote = (await bench.proxy<Scripting>('scripting', peer('signNode'))).remote!
+    await remote.save('signed', "console.log('written across a broker')\n", 'mjs')
+    t.deepEqual(
+        (await remote.list()).map((entry) => entry.name),
+        ['signed'],
+        'a signed and named peer should be able to write onto that node through the broker'
+    )
+
+    offered.close()
+    await bench.close()
+    rmSync(dirname(nodeKeys), { recursive: true, force: true })
+    rmSync(nodeDirectory, { recursive: true, force: true })
+})
+
+test('a node that names nobody offers no scripting namespace at all', async (t) => {
+    const bus = new RpcServer({
+        name: peer('quietBus'),
+        transports: [{ port: 7565 }],
+        authenticate: createTokenAuthenticator({ 'node-key': peer('quietNode'), 'bench-key': peer('quietBench') })
+    })
+    await bus.ready()
+
+    const nodeDirectory = scriptsDir()
+    // --scripts but no --scriptable-by: it can script itself and nothing else can.
+    const closed = mcpClient(['--hub', 'http://localhost:7565', '--name', peer('quietNode'), '--scripts', nodeDirectory], 'node-key')
+    await closed.send('initialize', { protocolVersion: '2024-11-05', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+
+    const bench = new RpcServer({
+        name: peer('quietBench'),
+        transports: [{ connect: 'http://localhost:7565', credentials: { token: 'bench-key' } }],
+        readyTimeout: 10000,
+        callTimeout: 4000
+    })
+    await bench.ready()
+    t.true(await bench.awaitPeer(peer('quietNode'), 10000))
+
+    const remote = (await bench.proxy<Scripting>('scripting', peer('quietNode'))).remote!
+    const failure = await t.throwsAsync(remote.list())
+    // ClassNotFound rather than Forbidden: there is nothing there to refuse, which is a stronger
+    // statement than a refusal - the capability was never published.
+    t.regex(String(failure?.message), /ClassNotFound|Forbidden/)
+
+    closed.close()
+    await bench.close()
+    await bus.close()
+    rmSync(nodeDirectory, { recursive: true, force: true })
 })

@@ -1,4 +1,13 @@
-import { MqttTransport, RpcServer, SocketIoClientTransport, TransportEvent, type MessageSigner, type MessageVerifier, type Transport } from '@source-repo/rpc'
+import {
+    MqttTransport,
+    RpcServer,
+    SocketIoClientTransport,
+    TransportEvent,
+    type MessageSigner,
+    type MessageVerifier,
+    type RpcAuthorizer,
+    type Transport
+} from '@source-repo/rpc'
 
 /**
  * Joining a network the way every command here joins one: an MQTT broker, a socket.io hub, or both.
@@ -24,6 +33,12 @@ export interface NetworkOptions {
     verify?: MessageVerifier
     /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
     hubCredentials?: unknown
+    /**
+     * Decides what callers may reach on this peer. Only meaningful for a window that has been given
+     * something to offer - see `--scriptable-by`, which is the one thing that turns this from a
+     * peer that exposes nothing into a peer that exposes something worth guarding.
+     */
+    authorize?: RpcAuthorizer
     /**
      * Talk to an `https://`, `wss://` or `mqtts://` peer without checking its certificate.
      *
@@ -82,7 +97,8 @@ export const connectNetwork = async (options: NetworkOptions): Promise<Connected
         name: options.name,
         callTimeout: options.callTimeout,
         readyTimeout: 15000,
-        transports: networkTransports(options)
+        transports: networkTransports(options),
+        ...(options.authorize ? { authorize: options.authorize } : {})
     })
     await network.ready()
     for (const peer of network.peers.names()) if (peer !== options.name) online.add(peer)

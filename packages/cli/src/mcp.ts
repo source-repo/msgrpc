@@ -4,7 +4,7 @@ import { readableNameFor, type RpcSchema, type ServerDescription } from '@source
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { environmentFor } from './scripts.js'
-import { ScriptingService } from './scripting.js'
+import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 import { checkPeerOn, diffPeersOn } from './conform.js'
 import { openTap } from './tapping.js'
 import type { TappedFrame } from './bus.js'
@@ -53,6 +53,16 @@ export interface McpOptions extends NetworkOptions {
      * sandbox and a program that can open sockets are not the same permission.
      */
     scripts?: string
+    /**
+     * Peer names permitted to script this node from elsewhere. Empty - the default - means the
+     * scripting namespace is not offered to the bus at all, so a server with `--scripts` can drive
+     * its own machine and cannot be driven by anybody else's.
+     *
+     * Naming somebody here is the grant, and it is made on the node being scripted rather than by
+     * the one doing the scripting - which is why the key that peer authenticates with has to reach
+     * it out of band. A bus able to hand over that key is a bus able to script the node.
+     */
+    scriptableBy?: string[]
 }
 
 /**
@@ -457,10 +467,23 @@ export const startMcp = async (options: McpOptions) => {
         process.stderr.write(
             `source-rpc mcp: --scripts is on, so this server will write and run programs in ${options.scripts} with your privileges, and may install packages there. Development machines only.\n`
         )
+    // Louder than the rest, because this is the one that puts it on the network rather than under
+    // the person at the keyboard.
+    if (options.scriptableBy?.length)
+        process.stderr.write(
+            `source-rpc mcp: --scriptable-by is on, so ${options.scriptableBy.join(' and ')} may write and run programs on this machine over the network. They must authenticate as those names; a peer this network cannot identify is refused.\n`
+        )
     if (!options.broker && !options.hub) throw new Error('startMcp: give it a broker, a hub, or both')
 
-    // Exposes nothing. This is a window onto the network, not a peer offering anything to it.
-    const connected = await connectNetwork(options)
+    // A window onto the network and nothing more, unless --scriptable-by names somebody - at which
+    // point this peer offers one namespace and the guard that comes with it. The guard goes on at
+    // construction rather than afterwards, so there is no instant where the namespace is reachable
+    // and unguarded.
+    const scriptableBy = options.scriptableBy?.filter((entry) => entry.trim()) ?? []
+    const connected = await connectNetwork({
+        ...options,
+        ...(scriptableBy.length ? { authorize: scriptingAuthorizer({ directory: options.scripts ?? '', allow: scriptableBy }) } : {})
+    })
     const { network, online } = connected
 
     /** Peers this server is standing up, stopped when it exits so none outlive the conversation. */
@@ -469,7 +492,13 @@ export const startMcp = async (options: McpOptions) => {
     // inventing one that is right on this machine and wrong on the next.
     // The same service a node exposes to the bus, held directly rather than called over RPC - which
     // is what "local" means for the guard: not a peer name to compare, but no RPC at all.
-    const scripting = options.scripts ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options) }) : undefined
+    const scripting = options.scripts
+        ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options), allow: scriptableBy })
+        : undefined
+    // Offered to the bus only when somebody has been named. Without that the object is held for this
+    // server's own use and no peer can reach it, which is the difference between a node that can
+    // script itself and one that can be scripted.
+    if (scripting && scriptableBy.length) connected.network.exposeClassInstance(scripting)
 
     /**
      * Whichever node a tool was aimed at. Absent, or this server's own name, is the local object;

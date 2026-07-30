@@ -42,6 +42,22 @@ import { deleteScript, listScripts, readScript, saveScript, ScriptRunner, type S
  * connection to authenticate**: `getIdentity` returns undefined unless frames are signed, so a
  * network without `sign`/`verify` cannot tell anyone apart and this namespace refuses everybody.
  * That is the correct failure, and it is worth knowing before wondering why the key is not working.
+ *
+ * ## Through a bus, sign
+ *
+ * The part that surprises, found by building it. **Identity is per connection, and does not survive
+ * a relay.** A bench authenticates to the broker; the node being scripted is connected to the broker
+ * too, so it has no connection to the bench and no way to learn who it is - and refuses, correctly,
+ * because the alternative is trusting a name that arrived through a third party.
+ *
+ * That rules out the arrangement most people would reach for first: a hall of nodes dialling one bus
+ * over socket.io, each expecting `--scriptable-by` to work through it. It does not, and no flag
+ * makes it, because the information genuinely is not there.
+ *
+ * What does work is signing, and it works because a signature is on the frame rather than on the
+ * link: whoever reads it can check it, whatever the broker did in between. So a relayed test hall is
+ * MQTT with `--sign` at both ends, each key file naming the other peer. There is a test for exactly
+ * that arrangement and one for the direct connection, and they are the two shapes worth copying.
  */
 
 export interface ScriptingOptions {

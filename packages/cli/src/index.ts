@@ -123,6 +123,11 @@ const usage = `source-rpc <command> [options]
     --scripts <dir>             a directory of peers written as programs, which this can add to,
                                 change, start and stop; without it those tools are not offered at
                                 all. A script is a process with your privileges. Development only
+    --scriptable-by <peer>      let that peer script this node over the network, repeatable and
+                                needing --scripts. Without it this machine can script itself and
+                                nothing can script it. The peer must authenticate as that name,
+                                so the key it presents reaches it out of band - deliberately not
+                                something this bus can hand over
                                 stdio carries the protocol, so it is not for interactive use
 
   serve
@@ -418,7 +423,8 @@ const VALUE_FLAGS = new Set([
     '--concurrency',
     '--idempotency-key',
     '--cert',
-    '--key'
+    '--key',
+    '--scriptable-by'
 ])
 
 const positionals = (argv: string[]) => {
@@ -814,8 +820,17 @@ const runMcp = async (argv: string[]) => {
     const { signing: _keys, ...network } = resolveNetworkFlags(argv, 'mcp', 'mcp')
     const contracts = argument(argv, '--contracts', '')
     const scriptsDir = argument(argv, '--scripts', '')
+    const scriptableBy = argumentList(argv, '--scriptable-by')
+    // Refused rather than ignored. Naming who may script a node that has nothing to script is a
+    // configuration which reads as though it worked, and the mistake would surface much later as a
+    // refusal on the other machine.
+    if (scriptableBy.length && !scriptsDir) {
+        process.stderr.write('source-rpc mcp: --scriptable-by needs --scripts, since there is nothing to offer without a directory to keep it in\n')
+        process.exit(1)
+    }
     const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
-        ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}) })
+        ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}),
+        ...(scriptableBy.length ? { scriptableBy } : {}) })
     // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
     const stop = () =>
         void running
