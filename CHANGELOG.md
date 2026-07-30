@@ -1,5 +1,11 @@
 # Changelog
 
+## Source RPC 3.4.2
+
+### Fixed
+
+- **A chat message arriving at the console changed nothing on screen.** The call succeeded and the page answered `delivered` — `ChatService` ran and the message went into state — but the log is keyed by the peer selected in the sidebar and chat is one tab of five, so it was only ever visible to someone who already had that exact peer selected with that exact tab open. Traffic and problems have carried a count since they were written; chat had none, which left it the one pane whose arrivals passed in silence, and the only one of the three another peer can provoke deliberately. There is now a count on the chat tab for the total and a count beside the peer that sent it, since the tab says something is waiting and only the sidebar can say whose. Both clear when you look at that peer's chat, including when the message lands while it is already open.
+
 ## Source RPC 3.4.1
 
 Five faults, all of them found from one command line that should not have started: `source-rpc mcp --hub http://localhost:7843 --scripts --contracts`.
