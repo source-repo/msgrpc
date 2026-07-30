@@ -23,7 +23,7 @@ A class is the contract: the server hands one live instance to `exposeClassInsta
 npm install @source-repo/rpc
 ```
 
-ESM only, Node 18.17 or later, and it runs in the browser.
+ESM only, Node 22 or later, and it runs in the browser.
 
 **If all you need is a browser talking to a Node server, use [tRPC](https://trpc.io).** It is very good at that and far more widely used. This is for the case it does not cover: more than two parties, not all on the same kind of link, and commands where sending one twice is not free.
 

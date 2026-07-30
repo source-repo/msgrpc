@@ -21,7 +21,7 @@ Tooling for [Source RPC](https://www.npmjs.com/package/@source-repo/rpc): read a
 npm install --save-dev @source-repo/rpc-cli
 ```
 
-The command is `source-rpc`. ESM only, Node 18.17 or later. It was `msgrpc` before 3.0.
+The command is `source-rpc`. ESM only, Node 22 or later. It was `msgrpc` before 3.0.
 
 ## What you would not expect
 

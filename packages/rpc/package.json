@@ -19,7 +19,7 @@
         "directory": "packages/rpc"
     },
     "engines": {
-        "node": ">=18.17"
+        "node": ">=22"
     },
     "sideEffects": false,
     "main": "./dist/index.js",

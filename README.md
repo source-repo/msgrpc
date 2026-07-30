@@ -102,7 +102,7 @@ The console calls `ovenSrv` without knowing it is on MQTT. `ovenSrv` calls the b
 | [`packages/rpc`](https://github.com/source-repo/rpc/tree/main/packages/rpc) | `@source-repo/rpc` — the library. Start here. |
 | [`packages/cli`](https://github.com/source-repo/rpc/tree/main/packages/cli) | `@source-repo/rpc-cli` — the `source-rpc` command, and the container. |
 
-ESM only, Node 18.17 or later, and it runs in the browser.
+ESM only, Node 22 or later, and it runs in the browser.
 
 ## Documentation
 
