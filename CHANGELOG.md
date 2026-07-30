@@ -1,5 +1,21 @@
 # Changelog
 
+## Source RPC 3.4.0
+
+### `source-rpc node`
+
+A machine that can be scripted from elsewhere, and does nothing else. `mcp --scripts --scriptable-by` already offered this, and on the machine a model is attached to that is the right shape — on a PLC in the corner of a test hall it is not, since there is no model and no use for a stdio protocol sitting idle beside the part that matters.
+
+```
+source-rpc node --scripts ./scripts --scriptable-by bench --broker mqtt://bus:1883 --sign plc.json
+```
+
+Both flags are required, unlike on `mcp` which can sensibly take one without the other. A node with no directory has nothing to offer and one that names nobody offers it to nobody; either way it takes a peer name and does nothing, which reads as though it works. It also says at startup when it is on a broker without `--sign`, because nothing can prove who a caller is there and every scripting call will be refused.
+
+### Fixed
+
+- **A scripting namespace could be exposed a moment too late.** Both this command and the `mcp` wiring exposed the service after `ready()`. A resumed MQTT session is handed its queued messages the instant it connects, so a request waiting there reached a peer that had not exposed the namespace yet and was answered `ClassNotFound` by a peer that serves it perfectly well a second later — the hazard the frame spec lists under known limits. `connectNetwork` takes an `expose` callback that runs before `ready()`, so both are fixed at one seam.
+
 ## Source RPC 3.3.0
 
 **Node 22 or later.** The floor was `>=18.17`, which claimed two majors that are both end of life — 18 since April 2025, 20 since April 2026 — and that CI had never once run. A supported range nobody tests is a guess with a version number on it.
