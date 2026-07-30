@@ -1,77 +1,77 @@
 {
-  "name": "@source-repo/rpc",
-  "version": "3.1.0",
-  "description": "Source RPC: TypeScript RPC over socket.io and MQTT 5, using classes as contracts shared by client and server",
-  "keywords": [
-    "rpc",
-    "mqtt",
-    "websocket",
-    "socket.io",
-    "typescript",
-    "msgpack"
-  ],
-  "type": "module",
-  "license": "MIT",
-  "author": "anderswestberg",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/source-repo/rpc.git",
-    "directory": "packages/rpc"
-  },
-  "engines": {
-    "node": ">=18.17"
-  },
-  "sideEffects": false,
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "browser": {
-        "types": "./dist/index-web.d.ts",
-        "default": "./dist/index-web.js"
-      },
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./package.json": "./package.json"
-  },
-  "files": [
-    "dist",
-    "!dist/**/*.test.*"
-  ],
-  "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "clean": "rimraf dist",
-    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
-    "test": "npm run clean && npm run build && ava",
-    "prepack": "npm run clean && npm run build",
-    "build:examples": "tsc -p examples/tsconfig.json"
-  },
-  "dependencies": {
-    "@msgpack/msgpack": "^3.1.2",
-    "@scure/bip39": "^2.2.0",
-    "events": "^3.3.0",
-    "mqtt": "^5.10.1",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
-    "uint8array-extras": "^1.1.0",
-    "uuid": "^14.0.1"
-  },
-  "devDependencies": {
-    "@types/node": "^26.1.2",
-    "ava": "^8.0.1",
-    "rimraf": "^6.0.1",
-    "typescript": "^7.0.2"
-  },
-  "ava": {
-    "files": [
-      "dist/**/*.test.js"
+    "name": "@source-repo/rpc",
+    "version": "3.2.0",
+    "description": "Source RPC: TypeScript RPC over socket.io and MQTT 5, using classes as contracts shared by client and server",
+    "keywords": [
+        "rpc",
+        "mqtt",
+        "websocket",
+        "socket.io",
+        "typescript",
+        "msgpack"
     ],
-    "workerThreads": false,
-    "concurrency": 1
-  },
-  "homepage": "https://github.com/source-repo/rpc/tree/main/packages/rpc#readme",
-  "bugs": {
-    "url": "https://github.com/source-repo/rpc/issues"
-  }
+    "type": "module",
+    "license": "MIT",
+    "author": "anderswestberg",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/source-repo/rpc.git",
+        "directory": "packages/rpc"
+    },
+    "engines": {
+        "node": ">=18.17"
+    },
+    "sideEffects": false,
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "browser": {
+                "types": "./dist/index-web.d.ts",
+                "default": "./dist/index-web.js"
+            },
+            "types": "./dist/index.d.ts",
+            "default": "./dist/index.js"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "!dist/**/*.test.*"
+    ],
+    "scripts": {
+        "build": "tsc -p tsconfig.json",
+        "clean": "rimraf dist",
+        "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p examples/tsconfig.json",
+        "test": "npm run clean && npm run build && ava",
+        "prepack": "npm run clean && npm run build",
+        "build:examples": "tsc -p examples/tsconfig.json"
+    },
+    "dependencies": {
+        "@msgpack/msgpack": "^3.1.2",
+        "@scure/bip39": "^2.2.0",
+        "events": "^3.3.0",
+        "mqtt": "^5.10.1",
+        "socket.io": "^4.8.1",
+        "socket.io-client": "^4.8.1",
+        "uint8array-extras": "^1.1.0",
+        "uuid": "^14.0.1"
+    },
+    "devDependencies": {
+        "@types/node": "^26.1.2",
+        "ava": "^8.0.1",
+        "rimraf": "^6.0.1",
+        "typescript": "^7.0.2"
+    },
+    "ava": {
+        "files": [
+            "dist/**/*.test.js"
+        ],
+        "workerThreads": false,
+        "concurrency": 1
+    },
+    "homepage": "https://github.com/source-repo/rpc/tree/main/packages/rpc#readme",
+    "bugs": {
+        "url": "https://github.com/source-repo/rpc/issues"
+    }
 }

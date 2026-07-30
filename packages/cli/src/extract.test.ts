@@ -118,6 +118,10 @@ test('types that cannot be described are reported, never emitted as any', (t) =>
     t.regex(reasons, /subscribe argument 0 is a function/, 'a callback should be refused')
     t.regex(reasons, /lookup return is a Map/, 'a Map should be refused')
     t.regex(reasons, /mixed return has both declared properties and an index signature/, 'a part-dictionary should be refused')
+    // A namespace named by a constant used to be skipped, which produced a contract with nothing in
+    // it and no complaint - "wrote 0 namespaces" being the only sign, in a line that reads like
+    // success. Refused now, the same as a type that cannot be described.
+    t.regex(reasons, /Computed declares @rpcNamespace\(NAMESPACE\).*has to be a literal/, 'a computed namespace name should be refused')
     t.true(
         diagnostics.every((diagnostic) => diagnostic.file && diagnostic.line),
         'each diagnostic should point at a place in the source'

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Source RPC 3.2.0
 
 ### Scripting a node from another node
 

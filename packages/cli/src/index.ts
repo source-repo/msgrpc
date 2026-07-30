@@ -957,7 +957,9 @@ const main = () => {
     if (diagnostics.length) {
         // Refused rather than written with holes in it: a schema that degrades to `any` on the
         // parts it could not read still looks like protection while checking nothing.
-        process.stderr.write(`source-rpc: ${diagnostics.length} type${diagnostics.length === 1 ? '' : 's'} could not be described\n`)
+        // "problems" rather than "types": most are a type the extractor could not read, but a
+        // namespace named by a constant is one of these too and is not a type at all.
+        process.stderr.write(`source-rpc: ${diagnostics.length} problem${diagnostics.length === 1 ? '' : 's'} in the source\n`)
         reportDiagnostics(diagnostics)
         process.exit(1)
     }

@@ -23,3 +23,17 @@ export class Bad {
         return { name: '' }
     }
 }
+
+const NAMESPACE = 'computed'
+
+/**
+ * A namespace named by a constant. Legal TypeScript, and unreadable here: extraction reads the
+ * source rather than running it, so this used to be skipped and the contract came out empty.
+ */
+@rpcNamespace(NAMESPACE)
+export class Computed {
+    @rpc
+    async read() {
+        return 1
+    }
+}

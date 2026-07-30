@@ -178,11 +178,23 @@ const declaredSemantics = (method: MethodDeclaration, context: Context): RpcMeth
     return declared as RpcMethodSemantics
 }
 
-const namespaceDeclaration = (declaration: ClassDeclaration) => {
+const namespaceDeclaration = (declaration: ClassDeclaration, diagnostics: Diagnostic[]) => {
     const decorator = declaration.getDecorators().find((candidate) => candidate.getName() === 'rpcNamespace')
     if (!decorator) return undefined
     const [nameArgument, optionsArgument] = decorator.getArguments()
-    const name = Node.isStringLiteral(nameArgument) ? nameArgument.getLiteralValue() : undefined
+    // Reported rather than skipped. This reads the source rather than running it, so a name that is
+    // a constant cannot be resolved - and a class quietly left out produced a contract with nothing
+    // in it whose only symptom was the count in "wrote 0 namespaces", which reads like success.
+    if (!Node.isStringLiteral(nameArgument)) {
+        diagnostics.push({
+            where: declaration.getName() ?? 'class',
+            reason: `declares @rpcNamespace(${nameArgument?.getText() ?? ''}) - the name has to be a literal, since this reads the source rather than running it`,
+            file: declaration.getSourceFile().getFilePath(),
+            line: declaration.getStartLineNumber()
+        })
+        return undefined
+    }
+    const name = nameArgument.getLiteralValue()
     if (!name) return undefined
     let version: string | undefined
     if (Node.isObjectLiteralExpression(optionsArgument)) {
@@ -268,7 +280,7 @@ export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
 
     for (const sourceFile of project.getSourceFiles().filter((file) => own.has(resolvePath(file.getFilePath())))) {
         for (const declaration of sourceFile.getClasses()) {
-            const declared = namespaceDeclaration(declaration)
+            const declared = namespaceDeclaration(declaration, diagnostics)
             if (!declared) continue
 
             const methods: { [method: string]: MethodSchema } = {}
