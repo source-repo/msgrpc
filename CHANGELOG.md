@@ -1,5 +1,13 @@
 # Changelog
 
+## Source RPC 3.3.0
+
+**Node 22 or later.** The floor was `>=18.17`, which claimed two majors that are both end of life — 18 since April 2025, 20 since April 2026 — and that CI had never once run. A supported range nobody tests is a guess with a version number on it.
+
+22 rather than 24: it is what CI runs, what the Windows job runs, and what a current Windows IoT box has. Nothing else changed, so a peer already on 22 needs nothing from this release.
+
+A major by the letter of semver, since a consumer pinning `engine-strict` on an older Node gets a hard failure rather than a warning. Released as a minor because the runtimes being dropped are unmaintained and were never verified against, which makes this a correction to a claim rather than a withdrawal of support.
+
 ## Source RPC 3.2.0
 
 ### Scripting a node from another node
