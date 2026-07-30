@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
@@ -296,7 +296,7 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
               },
               {
                   name: 'list_scripts',
-                  description: 'The scripts in the directory, and which of them are running here.',
+                  description: 'The scripts in the directory, which of them are running here, and which directory that is.',
                   inputSchema: {
                       type: 'object',
                       properties: {
@@ -450,9 +450,21 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
         : [])
 ]
 
-const failureText = (e: unknown) => {
+/**
+ * A failure as one line of text.
+ *
+ * The code is worth prefixing because an RPC error carries it apart from its message - `Forbidden`
+ * beside "not permitted to relay" - and the code is the part a model can act on. A `node:fs` error
+ * already opens with its own code, so prefixing that one again produced
+ * `ENOENT: ENOENT: no such file or directory`, which reads as the same thing having gone wrong
+ * twice rather than as one missing directory.
+ */
+export const failureText = (e: unknown) => {
     const error = e as { code?: string; message?: string }
-    return error?.code ? `${error.code}: ${error.message ?? ''}`.trim() : e instanceof Error ? e.message : String(e)
+    const message = (error?.message ?? (e instanceof Error ? e.message : String(e))).trim()
+    if (!error?.code) return message
+    if (!message) return error.code
+    return message.startsWith(error.code) ? message : `${error.code}: ${message}`
 }
 
 export const startMcp = async (options: McpOptions) => {
@@ -624,7 +636,15 @@ export const startMcp = async (options: McpOptions) => {
                     text: `Saved ${await target.save(scriptName, String(args.source), args.language === 'mjs' ? 'mjs' : 'ts')}. It is not running; start_script runs it.`
                 }))
             }
-            if (name === 'list_scripts') return await on(async (target) => ({ text: JSON.stringify(await target.list(), null, 2) }))
+            if (name === 'list_scripts') {
+                // Said with the list, because an empty list from the directory you meant and an
+                // empty list from one you did not are the same two characters - and a `--scripts`
+                // given the next flag as its value produces exactly the second, with nothing else
+                // on hand to tell them apart. A remote node is named instead of its directory,
+                // which is a path on a machine this server cannot look at.
+                const where = args.node ? { node: String(args.node) } : { directory: options.scripts }
+                return await on(async (target) => ({ text: JSON.stringify({ ...where, scripts: await target.list() }, null, 2) }))
+            }
             if (name === 'read_script') return await on(async (target) => ({ text: await target.read(scriptName) }))
             if (name === 'delete_script')
                 return await on(async (target) => {
@@ -676,6 +696,11 @@ export const startMcp = async (options: McpOptions) => {
             try {
                 if (!looksLikeSchema(args.schema)) return { text: 'schema must be an msgrpc contract: {"schema":1,"namespaces":{…}}.', isError: true }
                 const file = contractPath(options.contracts, String(args.name ?? ''))
+                // Made on the way past, the way saveScript makes the scripts directory. `--contracts
+                // ./contracts` names where contracts are to go, not somewhere that already has to
+                // exist, and a tool that is offered and then fails ENOENT on the first thing asked
+                // of it reads as a broken server rather than as a directory nobody created.
+                mkdirSync(resolve(options.contracts), { recursive: true })
                 writeFileSync(file, JSON.stringify(args.schema, null, 2) + '\n')
                 return { text: `Wrote ${file}. Serve it with \`source-rpc serve --contract ${file}\`, or check a device against it with \`source-rpc check --peer <name> --against ${file}\`.` }
             } catch (e) {
@@ -685,7 +710,10 @@ export const startMcp = async (options: McpOptions) => {
         if (name === 'list_contracts') {
             if (!options.contracts) return { text: 'This server was started without a contracts directory.', isError: true }
             try {
-                const saved = readdirSync(options.contracts)
+                // Not yet created is not an error: it is an empty directory, which is the same
+                // answer listScripts gives from the same state and for the same reason. Anything
+                // else - a directory that is there and cannot be read - still is one.
+                const saved = (existsSync(options.contracts) ? readdirSync(options.contracts) : [])
                     .filter((entry) => entry.endsWith('.types.json'))
                     .map((entry) => {
                         const contract = entry.replace(/\.types\.json$/, '')

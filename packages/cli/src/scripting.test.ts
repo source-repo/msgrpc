@@ -251,7 +251,14 @@ test('a model reaches the node across the hall through the same tool, by naming 
     // Local still works, and is the default when no node is named.
     const savedHere = await client.send('tools/call', { name: 'save_script', arguments: { name: 'here', source: "console.log('local')\n", language: 'mjs' } })
     t.regex(textOf(savedHere), /Saved/)
-    t.regex(textOf(await client.send('tools/call', { name: 'list_scripts', arguments: {} })), /here/)
+    const listed = JSON.parse(textOf(await client.send('tools/call', { name: 'list_scripts', arguments: {} }))) as { directory: string; scripts: { name: string }[] }
+    t.deepEqual(
+        listed.scripts.map((script) => script.name),
+        ['here']
+    )
+    // Said with the list, because an empty list from the directory you meant and an empty list from
+    // one you mistyped are the same two characters.
+    t.is(listed.directory, localDirectory)
 
     client.close()
     await node.close()

@@ -189,14 +189,34 @@ const usage = `source-rpc <command> [options]
                                 never a flag: ps is readable by everyone on the box
 `
 
+/**
+ * The word after a flag, refusing one that is another flag.
+ *
+ * `--scripts --contracts` is two flags and no directory between them. Taking the next word blind
+ * made the first one's value the literal string `--contracts`, while the second - now the last word
+ * on the line - found nothing after it and fell back to its default, which switched it off. The
+ * result was an MCP server offering script tools aimed at a directory named `--contracts` and no
+ * contract tools at all, from a command line that read correctly at a glance and reported no
+ * complaint. Every silent part of that is the fallback doing its job for the wrong reason.
+ *
+ * Nothing any of these flags takes - a directory, a url, a peer name, a key file, a number - begins
+ * with `--`, so a value that does is the next flag, and the one before it was given nothing.
+ */
+const valueAfter = (argv: string[], flag: string, index: number) => {
+    const value = argv[index + 1]
+    if (value === undefined || value === '') throw new Error(`${flag} needs a value, and nothing follows it`)
+    if (value.startsWith('--')) throw new Error(`${flag} needs a value, and '${value}' is another flag`)
+    return value
+}
+
 const argument = (argv: string[], flag: string, fallback: string) => {
     const index = argv.indexOf(flag)
-    return index === -1 ? fallback : (argv[index + 1] ?? fallback)
+    return index === -1 ? fallback : valueAfter(argv, flag, index)
 }
 
 /** Every occurrence of a repeatable flag, so --upstream can be given more than once. */
 const argumentList = (argv: string[], flag: string) =>
-    argv.map((value, index) => (value === flag ? argv[index + 1] : undefined)).filter((value): value is string => !!value)
+    argv.flatMap((value, index) => (value === flag ? [valueAfter(argv, flag, index)] : []))
 
 const DIAGNOSTIC_LIMIT = 25
 
@@ -1062,4 +1082,12 @@ const main = () => {
     process.stdout.write(`source-rpc: no breaking changes against ${against}\n`)
 }
 
-main()
+try {
+    main()
+} catch (e) {
+    // A flag with no value is a sentence, not a stack trace. The async verbs have `fail` for this,
+    // but the flags are read before any promise exists - `--project` before the command is even
+    // dispatched - so the synchronous path needs its own.
+    process.stderr.write(`source-rpc${process.argv[2] ? ` ${process.argv[2]}` : ''}: ${e instanceof Error ? e.message : String(e)}\n`)
+    process.exit(1)
+}

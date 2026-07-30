@@ -7,6 +7,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { rpc, rpcNamespace, RpcServer } from '@source-repo/rpc'
+import { failureText } from './mcp.js'
 
 /**
  * Driven as a client would drive it: a real child process, real newline-delimited JSON-RPC over its
@@ -299,4 +300,42 @@ test('with a contracts directory it can save one, list it, and serve it back', a
     client.close()
     await hub.close()
     rmSync(directory, { recursive: true, force: true })
+})
+
+test('a contracts directory that does not exist yet is an empty one, and the first save makes it', async (t) => {
+    const parent = mkdtempSync(join(tmpdir(), 'msgrpc-contracts-'))
+    // Deliberately not created: `--contracts ./contracts` says where contracts are to go, not
+    // somewhere that already has to be there. Both tools used to fail on it - one with a raw ENOENT
+    // that reads as a broken server rather than as a directory nobody has made yet.
+    const directory = join(parent, 'contracts')
+    const hub = new RpcServer({ name: peer('hub6'), transports: [{ port: 3994 }] })
+    await hub.ready()
+    const client = mcpClient(3994, ['--contracts', directory])
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+
+    const empty = await client.send('tools/call', { name: 'list_contracts', arguments: {} })
+    t.false(toolText(empty).isError, toolText(empty).text)
+    t.deepEqual((JSON.parse(toolText(empty).text) as { contracts: unknown[] }).contracts, [], 'nothing saved yet is an empty list, not a failure')
+
+    const saved = await client.send('tools/call', { name: 'save_contract', arguments: { name: 'plant', schema: plantContract } })
+    t.false(toolText(saved).isError, toolText(saved).text)
+    t.deepEqual(JSON.parse(readFileSync(join(directory, 'plant.types.json'), 'utf8')), plantContract, 'the directory should have been made on the way past')
+
+    t.deepEqual(client.stray, [], 'stdout must carry protocol and nothing else')
+    client.close()
+    await hub.close()
+    rmSync(parent, { recursive: true, force: true })
+})
+
+/**
+ * A `node:fs` error already opens with its own code, and prefixing it again said `ENOENT: ENOENT:`
+ * - the same thing appearing to have gone wrong twice. An RPC error keeps its code apart from its
+ * message, which is the case the prefix exists for.
+ */
+test('a failure carrying a code is not made to repeat it', (t) => {
+    t.is(failureText(Object.assign(new Error('ENOENT: no such file or directory, scandir /x'), { code: 'ENOENT' })), 'ENOENT: no such file or directory, scandir /x')
+    t.is(failureText(Object.assign(new Error('not permitted to relay'), { code: 'Forbidden' })), 'Forbidden: not permitted to relay')
+    t.is(failureText(new Error('no code at all')), 'no code at all')
+    t.is(failureText('a string'), 'a string')
 })
