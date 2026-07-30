@@ -1,5 +1,17 @@
 # Changelog
 
+## Source RPC 3.4.1
+
+Five faults, all of them found from one command line that should not have started: `source-rpc mcp --hub http://localhost:7843 --scripts --contracts`.
+
+### Fixed
+
+- **A flag would take the next flag as its value.** That command is two flags with no directory between them, and the word after a flag was read unchecked — so `--scripts` took the literal string `--contracts`, and `--contracts`, by then the last word on the line, found nothing after it and fell back to its default, which switched it off. The server started, offered script tools aimed at a directory named `--contracts`, offered no contract tools at all, and said nothing about either. Every value-taking flag was affected: `--sign --scripts ./x` took `"--scripts"` as the key file just as willingly. Nothing any of them takes — a directory, a url, a peer name, a key file, a number — begins with `--`, so a value that does is a missing one, and the command is now refused with the flag named. The refusal is a sentence rather than a stack trace: these are read before any promise exists, so the entry point needed its own catch.
+- **`save_contract` could not create its own directory.** It wrote straight to the path, so `--contracts ./contracts` worked only if you had already made the directory by hand — a tool advertised at startup and then failing `ENOENT` on the first thing asked of it, which reads as a broken server rather than as a directory nobody created. `saveScript` has made the scripts directory since it was written; this now matches it.
+- **`list_contracts` reported a directory that did not exist yet as an error.** `list_scripts` answers with an empty list from the same state, for the reason written above it: not yet created is not an error, it is an empty directory. A directory that is there and cannot be read still is one.
+- **A failure repeated its own code.** `node:fs` errors already open with theirs, so prefixing produced `ENOENT: ENOENT: no such file or directory` — the same thing appearing to have gone wrong twice. An RPC error carries its code apart from its message, which is the case the prefix exists for, so the prefix is now added only when it is not already there.
+- **`list_scripts` says which directory it read.** An empty list from the directory you meant and an empty list from one you did not are the same two characters, and the first fault above produces exactly the second. The tool returns `{ directory, scripts }` rather than a bare array, or `{ node, scripts }` when aimed at another machine, whose directory is a path this server cannot see. The `scripting` RPC contract behind it is unchanged.
+
 ## Source RPC 3.4.0
 
 ### `source-rpc node`

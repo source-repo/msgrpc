@@ -25,7 +25,7 @@ FROM node:24-alpine AS base
 
 # `apk upgrade` because the base image is only as patched as the day it was published, and most of
 # what a scanner finds against a week-old tag is already fixed upstream.
-ARG VERSION=3.4.0
+ARG VERSION=3.4.1
 RUN apk upgrade --no-cache \
     && npm install -g @source-repo/rpc-cli@${VERSION} \
     && npm cache clean --force
