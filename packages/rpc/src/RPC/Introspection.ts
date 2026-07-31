@@ -82,6 +82,12 @@ export interface DescribedNamespace {
     component?: DescribedComponent
     /** Present when this host declared where the instance sits. */
     topology?: DescribedTopology
+    /**
+     * Package-qualified capability names, read from the extracted schema and never from
+     * constructor.name - a bundler mangles the latter, and schema data survives minification.
+     * Discoverable therefore means having an extracted contract, as a rule rather than a surprise.
+     */
+    capabilities?: string[]
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }
@@ -288,6 +294,7 @@ export class Introspection {
                 emitter: instance instanceof EventEmitter,
                 ...(component ? { component } : {}),
                 ...(topology ? { topology } : {}),
+                ...(described?.capabilities ? { capabilities: described.capabilities } : {}),
                 methods,
                 events
             }

@@ -1219,3 +1219,14 @@ textarea.control {
 .owner-chip.link:hover {
     border-color: var(--accent);
 }
+
+/* A capability chip: what the peer can do, qualified by the package that defines it. */
+.capability {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: var(--mono);
+    border: 1px solid var(--accent-dim);
+    color: var(--accent);
+    font-weight: 400;
+}

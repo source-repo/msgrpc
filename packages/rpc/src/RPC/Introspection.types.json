@@ -336,6 +336,15 @@
           },
           "optional": true
         },
+        "capabilities": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "optional": true
+        },
         "methods": {
           "type": {
             "kind": "array",

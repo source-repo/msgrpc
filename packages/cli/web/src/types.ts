@@ -64,6 +64,7 @@ export interface DescribedNamespace {
     emitter: boolean
     component?: DescribedComponent
     topology?: DescribedTopology
+    capabilities?: string[]
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }

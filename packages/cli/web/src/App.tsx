@@ -377,6 +377,13 @@ export const App = () => {
                                         {namespace.className}
                                         {namespace.created ? ' · created at runtime' : ''}
                                     </span>
+                                    {/* From the schema, never the class name above - which a bundle
+                                        mangles while the extracted contract stays intact. */}
+                                    {namespace.capabilities?.map((capability) => (
+                                        <span key={capability} className="capability" title="implements this contract interface">
+                                            {capability}
+                                        </span>
+                                    ))}
                                 </h2>
                                 {/* Observed by the page itself over its own peer link - the console
                                     relays nothing. Refreshing the description after subscribing is
