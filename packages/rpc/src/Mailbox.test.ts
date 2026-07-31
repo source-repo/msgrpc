@@ -168,7 +168,7 @@ test('a superseded setpoint is answered immediately, and the newest value is the
     await server.close()
 })
 
-test('conflate without idempotent-command semantics is refused at expose time', (t) => {
+test('conflate without idempotent-command semantics is refused at expose time', async (t) => {
     // Dropping one of two queued non-repeatable commands would silently skip promised work, so the
     // combination fails where the developer is looking, not where an operator is.
     @rpcNamespace('bad')
@@ -191,4 +191,8 @@ test('conflate without idempotent-command semantics is refused at expose time', 
     }
     const undeclared = t.throws(() => server.exposeClassInstance(new Undeclared()))
     t.regex(String(undeclared?.message), /free to skip/)
+
+    // Never ready()'d, but still holding whatever the constructor started - unclosed, it kept the
+    // event loop alive and the whole file was reported as failing to exit.
+    await server.close().catch(() => undefined)
 })
