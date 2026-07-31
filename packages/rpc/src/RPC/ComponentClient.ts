@@ -1,5 +1,5 @@
 import { TransportEvent } from './Core.js'
-import { componentSnapshotEvent, type RpcComponent, type RpcComponentData, type RpcComponentSnapshot } from './Component.js'
+import { componentSnapshotEvent, type RpcComponent, type RpcComponentAuthority, type RpcComponentData, type RpcComponentSnapshot } from './Component.js'
 import type { RpcCallOptions, RpcClientHandler, WithOptions } from './RpcClientHandler.js'
 
 /**
@@ -41,6 +41,15 @@ export type RpcComponentLike = { readonly props: RpcComponentData; readonly stat
 
 export type RpcComponentProxy<T extends RpcComponentLike> = T & {
     $with(options: RpcCallOptions): RpcComponentProxy<T>
+    /**
+     * Ask for control of the component. Granted when free, renewed when already held by this peer,
+     * refused `NotInControl` naming the holder when held by another - unless `take`, the break-in
+     * every plant panel has, which authorize() on the server decides who may use. The lease always
+     * expires; who holds it is in every snapshot's `authority`.
+     */
+    $acquire(ttlMs?: number, options?: { take?: boolean }): Promise<RpcComponentAuthority>
+    /** Idempotent: releasing what this peer does not hold answers politely rather than erring. */
+    $release(): Promise<'ok' | 'ok - was not holding'>
     readonly [rpcComponent]: RpcComponentStore<ComponentProps<T>, ComponentState<T>>
 }
 

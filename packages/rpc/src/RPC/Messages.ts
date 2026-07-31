@@ -81,6 +81,13 @@ export type RpcErrorCode =
      * opted into by declaring `conflate`.
      */
     | 'Superseded'
+    /**
+     * The method requires the component's authority and the caller does not hold it. The message
+     * names who does, because the operator's next question is always "then who is". It certainly
+     * did not run; retrying without acquiring will refuse again. An execution-layer refusal like
+     * `Busy`, which is why it is a code and not a domain result.
+     */
+    | 'NotInControl'
 
 /**
  * What a method does to the world, which decides what a caller may do about an uncertain answer.

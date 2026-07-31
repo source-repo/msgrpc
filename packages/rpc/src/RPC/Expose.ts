@@ -44,8 +44,10 @@ const marked = new WeakMap<object, Set<string>>()
 const semantics = new WeakMap<object, Map<string, RpcMethodSemantics>>()
 /** Methods declared conflatable per constructor, for the queues to read. */
 const conflated = new WeakMap<object, Set<string>>()
+/** Methods that require the caller to hold the component's authority, per constructor. */
+const authority = new WeakMap<object, Set<string>>()
 
-const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean) => {
+const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean) => {
     let names = marked.get(constructor)
     if (!names) marked.set(constructor, (names = new Set()))
     names.add(method)
@@ -53,6 +55,11 @@ const markOn = (constructor: object, method: string, declared?: RpcMethodSemanti
         let conflatable = conflated.get(constructor)
         if (!conflatable) conflated.set(constructor, (conflatable = new Set()))
         conflatable.add(method)
+    }
+    if (requiresAuthority) {
+        let guarded = authority.get(constructor)
+        if (!guarded) authority.set(constructor, (guarded = new Set()))
+        guarded.add(method)
     }
     if (!declared) return
     let declarations = semantics.get(constructor)
@@ -78,6 +85,17 @@ export interface RpcMethodOptions {
      * and a query has no queue to conflate in.
      */
     conflate?: boolean
+    /**
+     * Only the peer currently holding this component's authority may call it - the plant's
+     * local/remote switch, the HMI-in-control, the teach pendant that owns the arm. Authority is
+     * acquired with `$acquire`, visible in the component snapshot as `authority`, and expires.
+     *
+     * Only declared methods are gated, which is the safety rule stated positively: an E-stop is
+     * written without this flag and is therefore never behind a held lease. Declaring it on a
+     * class that is not an RpcComponent is refused at expose time - authority is held on the
+     * component, so anywhere else there is nothing to check against.
+     */
+    requiresAuthority?: boolean
 }
 
 type RpcMethodDecorator<This, Args extends unknown[], Return> = (
@@ -92,7 +110,7 @@ const mark = <This, Args extends unknown[], Return>(
     if (context.static) throw new Error('@rpc: static methods cannot be exposed')
     if (context.private) throw new Error('@rpc: private methods cannot be exposed')
     context.addInitializer(function (this: This) {
-        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate)
+        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority)
     })
 }
 
@@ -212,6 +230,15 @@ export const declaredConflation = (instance: object): Set<string> => {
     const methods = new Set<string>()
     for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
         for (const method of conflated.get(ctor) ?? []) methods.add(method)
+    }
+    return methods
+}
+
+/** The methods an instance declares as authority-gated, walking the chain so a subclass inherits them. */
+export const declaredAuthority = (instance: object): Set<string> => {
+    const methods = new Set<string>()
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        for (const method of authority.get(ctor) ?? []) methods.add(method)
     }
     return methods
 }

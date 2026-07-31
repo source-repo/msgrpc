@@ -31,6 +31,8 @@ export interface DescribedMethod {
      * methods should treat as "ask before pressing this".
      */
     semantics?: RpcMethodSemantics
+    /** True when only the peer holding the component's authority may call it. */
+    requiresAuthority?: boolean
 }
 
 export interface DescribedEvent {
@@ -177,7 +179,8 @@ export class Introspection {
                 return {
                     name: method,
                     ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}),
-                    ...(semantics ? { semantics } : {})
+                    ...(semantics ? { semantics } : {}),
+                    ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
                 }
             })
 

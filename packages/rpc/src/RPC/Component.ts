@@ -19,6 +19,24 @@ import type { ILogger } from '../Logging/ILogger.js'
 
 export type RpcComponentData = Record<string, unknown>
 
+/**
+ * Who is in control of this component, visible to every observer - the plant's arbitration state,
+ * carried in the snapshot beside props and state rather than inside either: it is the library's
+ * bookkeeping, not the class's contract, and it must not collide with a schema-checked state shape.
+ */
+export interface RpcComponentAuthority {
+    /** Peer currently holding authority, as the transport vouched for it. Absent when free. */
+    readonly holder?: string
+    /** When the hold lapses on its own. A lease always expires - one that cannot is a mutex. */
+    readonly expiresAt?: number
+    /**
+     * Increments on every grant, take, release and expiry - never on a holder's renewal, so a
+     * holder's own in-flight commands survive extending the lease. The visible fence counter: the
+     * within-epoch cousin of the topology spec's durable ownerEpoch, which arrives with M4.
+     */
+    readonly generation: number
+}
+
 export interface RpcComponentSnapshot<P extends RpcComponentData, S extends RpcComponentData> {
     /** Changes when the component instance is reconstructed - a restart is a new epoch. */
     readonly epoch: string
@@ -26,6 +44,8 @@ export interface RpcComponentSnapshot<P extends RpcComponentData, S extends RpcC
     readonly revision: number
     readonly props: Readonly<P>
     readonly state: Readonly<S>
+    /** Optional on the wire: a snapshot from a server older than the lease simply has no holder. */
+    readonly authority?: RpcComponentAuthority
 }
 
 /**
@@ -41,6 +61,9 @@ interface ComponentInternals {
     revision: number
     props: Readonly<RpcComponentData>
     state: Readonly<RpcComponentData>
+    authority: RpcComponentAuthority
+    /** Cleared and re-armed on every grant and renewal; unref'd so it cannot hold a process open. */
+    expiryTimer?: NodeJS.Timeout
     /** Installed at exposure. Until then commits are local and nobody is listening. */
     notify?: () => void
     /** Installed at exposure when snapshot validation is on. A problem string refuses the commit. */
@@ -77,7 +100,7 @@ const commit = (component: object, next: { props?: Readonly<RpcComponentData>; s
 export abstract class RpcComponent<P extends RpcComponentData, S extends RpcComponentData> extends EventEmitter {
     protected constructor(initialProps: P, initialState: S) {
         super()
-        internals.set(this, { epoch: uuidv4(), revision: 0, props: frozen(initialProps), state: frozen(initialState) })
+        internals.set(this, { epoch: uuidv4(), revision: 0, props: frozen(initialProps), state: frozen(initialState), authority: Object.freeze({ generation: 0 }) })
     }
 
     public get props(): Readonly<P> {
@@ -131,7 +154,79 @@ export const componentHost = <P extends RpcComponentData, S extends RpcComponent
 /** The current snapshot, for the exposure machinery and the host. */
 export const componentSnapshot = (component: object): RpcComponentSnapshot<RpcComponentData, RpcComponentData> => {
     const held = internalsOf(component)
-    return { epoch: held.epoch, revision: held.revision, props: held.props, state: held.state }
+    return { epoch: held.epoch, revision: held.revision, props: held.props, state: held.state, authority: held.authority }
+}
+
+/** The current arbitration state, for the dispatch layer's authority checks. */
+export const componentAuthority = (component: object): RpcComponentAuthority => internalsOf(component).authority
+
+/** A lease always expires. The default is long enough to work under, short enough to walk away from. */
+export const DEFAULT_AUTHORITY_TTL = 60_000
+
+export type RpcAuthorityChangeReason = 'acquired' | 'renewed' | 'taken' | 'released' | 'expired'
+
+/** Emitted on the component as the `authorityChanged` event, so expiry and takeover are observable. */
+export interface RpcAuthorityChange {
+    readonly reason: RpcAuthorityChangeReason
+    readonly authority: RpcComponentAuthority
+    readonly previousHolder?: string
+}
+
+/**
+ * Replace the arbitration state and tell the world: revision bumps so the snapshot republishes with
+ * the new holder in it, and `authorityChanged` carries the reason - a snapshot alone can say who is
+ * in control now, but not whether the last holder released or was expired out.
+ */
+const commitAuthority = (component: object, next: RpcComponentAuthority, reason: RpcAuthorityChangeReason) => {
+    const held = internalsOf(component)
+    const previousHolder = held.authority.holder
+    if (held.expiryTimer) clearTimeout(held.expiryTimer)
+    held.expiryTimer = undefined
+    held.authority = Object.freeze(next)
+    held.revision++
+    if (next.expiresAt !== undefined) {
+        held.expiryTimer = setTimeout(() => {
+            held.expiryTimer = undefined
+            // Re-read rather than close over: a release or takeover that beat the timer already
+            // committed, and this fire must not expire a lease that is no longer the one it timed.
+            if (held.authority.holder !== next.holder || held.authority.generation !== next.generation) return
+            commitAuthority(component, { generation: held.authority.generation + 1 }, 'expired')
+        }, next.expiresAt - Date.now())
+        held.expiryTimer.unref?.()
+    }
+    if (component instanceof EventEmitter) component.emit('authorityChanged', { reason, authority: held.authority, previousHolder } satisfies RpcAuthorityChange)
+    held.notify?.()
+}
+
+export type RpcAuthorityOutcome = { granted: true; authority: RpcComponentAuthority } | { granted: false; holder: string; expiresAt: number }
+
+/**
+ * One caller asking for control. Free: granted. Held by the caller: renewed - same generation, so
+ * the holder's own queued commands survive the extension. Held by another: refused with the holder
+ * named, unless `take`, which is the break-in every real plant panel has - authorize() decides who
+ * may use it, this only makes the takeover atomic and visible.
+ */
+export const acquireComponentAuthority = (component: object, caller: string, ttlMs: number, take: boolean): RpcAuthorityOutcome => {
+    const held = internalsOf(component)
+    const current = held.authority
+    const now = Date.now()
+    const holding = current.holder !== undefined && (current.expiresAt ?? 0) > now
+    if (holding && current.holder !== caller && !take) return { granted: false, holder: current.holder!, expiresAt: current.expiresAt! }
+    const renewal = holding && current.holder === caller
+    commitAuthority(
+        component,
+        { holder: caller, expiresAt: now + ttlMs, generation: renewal ? current.generation : current.generation + 1 },
+        renewal ? 'renewed' : holding ? 'taken' : 'acquired'
+    )
+    return { granted: true, authority: internalsOf(component).authority }
+}
+
+/** Idempotent, like dropping a subscription: releasing what you do not hold is not an offence. */
+export const releaseComponentAuthority = (component: object, caller: string): 'ok' | 'ok - was not holding' => {
+    const held = internalsOf(component)
+    if (held.authority.holder !== caller) return 'ok - was not holding'
+    commitAuthority(component, { generation: held.authority.generation + 1 }, 'released')
+    return 'ok'
 }
 
 export interface RpcComponentExposeOptions {

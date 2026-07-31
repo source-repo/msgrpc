@@ -17,8 +17,19 @@ import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
 import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
-import { componentSnapshot, componentSnapshotEvent, installComponentPublisher, installComponentValidator, RpcComponent, type RpcComponentExposeOptions } from './Component.js'
+import { declaredAuthority, declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import {
+    acquireComponentAuthority,
+    componentAuthority,
+    componentSnapshot,
+    componentSnapshotEvent,
+    DEFAULT_AUTHORITY_TTL,
+    installComponentPublisher,
+    installComponentValidator,
+    releaseComponentAuthority,
+    RpcComponent,
+    type RpcComponentExposeOptions
+} from './Component.js'
 import { RpcSchema, validateParams, validateValue, type ComponentSchema } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
 
@@ -390,6 +401,36 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                         { type: RpcMessageType.success, result: eventProxy ? 'ok' : 'ok - was not subscribed', id: payload.id } as RpcSuccessPayload,
                         MessageType.ResponseMessage
                     )
+                } else if ((payload.method === '$acquire' || payload.method === '$release') && inst) {
+                    // Arbitration is the dispatch layer's, like 'on' and 'off': the check needs the
+                    // caller's identity, which methods do not see, and it must not queue behind the
+                    // very commands it arbitrates. authorize() rules on it like any other call.
+                    if (!(inst instanceof RpcComponent)) {
+                        await this.sendError(payload.id, source, 'ClassNotFound', `${payload.path} is not an observable component, so it has no authority to hold`)
+                        return
+                    }
+                    const denied = await this.checkAccess(payload, source, false)
+                    if (denied) {
+                        await this.sendError(payload.id, source, denied, `not permitted to call ${payload.path}.${payload.method}`)
+                        return
+                    }
+                    if (payload.method === '$acquire') {
+                        const ttl = payload.params[0] ?? DEFAULT_AUTHORITY_TTL
+                        if (typeof ttl !== 'number' || !Number.isFinite(ttl) || ttl <= 0) {
+                            await this.sendError(payload.id, source, 'InvalidParams', `$acquire: the lease must expire, so its ttl is a positive number of milliseconds`)
+                            return
+                        }
+                        const take = (payload.params[1] as { take?: boolean } | undefined)?.take === true
+                        const outcome = acquireComponentAuthority(inst, source, ttl, take)
+                        if (!outcome.granted) {
+                            await this.sendError(payload.id, source, 'NotInControl', `${payload.path} is controlled by ${outcome.holder} until ${new Date(outcome.expiresAt).toISOString()}`)
+                            return
+                        }
+                        await this.respond(payload.id, source, { type: RpcMessageType.success, result: outcome.authority, id: payload.id } as RpcSuccessPayload, MessageType.ResponseMessage)
+                    } else {
+                        const result = releaseComponentAuthority(inst, source)
+                        await this.respond(payload.id, source, { type: RpcMessageType.success, result, id: payload.id } as RpcSuccessPayload, MessageType.ResponseMessage)
+                    }
                 } else await this.sendError(payload.id, source, map ? 'MethodNotFound' : 'ClassNotFound', `${payload.path}.${payload.method} is not exposed`)
                 return
             }
@@ -408,6 +449,14 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
             const invalid = this.checkParams(payload)
             if (invalid) {
                 await this.sendError(payload.id, source, 'InvalidParams', invalid)
+                return
+            }
+
+            // Refused at the door as well as re-checked at execution (see invoke): the door gives a
+            // caller a fast answer instead of a place in a queue it will be refused out of.
+            const notInControl = this.authorityRefusal(payload, source)
+            if (notInControl) {
+                await this.sendError(payload.id, source, 'NotInControl', notInControl)
                 return
             }
 
@@ -494,6 +543,15 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         const spent = this.expiredBy(payload, arrived)
         if (spent !== undefined) {
             await this.sendError(payload.id, source, 'Timeout', `${payload.path}.${payload.method} was not run: its caller stopped waiting ${spent} ms ago`)
+            return
+        }
+
+        // The fence, this side of M4's durable ownerEpoch: authority is checked again after any
+        // queue wait, because the wait is exactly where a takeover or an expiry can land - and a
+        // command from the previous generation must be refused, not run under yesterday's grant.
+        const notInControl = this.authorityRefusal(payload, source)
+        if (notInControl) {
+            await this.sendError(payload.id, source, 'NotInControl', notInControl)
             return
         }
 
@@ -591,6 +649,19 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * The class wins because it is what will actually run. A schema is a description, and a server
      * whose description has drifted from its code should act on the code.
      */
+    /** Why this call may not run under the current arbitration state, or undefined when it may. */
+    private authorityRefusal(payload: { path: string; method: string }, source: string): string | undefined {
+        if (!this.manageRpc.exposedAuthority[payload.path]?.has(payload.method)) return undefined
+        const instance = this.manageRpc.exposedNameSpaceInstances[payload.path]
+        if (!(instance instanceof RpcComponent)) return undefined
+        const authority = componentAuthority(instance)
+        const holding = authority.holder !== undefined && (authority.expiresAt ?? 0) > Date.now()
+        if (holding && authority.holder === source) return undefined
+        return holding
+            ? `${payload.path}.${payload.method} requires authority: ${authority.holder} is in control`
+            : `${payload.path}.${payload.method} requires authority: nobody is in control - $acquire it first`
+    }
+
     semanticsOf(payload: { path: string; method: string }): RpcMethodSemantics | undefined {
         return this.manageRpc.exposedSemantics[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.semantics
     }
@@ -708,6 +779,8 @@ export class ManageRpc implements IManageRpc {
     exposedExecution: { [nameSpace: string]: RpcExecution } = {}
     /** Which of each namespace's methods conflate: a queued call replaced by a newer one. */
     exposedConflation: { [nameSpace: string]: Set<string> } = {}
+    /** Which of each namespace's methods only the authority holder may call. */
+    exposedAuthority: { [nameSpace: string]: Set<string> } = {}
     /** Each namespace's mailbox bound, where one was declared. Absent means the default. */
     exposedMailbox: { [nameSpace: string]: number } = {}
     /**
@@ -779,6 +852,15 @@ export class ManageRpc implements IManageRpc {
                 if (semantics.get(method) !== 'idempotent-command')
                     throw new Error(`exposeClassInstance: ${namespace}.${method} declares conflate without 'idempotent-command' semantics - only a command that is free to repeat is free to skip`)
             this.exposedConflation[namespace] = conflation
+        }
+        const guarded = declaredAuthority(instance)
+        if (guarded.size) {
+            // Authority is held on the component - its snapshot is where controlledBy is visible
+            // and its runtime is where the lease lives. On anything else the flag would silently
+            // gate nothing, which is the worst way for a safety-adjacent declaration to fail.
+            if (!(instance instanceof RpcComponent))
+                throw new Error(`exposeClassInstance: ${namespace}.${[...guarded][0]} declares requiresAuthority, but ${instance.constructor.name} is not an RpcComponent - there is no authority to check against`)
+            this.exposedAuthority[namespace] = guarded
         }
         const mailbox = settings.mailbox ?? declared?.mailbox
         if (mailbox !== undefined) {

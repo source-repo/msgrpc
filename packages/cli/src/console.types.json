@@ -1748,6 +1748,12 @@
             ]
           },
           "optional": true
+        },
+        "requiresAuthority": {
+          "type": {
+            "kind": "boolean"
+          },
+          "optional": true
         }
       }
     },
