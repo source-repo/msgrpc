@@ -90,6 +90,14 @@ export interface NamespaceSchema {
     events?: { [event: string]: { params: TypeNode[] } }
     /** Present when the namespace is an observable component. The first additive-section precedent. */
     component?: ComponentSchema
+    /**
+     * Package-qualified names of the contract interfaces this namespace implements -
+     * `@scope/contracts/UiBuilder`, never a bare name - with the transitive closure of `extends`
+     * already flattened in at extract time, so a search stays a flat string match. Shared-package
+     * identity is the definition of capability identity: two vendors' local interfaces of the
+     * same name correctly do not match.
+     */
+    capabilities?: string[]
     /** Skip validation for this namespace, for a hot path where the cost is not worth it. */
     validate?: boolean
     /**

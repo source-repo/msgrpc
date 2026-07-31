@@ -605,3 +605,15 @@ test('a component leaving or widening is named; arriving is additive', (t) => {
     }
     t.deepEqual(namespaceProblems(tolerant, extended), [])
 })
+
+test('a capability no longer declared is named to whoever found the peer by it', (t) => {
+    const searching: NamespaceSchema = { methods: {}, capabilities: ['@fixture/contracts/Renderer'] }
+    const still: NamespaceSchema = { methods: {}, capabilities: ['@fixture/contracts/Renderer', '@fixture/contracts/AdvancedRenderer'] }
+    const gone: NamespaceSchema = { methods: {} }
+
+    t.deepEqual(namespaceProblems(searching, still), [], 'a superset of capabilities changes nothing for the searcher')
+    t.true(
+        namespaceProblems(searching, gone).some((problem) => problem.where === 'capability @fixture/contracts/Renderer'),
+        'the dropped capability is named, not counted'
+    )
+})

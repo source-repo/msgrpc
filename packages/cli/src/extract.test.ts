@@ -185,3 +185,18 @@ test('a component describes its props and state, resolved through the base chain
     )
     t.falsy(schema.namespaces.half.component)
 })
+
+test('capabilities are captured package-qualified, closed over extends, and local interfaces refused', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('capability-tsconfig.json'))
+
+    // Implementing the subinterface emits the parent too, so a runtime search stays a flat match.
+    t.deepEqual(schema.namespaces.renderer.capabilities, ['@fixture/contracts/AdvancedRenderer', '@fixture/contracts/Renderer'])
+
+    // A local interface is not a shared identity, and saying so loudly is the whole protection:
+    // two vendors' private `UiBuilder`s must never match each other by accident.
+    t.true(
+        diagnostics.some((diagnostic) => /declared in this same package/.test(diagnostic.reason)),
+        `expected the local-interface diagnostic, got: ${JSON.stringify(diagnostics)}`
+    )
+    t.falsy(schema.namespaces.local_spinner.capabilities, 'the refused capability is absent, not degraded to a bare name')
+})

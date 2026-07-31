@@ -1,5 +1,6 @@
-import { resolve as resolvePath, dirname } from 'node:path'
-import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve as resolvePath, dirname, join } from 'node:path'
+import { ClassDeclaration, MethodDeclaration, Node, Project, Symbol as MorphSymbol, ts, Type } from 'ts-morph'
 import { SCHEMA_VERSION, type ComponentSchema, type MethodSchema, type NamespaceSchema, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 
 /**
@@ -295,6 +296,86 @@ const componentFromDeclaration = (declaration: ClassDeclaration, context: Contex
     return undefined
 }
 
+/**
+ * The nearest package.json name above a file: the identity a capability is qualified by. Walked
+ * from the declaring file rather than read off the import specifier, so a workspace symlink, a
+ * relative import inside a contracts package and a transitive `extends` all qualify the same way.
+ */
+const packageNames = new Map<string, string | undefined>()
+const packageNameOf = (path: string): string | undefined => {
+    for (let dir = dirname(path); ; dir = dirname(dir)) {
+        if (packageNames.has(dir)) return packageNames.get(dir)
+        const manifest = join(dir, 'package.json')
+        if (existsSync(manifest)) {
+            try {
+                const name = (JSON.parse(readFileSync(manifest, 'utf8')) as { name?: string }).name
+                if (typeof name === 'string' && name) {
+                    packageNames.set(dir, name)
+                    return name
+                }
+            } catch {
+                // An unreadable manifest is the same as none: keep walking.
+            }
+        }
+        const parent = dirname(dir)
+        if (parent === dir) {
+            packageNames.set(dir, undefined)
+            return undefined
+        }
+    }
+}
+
+/**
+ * Capabilities from the heritage clauses: `implements UiBuilder` becomes the package-qualified
+ * name, with the transitive closure of interface `extends` flattened in - so a runtime search for
+ * the parent finds the peer that implements the child, as a flat string match. `implements` is
+ * erased at runtime, which is why this happens here: discoverable means having an extracted
+ * contract, and that is a rule rather than a surprise.
+ */
+const capabilitiesFromDeclaration = (declaration: ClassDeclaration, context: Context): string[] | undefined => {
+    const ownPackage = packageNameOf(declaration.getSourceFile().getFilePath())
+    const found = new Set<string>()
+
+    const collect = (symbol: MorphSymbol | undefined, at: Context) => {
+        const resolved = symbol?.getAliasedSymbol() ?? symbol
+        if (!resolved) {
+            fail(at, 'implements something whose declaration cannot be resolved, so no capability can be recorded for it')
+            return
+        }
+        const interfaces = resolved.getDeclarations().filter(Node.isInterfaceDeclaration)
+        if (!interfaces.length) {
+            // A class in an implements clause is legal TypeScript, but a capability is a contract
+            // interface - a class carries an implementation, which is exactly what a shared
+            // identity must not depend on.
+            fail(at, `implements ${resolved.getName()}, which is not an interface - a capability is a contract interface from a shared package`)
+            return
+        }
+        const declaringPackage = packageNameOf(interfaces[0].getSourceFile().getFilePath())
+        if (!declaringPackage) {
+            fail(at, `implements ${resolved.getName()} from a module with no package name, so the capability cannot be qualified`)
+            return
+        }
+        if (declaringPackage === ownPackage) {
+            fail(
+                at,
+                `implements ${resolved.getName()}, which is declared in this same package - shared-package identity is what makes a capability a capability, so it must come from a contracts package`
+            )
+            return
+        }
+        const qualified = `${declaringPackage}/${resolved.getName()}`
+        if (found.has(qualified)) return
+        found.add(qualified)
+        // The closure: a peer implementing a subinterface satisfies a search for its parent.
+        for (const declared of interfaces) for (const parent of declared.getExtends()) collect(parent.getExpression().getSymbol(), at)
+    }
+
+    // The class chain too: a subclass inherits what its bases declared they implement.
+    for (let cls: ClassDeclaration | undefined = declaration; cls; cls = cls.getBaseClass()) {
+        for (const clause of cls.getImplements()) collect(clause.getExpression().getSymbol(), { ...context, node: clause })
+    }
+    return found.size ? [...found].sort() : undefined
+}
+
 export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
     const project = new Project({ tsConfigFilePath })
     // Exactly what include/files/exclude resolve to, asked of TypeScript rather than inferred.
@@ -332,7 +413,14 @@ export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
             }
             const events = eventsFromDeclaration(declaration, { ...context, where: declared.name })
             const component = componentFromDeclaration(declaration, { ...context, where: declared.name })
-            namespaces[declared.name] = { ...(declared.version ? { version: declared.version } : {}), methods, ...(events ? { events } : {}), ...(component ? { component } : {}) }
+            const capabilities = capabilitiesFromDeclaration(declaration, { ...context, where: declared.name })
+            namespaces[declared.name] = {
+                ...(declared.version ? { version: declared.version } : {}),
+                methods,
+                ...(events ? { events } : {}),
+                ...(component ? { component } : {}),
+                ...(capabilities ? { capabilities } : {})
+            }
         }
     }
 

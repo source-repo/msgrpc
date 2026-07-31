@@ -205,6 +205,10 @@ export const namespaceProblems = (caller: NamespaceSchema, current: NamespaceSch
     // Component snapshots travel the event direction too: served here, read there. A namespace
     // *becoming* a component is additive and says nothing; one that stops being a component leaves
     // its observers with a cache that will never update again, which is worth naming.
+    for (const capability of caller.capabilities ?? [])
+        if (!current.capabilities?.includes(capability))
+            problems.push({ where: `capability ${capability}`, reason: 'is no longer declared, so whatever found this peer by it will stop finding it' })
+
     if (caller.component) {
         if (!current.component) problems.push({ where: 'component', reason: 'is no longer served, so an observer would wait forever for a snapshot' })
         else {
