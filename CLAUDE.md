@@ -26,7 +26,7 @@ git ls-files -z | xargs -0 grep -laP '\x00'
 
 **Contracts are committed and checked.** `packages/cli/src/*.types.json` are extracted from source by `npm run contract` and verified by `npm run check:contract`. Change a service in `bus.ts` or `console.ts` and re-extract, or the check fails.
 
-**Both packages version together**, since the CLI depends on the library's exact shape.
+**Both packages version together**, since the CLI depends on the library's exact shape. `packages/queue` is deliberately **not** part of that rule: it versions on its own, because it depends only on the library's public API — it is the first external consumer of the schema compatibility policy, and pinning it to the library's version would un-prove exactly what it exists to prove.
 
 **Markdown is one line per paragraph.** Do not hard-wrap prose at a column, and do not re-wrap what is here. A single newline inside a paragraph is a space to CommonMark, so wrapped and unwrapped source render identically — the difference is only what happens when the file is edited. Hard wrapping keeps diffs small, but it needs every editor to re-wrap after a change or the margin drifts, and the WYSIWYG editors used on this repo preserve existing breaks without adding new ones. Unwrapped is the convention that survives being edited by anything.
 
