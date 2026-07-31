@@ -191,7 +191,7 @@ testWithContext.serial('an event reaches only the subscribing client', async (t)
 
 testWithContext.serial('two clients each receive their own replies', async (t) => {
     const second = await t.context.impatientClient!.proxy<TestRpc>('testRpc')
-    const [a, b] = await Promise.all([t.context.proxy.remote!.square(3), second.remote!.square(4)])
+    const [a, b] = await Promise.all([t.context.proxy.remote.square(3), second.remote.square(4)])
     t.is(a, 9)
     t.is(b, 16)
 })
@@ -250,7 +250,7 @@ testWithContext.serial('an in-flight call fails as soon as the link drops', asyn
 
     const started = Date.now()
     // The rejection lands synchronously inside disconnect(), so the assertion is attached first.
-    const pending = t.throwsAsync(proxy.remote!.never(), { instanceOf: RpcError })
+    const pending = t.throwsAsync(proxy.remote.never(), { instanceOf: RpcError })
     socket().disconnect()
     const error = await pending
     const elapsed = Date.now() - started
@@ -280,8 +280,8 @@ testWithContext.serial('an event reaches only the namespace it was taken out on'
 
     const fromPlant: string[] = []
     const fromBoiler: string[] = []
-    await (await client.proxy<EventingRpc>('plant')).remote!.on('ping', (value: string) => fromPlant.push(value))
-    await (await client.proxy<EventingRpc>('boiler')).remote!.on('ping', (value: string) => fromBoiler.push(value))
+    await (await client.proxy<EventingRpc>('plant')).remote.on('ping', (value: string) => fromPlant.push(value))
+    await (await client.proxy<EventingRpc>('boiler')).remote.on('ping', (value: string) => fromBoiler.push(value))
 
     plant.fire('only-plant')
     await waitFor(() => fromPlant.length === 1)
@@ -308,10 +308,10 @@ testWithContext.serial('unsubscribing one namespace leaves the other subscribed'
     const fromBoiler: string[] = []
     const plantHandler = (value: string) => fromPlant.push(value)
     const plantProxy = await client.proxy<EventingRpc>('plant')
-    await plantProxy.remote!.on('ping', plantHandler)
-    await (await client.proxy<EventingRpc>('boiler')).remote!.on('ping', (value: string) => fromBoiler.push(value))
+    await plantProxy.remote.on('ping', plantHandler)
+    await (await client.proxy<EventingRpc>('boiler')).remote.on('ping', (value: string) => fromBoiler.push(value))
 
-    await plantProxy.remote!.off('ping', plantHandler)
+    await plantProxy.remote.off('ping', plantHandler)
     await waitFor(() => server.rpc.eventProxies.size === 1)
 
     boiler.fire('still-here')
@@ -334,7 +334,7 @@ testWithContext.serial('an event that does not name its instance still reaches i
     const client = new RpcClient('http://localhost:3107')
     await client.ready()
     const got: string[] = []
-    await (await client.proxy<EventingRpc>('eventing')).remote!.on('ping', (value: string) => got.push(value))
+    await (await client.proxy<EventingRpc>('eventing')).remote.on('ping', (value: string) => got.push(value))
 
     const unnamed: RpcEventPayload = { type: RpcMessageType.event, event: 'ping', params: ['unnamed'] }
     await client.rpcClient!.receive({ type: MessageType.EventMessage, payload: unnamed }, '*')

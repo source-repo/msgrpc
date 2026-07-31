@@ -74,7 +74,7 @@ export const openTap = async (
         [...connected.online].map(async (peer) => {
             const description = await connected.network
                 .proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer)
-                .then((proxy) => proxy.remote!.describe())
+                .then((proxy) => proxy.remote.describe())
                 .catch(() => undefined)
             return { peer, hasBus: !!description?.namespaces.some((namespace) => namespace.name === 'bus') }
         })
@@ -84,13 +84,13 @@ export const openTap = async (
         if (!hasBus) continue
         try {
             const proxy = await connected.network.proxy<BusPeer>('bus', peer)
-            const answer = await proxy.remote!.tap(filter)
+            const answer = await proxy.remote.tap(filter)
             const handler = (frame: unknown) => onFrame(frame as TappedFrame)
-            await proxy.remote!.on('frame', handler)
+            await proxy.remote.on('frame', handler)
             sources.push(peer)
             closers.push(async () => {
-                await proxy.remote!.off('frame', handler).catch(() => undefined)
-                await proxy.remote!.untap(answer.token).catch(() => undefined)
+                await proxy.remote.off('frame', handler).catch(() => undefined)
+                await proxy.remote.untap(answer.token).catch(() => undefined)
             })
         } catch {
             // One bus that refuses does not stop the others, and a tap that opened nothing is

@@ -64,7 +64,7 @@ const withBus = async (body: (context: { device: string; caller: RpcServer; bus:
     await waitFor(() => onlooker.peers.names().includes(busName) && caller.peers.names().includes(device))
 
     const frames: TappedFrame[] = []
-    const bus = (await onlooker.proxy<Bus>('bus', busName)).remote!
+    const bus = (await onlooker.proxy<Bus>('bus', busName)).remote
     await bus.on('frame', (frame: unknown) => void frames.push(frame as TappedFrame))
 
     try {
@@ -80,7 +80,7 @@ const withBus = async (body: (context: { device: string; caller: RpcServer; bus:
 test('a tap started while the broker runs sees a call it was not part of, and pairs the reply', async (t) => {
     await withBus(async ({ device, caller, bus, frames }) => {
         // Nothing is reported before anyone asks: the tap is off until it is turned on.
-        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote!
+        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote
         t.is(await boiler.setTemperature(60), 60)
         await new Promise((resolve) => setTimeout(resolve, 300))
         t.deepEqual(frames, [], 'the broker reported traffic before anything tapped')
@@ -114,7 +114,7 @@ test('a tap started while the broker runs sees a call it was not part of, and pa
 test('a refused call is reported with its code, and payloads arrive only when asked for', async (t) => {
     await withBus(async ({ device, caller, bus, frames }) => {
         await bus.tap({ payloads: true })
-        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote!
+        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote
 
         await boiler.setTemperature(72)
         await waitFor(() => frames.some((frame) => frame.kind === 'POST'))
@@ -132,7 +132,7 @@ test('a refused call is reported with its code, and payloads arrive only when as
 test('a filter narrows to one peer, and untap stops the stream', async (t) => {
     await withBus(async ({ device, caller, bus, frames }) => {
         const { token } = await bus.tap({ peer: 'nobody-at-all' })
-        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote!
+        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote
         await boiler.setTemperature(50)
         await new Promise((resolve) => setTimeout(resolve, 300))
         t.deepEqual(frames, [], 'a filter for another peer still matched')
@@ -165,7 +165,7 @@ test('a filter narrows to one peer, and untap stops the stream', async (t) => {
 test('an event crossing the broker is reported as one', async (t) => {
     await withBus(async ({ device, caller, bus, frames }) => {
         await bus.tap({ kinds: ['EVENT'], payloads: true })
-        const boiler = (await caller.proxy<Boiler & { on: (e: string, h: (...a: unknown[]) => void) => Promise<unknown> }>('boiler', device)).remote!
+        const boiler = (await caller.proxy<Boiler & { on: (e: string, h: (...a: unknown[]) => void) => Promise<unknown> }>('boiler', device)).remote
         await boiler.on('changed', () => undefined)
         await boiler.setTemperature(77)
 
@@ -184,7 +184,7 @@ test('an event crossing the broker is reported as one', async (t) => {
 test('a tap expires on its own, so a console that walks away does not leave one running', async (t) => {
     await withBus(async ({ device, caller, bus, frames }) => {
         await bus.tap({ ttl: 1 })
-        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote!
+        const boiler = (await caller.proxy<Boiler>('boiler', device)).remote
         await boiler.setTemperature(30)
         await waitFor(() => frames.length > 0)
 
@@ -212,7 +212,7 @@ test('the broker describes itself, so it does not look like a device with intros
     await waitFor(() => onlooker.peers.names().includes(busName))
 
     const introspection = await onlooker.proxy<{ describe(): Promise<{ namespaces: { name: string; methods: { name: string; paramNames?: string[] }[] }[] }> }>('msgrpc', busName)
-    const description = await introspection.remote!.describe()
+    const description = await introspection.remote.describe()
     const namespace = description.namespaces.find((entry) => entry.name === 'bus')
     t.truthy(namespace, `namespaces: ${JSON.stringify(description.namespaces.map((entry) => entry.name))}`)
     // The contract has to reach a console as argument names, or the form says `tap(…)`.

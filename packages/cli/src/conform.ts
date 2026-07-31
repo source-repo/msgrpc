@@ -69,7 +69,7 @@ export interface ConformanceReport {
 
 const describe = async (connected: ConnectedNetwork, peer: string) => {
     const proxy = await connected.network.proxy<{ describe(): Promise<ServerDescription> }>(INTROSPECTION, peer)
-    return await proxy.remote!.describe()
+    return await proxy.remote.describe()
 }
 
 /**

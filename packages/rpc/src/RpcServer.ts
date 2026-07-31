@@ -313,12 +313,9 @@ export class RpcServerBase implements IManageRpc {
      * A typed proxy for calling another peer, over this server's own transports and under its own
      * name. The mirror of RpcClient.proxy, so a peer that both serves and calls needs one object.
      */
-    async proxy<T>(name: string, target?: string) {
+    async proxy<T>(name: string, target?: string): Promise<RpcProxy<T>> {
         await this.ready()
-        const result: RpcProxy<T> = { name }
-        if (target) result.target = target
-        result.remote = this.caller.proxy<T>(name, target ?? '*')
-        return result
+        return { name, ...(target ? { target } : {}), remote: this.caller.proxy<T>(name, target ?? '*') }
     }
 
     async close() {

@@ -96,7 +96,7 @@ test('a plain MQTT 5 client with no msgrpc code can serve an msgrpc call', async
     await client.ready()
     const sensor = await client.proxy<{ read: (n: number) => Promise<number> }>('sensor')
 
-    t.is(await sensor.remote!.read(21), 42)
+    t.is(await sensor.remote.read(21), 42)
 
     await client.close()
     await device.endAsync()
@@ -297,7 +297,7 @@ test("a request carries its caller's remaining time, and the broker is given the
         transport: new MqttTransport(peer('ttl-client'), BROKER_URL, { prefix, sessionExpirySeconds: TEST_SESSION_EXPIRY })
     })
     await client.ready()
-    t.is(await (await client.proxy<Plant>('plant')).remote!.read(), 1)
+    t.is(await (await client.proxy<Plant>('plant')).remote.read(), 1)
 
     const request = await seen
     t.is(request.ttl, '4000', 'the request did not state what its caller would wait')
@@ -526,7 +526,7 @@ test('a signed MQTT 5 call is accepted and gives the peer an identity', async (t
     })
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant')).remote!.write(5), 5)
+    t.is(await (await client.proxy<Plant>('plant')).remote.write(5), 5)
     t.deepEqual(seen, [peer('hmi-v5')])
 
     await client.close()
@@ -646,7 +646,7 @@ test('a shared subscription distributes requests across replicas', async (t) => 
     })
     await client.ready()
     const work = await client.proxy<Work>('work')
-    for (let i = 0; i < 12; i++) await work.remote!.run()
+    for (let i = 0; i < 12; i++) await work.remote.run()
 
     t.is(handled.length, 12, 'not every request was answered')
     t.is(new Set(handled).size, 2, `both replicas should have taken work, got ${JSON.stringify(handled)}`)

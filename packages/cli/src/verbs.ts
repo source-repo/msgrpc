@@ -173,7 +173,7 @@ const splitTarget = (target: string) => {
 
 const describePeer = async (connected: ConnectedNetwork, peer: string) => {
     const proxy = await connected.network.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer)
-    return await proxy.remote!.describe()
+    return await proxy.remote.describe()
 }
 
 /**
@@ -298,7 +298,7 @@ export const runCall = (
             const proxy = await connected.network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(split.namespace, peer)
             // With a key, two runs of this command are two attempts at one command - which is how a
             // durable idempotency store is checked from a shell: call it twice, see it run once.
-            const remote = options.idempotencyKey ? proxy.remote!.$with({ idempotencyKey: options.idempotencyKey }) : proxy.remote!
+            const remote = options.idempotencyKey ? proxy.remote.$with({ idempotencyKey: options.idempotencyKey }) : proxy.remote
             const result = await remote[split.member](...args)
             const ms = Date.now() - started
             if (options.json) io.out(JSON.stringify({ result, ms }, null, 2) + '\n')
@@ -345,7 +345,7 @@ export const runWatch = (
         let proxy
         try {
             proxy = await connected.network.proxy<Subscribable>(split.namespace, peer)
-            await proxy.remote!.on(split.member, handler)
+            await proxy.remote.on(split.member, handler)
         } catch (e) {
             io.err(`source-rpc: cannot watch ${peer}.${target}: ${failureText(e)}\n`)
             return 1
@@ -354,6 +354,6 @@ export const runWatch = (
         await until
         // Drops the server's subscription too, rather than only walking away from it: a debugging
         // session should not leave listeners behind on a device that outlives it.
-        await proxy.remote!.off(split.member, handler).catch(() => undefined)
+        await proxy.remote.off(split.member, handler).catch(() => undefined)
         return 0
     })

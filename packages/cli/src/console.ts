@@ -295,7 +295,7 @@ export class ConsoleService extends EventEmitter {
     async describe(peer: string): Promise<ServerDescription | { error: string; code?: string }> {
         try {
             const proxy = await this.reach(peer).proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc', peer)
-            const description = await proxy.remote!.describe()
+            const description = await proxy.remote.describe()
             // Every description teaches what the peer is, whoever asked for it and why.
             this.roles.set(peer, roleFrom(description))
             return description
@@ -311,7 +311,7 @@ export class ConsoleService extends EventEmitter {
         const started = Date.now()
         try {
             const proxy = await this.reach(peer).proxy<Record<string, (...a: unknown[]) => Promise<unknown>>>(namespace, peer)
-            return { result: await proxy.remote![method](...args), ms: Date.now() - started }
+            return { result: await proxy.remote[method](...args), ms: Date.now() - started }
         } catch (e) {
             // Reported rather than thrown: an RpcError's code is the useful part, and it would be
             // flattened into a generic exception on its way back to the browser.
@@ -325,7 +325,7 @@ export class ConsoleService extends EventEmitter {
         if (this.watching.has(key)) return { watching: true, already: true }
         const handler = (...args: unknown[]) => this.emit('event', { peer, namespace, event, args, at: Date.now() })
         const proxy = await this.reach(peer).proxy<Subscribable>(namespace, peer)
-        await proxy.remote!.on(event, handler)
+        await proxy.remote.on(event, handler)
         this.watching.set(key, handler)
         return { watching: true, already: false }
     }
@@ -337,7 +337,7 @@ export class ConsoleService extends EventEmitter {
         if (!handler) return { watching: false, already: true }
         const proxy = await this.reach(peer).proxy<Subscribable>(namespace, peer)
         // Removes the local listener and tells the server to drop its side.
-        await proxy.remote!.off(event, handler)
+        await proxy.remote.off(event, handler)
         this.watching.delete(key)
         return { watching: false, already: false }
     }
@@ -391,13 +391,13 @@ export class ConsoleService extends EventEmitter {
         for (const peer of buses) {
             try {
                 const proxy = await this.reach(peer).proxy<BusPeer>('bus', peer)
-                const answer = await proxy.remote!.tap(filter)
+                const answer = await proxy.remote.tap(filter)
                 opened.push({ peer, token: answer.token })
                 if (!this.forwarding.has(peer)) {
                     // Subscribed once per peer however many taps are open: the frames already say
                     // which taps they matched, and a second subscription would duplicate them all.
                     const handler = (frame: unknown) => this.emit('frame', frame as TappedFrame)
-                    await proxy.remote!.on('frame', handler)
+                    await proxy.remote.on('frame', handler)
                     this.forwarding.set(peer, handler)
                 }
             } catch {
@@ -427,7 +427,7 @@ export class ConsoleService extends EventEmitter {
             }
             try {
                 const proxy = await this.reach(entry.peer).proxy<BusPeer>('bus', entry.peer)
-                await proxy.remote!.untap(entry.token)
+                await proxy.remote.untap(entry.token)
             } catch {
                 // The tap expires on its own if the peer is unreachable, so there is nothing left
                 // to do about it here and nothing worth failing the call over.
@@ -471,7 +471,7 @@ export class ConsoleService extends EventEmitter {
         for (const [peer, handler] of this.forwarding) {
             try {
                 const proxy = await this.reach(peer).proxy<BusPeer>('bus', peer)
-                await proxy.remote!.off('frame', handler)
+                await proxy.remote.off('frame', handler)
             } catch {
                 // Gone, which drops its side anyway.
             }

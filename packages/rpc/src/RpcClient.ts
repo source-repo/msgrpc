@@ -66,8 +66,13 @@ export interface RpcProxy<T> {
      * The remote instance, plus `$with` for the options a caller can attach to a call - an
      * idempotency key, so far. `$with` returns another proxy for the same instance rather than
      * changing this one, so options never leak into calls that did not ask for them.
+     *
+     * Required, because `proxy()` awaits `ready()` before it builds this and a client that is ready
+     * has its handler. It was optional for years, which is why so much code says `remote!`: the type
+     * described the record halfway through being assembled rather than the one handed back, and
+     * every caller paid for that with an assertion that could never fail.
      */
-    remote?: T & WithOptions<T>
+    remote: T & WithOptions<T>
 }
 
 /**
@@ -198,11 +203,16 @@ export class RpcClient extends EventEmitter {
             await new Promise((res) => setTimeout(res, 10))
         }
     }
-    async proxy<T>(name: string, target?: string) {
+    async proxy<T>(name: string, target?: string): Promise<RpcProxy<T>> {
         await this.ready()
-        const result: RpcProxy<T> = { name }
-        if (target) result.target = target
-        if (this.rpcClient) result.remote = this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
-        return result
+        // ready() returns only once init() has set readyFlag, and init() creates the handler before
+        // it does - so this cannot be missing here. Thrown rather than asserted away, because the
+        // alternative was handing back a record whose `remote` was quietly undefined.
+        if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
+        return {
+            name,
+            ...(target ? { target } : {}),
+            remote: this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
+        }
     }
 }

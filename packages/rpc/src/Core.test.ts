@@ -59,7 +59,7 @@ test('two servers in one process do not cross-route peers sharing a name', async
 
     const proxyA = await clientA.proxy<Echo>('echo')
     const proxyB = await clientB.proxy<Echo>('echo')
-    const [fromA, fromB] = await Promise.all([proxyA.remote!.who(), proxyB.remote!.who()])
+    const [fromA, fromB] = await Promise.all([proxyA.remote.who(), proxyB.remote.who()])
 
     t.is(fromA, 'A', 'client A received a reply from the wrong server')
     t.is(fromB, 'B', 'client B received a reply from the wrong server')
@@ -76,7 +76,7 @@ test('a server forgets a peer route when the peer goes away', async (t) => {
     server.exposeClassInstance(new Echo('X'), 'echo')
     const client = new RpcClient('http://localhost:3703', { name: 'departing-peer' })
     await client.ready()
-    await (await client.proxy<Echo>('echo')).remote!.who()
+    await (await client.proxy<Echo>('echo')).remote.who()
 
     t.truthy(server.peers.get('departing-peer'), 'the route was never recorded')
 
@@ -108,7 +108,7 @@ test('a method chooses its error code by throwing one the protocol defines', asy
     await server.ready()
     const client = new RpcClient('http://localhost:3994', { name: 'gate-caller', callTimeout: 4000 })
     await client.ready()
-    const gate = (await client.proxy<Gate>('gate', 'gate-server')).remote!
+    const gate = (await client.proxy<Gate>('gate', 'gate-server')).remote
 
     // The point: a caller reading `code` to decide whether to re-authenticate or give up now learns
     // something, where every throw used to arrive as Exception with the reason buried in the text.

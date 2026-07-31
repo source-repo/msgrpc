@@ -70,7 +70,7 @@ test('a session is written down and plays back against a device that agrees', as
         const recording = await startRecording({ hub, name: peer('recorder-a'), callTimeout: 5000, out: file, filter: { payloads: true } })
         t.deepEqual(recording.sources.length > 0, true, `nothing to watch: ${JSON.stringify(recording.sources)}`)
 
-        const plant = (await caller.proxy<{ read(): Promise<unknown>; writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote!
+        const plant = (await caller.proxy<{ read(): Promise<unknown>; writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote
         t.deepEqual(await plant.read(), { celsius: 84 })
         t.is(await plant.writeSetpoint(1200), true)
         await waitFor(() => recording.frames() >= 4)
@@ -98,7 +98,7 @@ test('a device that answers differently is what replay is for', async (t) => {
     // Recorded against a plant that reads 84.
     await withPlant({ returns: { 'plant.read': { celsius: 84 } } }, async ({ hub, device, caller }) => {
         const recording = await startRecording({ hub, name: peer('recorder-b'), callTimeout: 5000, out: file, filter: { payloads: true } })
-        const plant = (await caller.proxy<{ read(): Promise<unknown> }>('plant', device)).remote!
+        const plant = (await caller.proxy<{ read(): Promise<unknown> }>('plant', device)).remote
         await plant.read()
         await waitFor(() => recording.frames() >= 2)
         await recording.close()
@@ -120,7 +120,7 @@ test('a call that failed the same way it failed when recorded is a match', async
     const file = scratch()
     await withPlant({ fails: { 'plant.halt': 'Unauthorized' } }, async ({ hub, device, caller }) => {
         const recording = await startRecording({ hub, name: peer('recorder-c'), callTimeout: 5000, out: file, filter: { payloads: true } })
-        const plant = (await caller.proxy<{ halt(): Promise<unknown> }>('plant', device)).remote!
+        const plant = (await caller.proxy<{ halt(): Promise<unknown> }>('plant', device)).remote
         await t.throwsAsync(plant.halt())
         await waitFor(() => recording.frames() >= 2)
         await recording.close()
@@ -146,7 +146,7 @@ test('a recording made without payloads says so rather than replaying empty call
     const file = scratch()
     await withPlant({ returns: { 'plant.read': { celsius: 84 } } }, async ({ hub, device, caller }) => {
         const recording = await startRecording({ hub, name: peer('recorder-e'), callTimeout: 5000, out: file, filter: { payloads: false } })
-        const plant = (await caller.proxy<{ writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote!
+        const plant = (await caller.proxy<{ writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote
         await plant.writeSetpoint(900)
         await waitFor(() => recording.frames() >= 2)
         await recording.close()

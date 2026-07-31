@@ -262,8 +262,8 @@ test('one client watching two peers keeps their events apart', async (t) => {
     await client.ready()
     const fromA: string[] = []
     const fromB: string[] = []
-    await (await client.proxy<Plant>('plant', peer('routeA'))).remote!.on('alarm', (value: string) => fromA.push(value))
-    await (await client.proxy<Plant>('plant', peer('routeB'))).remote!.on('alarm', (value: string) => fromB.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeA'))).remote.on('alarm', (value: string) => fromA.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeB'))).remote.on('alarm', (value: string) => fromB.push(value))
 
     plantA.fire()
     await waitFor(() => fromA.length === 1)

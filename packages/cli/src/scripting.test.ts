@@ -95,7 +95,7 @@ test('a named peer scripts the node across the hall, and sees what it printed', 
     await bench.ready()
     t.true(await bench.awaitPeer(node.name, 8000), 'the node never became addressable')
 
-    const remote = (await bench.proxy<Scripting>('scripting', node.name)).remote!
+    const remote = (await bench.proxy<Scripting>('scripting', node.name)).remote
 
     // Written from here, onto the other machine's disk - which is the whole point of it.
     await remote.save('hello', "console.log('from the other node')\n", 'mjs')
@@ -131,7 +131,7 @@ test('a peer this node has not named is refused, however well it authenticated',
     await stranger.ready()
     t.true(await stranger.awaitPeer(node.name, 8000))
 
-    const remote = (await stranger.proxy<Scripting>('scripting', node.name)).remote!
+    const remote = (await stranger.proxy<Scripting>('scripting', node.name)).remote
     const failure = await t.throwsAsync(remote.save('intruder', 'console.log(1)\n', 'mjs'))
     t.regex(String(failure?.message), /Forbidden/)
     t.deepEqual(await remote.list().catch(() => 'refused'), 'refused', 'even reading the list is not on offer')
@@ -310,7 +310,7 @@ test('through a bus, the grant rests on signed frames rather than the connection
     await bench.ready()
     t.true(await bench.awaitPeer(peer('signNode'), 12000), 'the offering node never appeared on the broker')
 
-    const remote = (await bench.proxy<Scripting>('scripting', peer('signNode'))).remote!
+    const remote = (await bench.proxy<Scripting>('scripting', peer('signNode'))).remote
     await remote.save('signed', "console.log('written across a broker')\n", 'mjs')
     t.deepEqual(
         (await remote.list()).map((entry) => entry.name),
@@ -346,7 +346,7 @@ test('a node that names nobody offers no scripting namespace at all', async (t) 
     await bench.ready()
     t.true(await bench.awaitPeer(peer('quietNode'), 10000))
 
-    const remote = (await bench.proxy<Scripting>('scripting', peer('quietNode'))).remote!
+    const remote = (await bench.proxy<Scripting>('scripting', peer('quietNode'))).remote
     const failure = await t.throwsAsync(remote.list())
     // ClassNotFound rather than Forbidden: there is nothing there to refuse, which is a stronger
     // statement than a refusal - the capability was never published.
@@ -390,7 +390,7 @@ test('a node command is scriptable and nothing else, and says so when it cannot 
     await bench.ready()
     t.true(await bench.awaitPeer(peer('plc'), 15000), `the node never appeared: ${said.join('')}`)
 
-    const remote = (await bench.proxy<Scripting>('scripting', peer('plc'))).remote!
+    const remote = (await bench.proxy<Scripting>('scripting', peer('plc'))).remote
     await remote.save('on-the-plc', "console.log('ran on the plc')\n", 'mjs')
     t.deepEqual(
         (await remote.list()).map((entry) => entry.name),

@@ -93,16 +93,16 @@ const useConsole = () => {
                 peer.current = server
 
                 const proxy = await server.proxy<ConsoleService & { on: (e: string, h: (...a: unknown[]) => void) => Promise<unknown> }>('console', consoleName)
-                await proxy.remote!.on('event', (event: unknown) => events.current?.(event as StreamedEvent))
-                await proxy.remote!.on('peer', (change: unknown) => {
+                await proxy.remote.on('event', (event: unknown) => events.current?.(event as StreamedEvent))
+                await proxy.remote.on('peer', (change: unknown) => {
                     const coming = change as PeerChange
                     peerChange.current?.(coming.peer, coming.state, coming)
                 })
                 // Subscribed once, whether or not anything is tapping: the console emits nothing
                 // here until a tap is started, and re-subscribing per tap would drop frames in the
                 // gap between the two calls.
-                await proxy.remote!.on('frame', (frame: unknown) => frames.current?.(frame as TappedFrame))
-                await proxy.remote!.on('problem', (problem: unknown) => problems.current?.(problem as NetworkProblem))
+                await proxy.remote.on('frame', (frame: unknown) => frames.current?.(frame as TappedFrame))
+                await proxy.remote.on('problem', (problem: unknown) => problems.current?.(problem as NetworkProblem))
                 const remote = proxy.remote as ConsoleService
                 // The console does the waiting: it holds the broker link, enforces --timeout, and
                 // its answer says what went wrong. A browser giving up first would replace that
@@ -227,7 +227,7 @@ export const App = () => {
         setChats((current) => ({ ...current, [selected]: [...(current[selected] ?? []), { from: me, text, at: Date.now(), mine: true }] }))
         try {
             const proxy = await peer.current.proxy<{ say: (from: string, text: string) => Promise<string> }>('chat', selected)
-            await proxy.remote!.say(me, text)
+            await proxy.remote.say(me, text)
             return undefined
         } catch (e) {
             // Most often the peer is not running this console, so it exposes no chat namespace.

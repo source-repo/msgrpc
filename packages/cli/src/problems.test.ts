@@ -29,7 +29,7 @@ interface ConsolePeer {
 const pageOn = async (url: string, as?: string) => {
     const { name } = (await (await fetch(`${url}${consoleIdentityPath}`)).json()) as { name: string }
     const client = new RpcClient(url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000, ...(as ? { name: as } : {}) })
-    return { client, remote: (await client.proxy<ConsolePeer>('console')).remote! }
+    return { client, remote: (await client.proxy<ConsolePeer>('console')).remote }
 }
 
 test('a frame with nowhere to go is reported, streamed and kept', async (t) => {
@@ -45,7 +45,7 @@ test('a frame with nowhere to go is reported, streamed and kept', async (t) => {
     // own transport report a frame it cannot deliver - the ordinary shape of "the call just timed
     // out", now with a reason attached.
     const nowhere = await client.proxy<{ read(): Promise<unknown> }>('plant', 'no-such-device')
-    await t.throwsAsync(nowhere.remote!.read())
+    await t.throwsAsync(nowhere.remote.read())
 
     await waitFor(() => streamed.some((problem) => problem.kind === 'unroutable'))
     const reported = streamed.find((problem) => problem.kind === 'unroutable')!

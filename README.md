@@ -51,7 +51,7 @@ The caller imports the **type** and none of the code, so the implementation neve
 import type { Pump } from './pump.js'
 
 const pump = await client.proxy<Pump>('pump', 'plantServer')
-await pump.remote!.setSetpoint(4)
+await pump.remote.setSetpoint(4)
 ```
 
 ## The network

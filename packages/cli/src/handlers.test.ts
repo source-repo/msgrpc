@@ -54,7 +54,7 @@ const fakeOn = async (port: number, script: object, allowExec = true) => {
     await client.ready()
     const plant = await client.proxy<{ read(): Promise<number>; setSetpoint(bar: number): Promise<null> }>('plant', name)
     return {
-        plant: plant.remote!,
+        plant: plant.remote,
         close: async () => {
             await client.close()
             await fake.close()
