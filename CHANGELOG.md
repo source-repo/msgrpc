@@ -1,5 +1,46 @@
 # Changelog
 
+## Source RPC 4.2.0
+
+The release that ships the adopted architecture: observable components, command authority, the federated topology core, capability discovery — and the first tool node, `@source-repo/queue`, published for the first time. Everything is additive over 4.0.0 with one event-payload change noted below.
+
+### Observable components
+
+A long-lived instance can extend `RpcComponent<Props, State>`: cached `props` and `state` snapshots ride epoch/revision ordering with a race-free targeted snapshot on subscribe, and `client.component()` (and `server.component()` — a page that hosts a service observes over the same link) resolves to a typed proxy whose reads are synchronous from a local cache. The store beneath it — `getSnapshot()`/`subscribe()` — is exactly what React's `useSyncExternalStore` consumes, with a per-channel status of `initializing | live | stale | closed`: a dropped link marks the picture stale and keeps it readable with its age on it, and a reconnect repairs it with one snapshot. Component shapes travel in the schema (`extract` resolves them through the base-type chain), the compatibility checker treats them as output, and `describe()` reports structure and a live observer count, never the values. `validateComponentSnapshots` checks each commit against the contract before it becomes current.
+
+### Command authority and the owner fence
+
+`$acquire`/`$release` bring the plant's arbitration concept to any component — granted, visible in every snapshot as `authority`, and always expiring, with `authorityChanged` saying why. Only methods declaring `requiresAuthority` are ever gated, which is the safety rule stated positively: an E-stop never declares it and is therefore provably never behind a held lease. Refusals are `NotInControl`, naming the holder, checked at the door and again after any queue wait. Above it sits the topology fence: `$with({ ownerEpoch })` carries the caller's observed owner generation, and a target whose durable record moved answers `OwnershipChanged` — certainly not run, never blindly retried.
+
+### The topology core, federated
+
+Every host now answers for its own components' `parent` (physical) and `owner` (logical) edges: records with per-link epochs under compare-and-set, a synthetic durable `$host` root carrying the deployment's declared `place`, and the one permitted cross-host physical edge, root to root. Local physical invariants are refused at commit; owner cycles — which no host can police alone — are detected at derivation as invalid topology with the path named. Epochs are durable where the store is (`JsonFileTopologyStore` writes whole and renames; restart never rotates an epoch), and the volatile default says so through the capabilities record `describe()` now serves. Remote mutation is opt-in (`topology.allowRemoteMutation`) and still passes `authorize()`; ids refuse control characters at the boundary. Labels are free Unicode — exactly what the drawings say — and display only.
+
+### Capability discovery
+
+`class Compiler implements UiBuilder` becomes `@scope/contracts/UiBuilder` in the extracted schema — qualified by the package that declares the interface, with the `extends` closure flattened in, so a search for the parent finds the child's implementor as a flat string match. An interface from the class's own package is a loud diagnostic, never a bare name. `describe()` serves capabilities from the schema — a bundled class named `m` still advertises correctly — and `source-rpc find <capability>` plus the MCP `find_capability` tool answer with who implements what. A capability nobody implements is an empty list, not an error, and the MCP's discovery cache validates `call_method` arguments locally: a wrong shape fails `InvalidParams` before spending a network hop.
+
+### The console
+
+The peer list is a tree over what descriptions have taught — hosts attached root-to-root nest, with the declared place beside each name — and the selected peer shows its structure panel with both axes, labels beside ids, and cross-peer owners as links. Observable components render live: status badge, values with per-value quality (`forced` deliberately distinct from `stale`), last-known data dimmed but readable while stale. Write dialogs grade by the contract: a `non-repeatable-command` arms and confirms in the console's own chrome, and the repeat button exists only where the contract says repeating is free.
+
+### `@source-repo/queue` 0.1.0 — the first tool node
+
+Published for the first time: a lease-based work queue over Source RPC — at-least-once stated plainly, acquire-ID replay for uncertain outcomes, lease tokens fencing stale completions, reject-new-only capacity with `QueueFullError`, retries into dead letters with a paged, authorized admin surface, and metrics riding an observable component. One conformance suite over in-process, socket.io and MQTT 5. Its own package with its own version, deliberately outside the versions-together rule, and the release workflow now publishes it whenever its version is new.
+
+### Changed
+
+- **`resubscribeFailed` carries identities, not a count.** The event's payload is now `FailedResubscription[]` — peer, namespace, event and the error for each subscription a reconnect could not restore — because a shadow cannot mark the right values stale from a number. Anything listening to this event reads the array instead.
+
+### Also
+
+- Per-call timeouts: `$with({ timeoutMs })`, with `0` honestly meaning no timer and no ttl — the zero-timeout next-tick bug is fixed.
+- A client's event subscriptions are reference-counted, so one handler leaving no longer unsubscribes the rest; peer lifecycle events (`peerOnline`, `peerGone`, `peerDisplaced`) forward through `RpcClient`.
+- socket.io clients retry after `io server disconnect`, so a restarted server's peers come back without help.
+- `RpcServer.close()` awaits its own construction, closing a race that could leak a listener.
+- Graded execution defaults: declared commands serialise per instance, queries run parallel, with a bounded mailbox answering `Busy` and setpoint-shaped commands able to `conflate` into `Superseded`.
+- One exported `SCHEMA_VERSION` and a written compatibility policy (`docs/schema-compatibility.md`): what is additive, what forces a bump, what a consumer may assume.
+
 ## Source RPC 4.0.0
 
 **`proxy()` returns the remote instance.** It used to return a record — `{ name, target?, remote }` — so every call read `proxy.remote!.method()`. The wrapper carried two fields nothing in the library, the CLI or the console ever read, and a `remote` that was typed optional but could not be absent. What that cost was a word in front of every method and an assertion at every one of 142 call sites, to describe a record halfway through being assembled rather than the one handed back.

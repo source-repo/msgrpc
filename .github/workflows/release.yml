@@ -125,6 +125,21 @@ jobs:
                     npm publish --access public --provenance
                   fi
 
+            # The queue versions on its own - deliberately outside the versions-together rule - so
+            # it rides every release tag and the already-published guard is what makes that free:
+            # a tag cut without touching the queue publishes nothing here.
+            - name: Publish the queue
+              working-directory: packages/queue
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+              run: |
+                  version=$(node -p "require('./package.json').version")
+                  if curl -fsSL -o /dev/null "https://registry.npmjs.org/@source-repo%2fqueue/${version}"; then
+                    echo "@source-repo/queue@${version} is already published"
+                  else
+                    npm publish --access public --provenance
+                  fi
+
     # After npm, because the image installs the published CLI rather than building the repository.
     container:
         needs: npm
