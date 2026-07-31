@@ -59,21 +59,21 @@ export interface RpcClientOptions {
     ca?: TrustedCertificateAuthority
 }
 
-export interface RpcProxy<T> {
-    name: string
-    target?: string
-    /**
-     * The remote instance, plus `$with` for the options a caller can attach to a call - an
-     * idempotency key, so far. `$with` returns another proxy for the same instance rather than
-     * changing this one, so options never leak into calls that did not ask for them.
-     *
-     * Required, because `proxy()` awaits `ready()` before it builds this and a client that is ready
-     * has its handler. It was optional for years, which is why so much code says `remote!`: the type
-     * described the record halfway through being assembled rather than the one handed back, and
-     * every caller paid for that with an assertion that could never fail.
-     */
-    remote: T & WithOptions<T>
-}
+/**
+ * What `proxy()` hands back: the remote instance itself, plus `$with` for the options a caller can
+ * attach to a call - an idempotency key, so far. `$with` returns another proxy for the same instance
+ * rather than changing this one, so options never leak into calls that did not ask for them.
+ *
+ * It used to be a record - `{ name, target?, remote }` - and every call went through `.remote`. The
+ * wrapper carried two fields nothing ever read, and an optional `remote` that could not be absent,
+ * so the cost of it was an assertion at every call site and a word in front of every method. Calling
+ * a remote method now reads like calling a local one, which was the point of the library.
+ *
+ * The one name this reserves is `$with`. A class with a method of that name cannot be proxied - true
+ * of the inner proxy before this change too, but now it is the whole of the surface rather than a
+ * detail one level down.
+ */
+export type RpcProxy<T> = T & WithOptions<T>
 
 /**
  * Emits the TransportEvent.connected and TransportEvent.disconnected lifecycle events so an
@@ -207,12 +207,8 @@ export class RpcClient extends EventEmitter {
         await this.ready()
         // ready() returns only once init() has set readyFlag, and init() creates the handler before
         // it does - so this cannot be missing here. Thrown rather than asserted away, because the
-        // alternative was handing back a record whose `remote` was quietly undefined.
+        // alternative is returning something that is not a proxy at all.
         if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
-        return {
-            name,
-            ...(target ? { target } : {}),
-            remote: this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
-        }
+        return this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
     }
 }

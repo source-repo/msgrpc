@@ -91,12 +91,12 @@ test('the console taps an MQTT network and sees a call between two other peers',
     const running = await startConsole({ broker: BROKER_URL, prefix, port: 7396, host: '127.0.0.1', name: peer('console-tap'), callTimeout: 6000 })
     const { name } = (await (await fetch(`${running.url}${consoleIdentityPath}`)).json()) as { name: string }
     const page = new RpcClient(running.url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000 })
-    const console_ = (await page.proxy<ConsoleTapService>('console')).remote
+    const console_ = (await page.proxy<ConsoleTapService>('console'))
 
     const frames: TappedFrame[] = []
     await console_.on('frame', (frame: unknown) => void frames.push(frame as TappedFrame))
 
-    const plant = (await hmi.proxy<Boiler>('boiler', device)).remote
+    const plant = (await hmi.proxy<Boiler>('boiler', device))
     // Nothing is subscribed before anyone asks, so this conversation goes unseen.
     t.is(await plant.setTemperature(40), 40)
     await new Promise((resolve) => setTimeout(resolve, 500))
@@ -160,14 +160,14 @@ test('a filter on an MQTT tap narrows to one peer', async (t) => {
     const running = await startConsole({ broker: BROKER_URL, prefix, port: 7397, host: '127.0.0.1', name: peer('console-filter'), callTimeout: 6000 })
     const { name } = (await (await fetch(`${running.url}${consoleIdentityPath}`)).json()) as { name: string }
     const page = new RpcClient(running.url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000 })
-    const console_ = (await page.proxy<ConsoleTapService>('console')).remote
+    const console_ = (await page.proxy<ConsoleTapService>('console'))
 
     const frames: TappedFrame[] = []
     await console_.on('frame', (frame: unknown) => void frames.push(frame as TappedFrame))
 
     await console_.tap({ peer: 'somebody-else' })
     await new Promise((resolve) => setTimeout(resolve, 600))
-    const plant = (await hmi.proxy<Boiler>('boiler', device)).remote
+    const plant = (await hmi.proxy<Boiler>('boiler', device))
     await plant.setTemperature(20)
     await new Promise((resolve) => setTimeout(resolve, 500))
     t.deepEqual(frames, [], 'a filter for another peer still matched')

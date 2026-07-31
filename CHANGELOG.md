@@ -1,5 +1,26 @@
 # Changelog
 
+## Source RPC 4.0.0
+
+**`proxy()` returns the remote instance.** It used to return a record — `{ name, target?, remote }` — so every call read `proxy.remote!.method()`. The wrapper carried two fields nothing in the library, the CLI or the console ever read, and a `remote` that was typed optional but could not be absent. What that cost was a word in front of every method and an assertion at every one of 142 call sites, to describe a record halfway through being assembled rather than the one handed back.
+
+```typescript
+const calculator = await client.proxy<Calculator>('calculator')
+await calculator.square(3)          // was calculator.remote!.square(3)
+```
+
+Every call site changes, which is the whole of the break. `$with` is unaffected — `pump.$with({ idempotencyKey }).dispense()` reads as it did, one word shorter.
+
+### `then` is now a reserved name
+
+A remote class could never expose `$with`. It can no longer expose `then` either, and the reason is worth stating because it is inherent rather than a shortcut: `proxy()` is async, so `await` probes what it returns for `then`. The proxy's trap answers every property with a caller for a remote method of that name, so it answered one for `then`, the runtime concluded it had a thenable and adopted it, and the await waited forever for a call nothing would ever answer.
+
+The trap returns `undefined` for `then`. The old wrapper hid this by accident, being a plain object whose `.remote` was only touched after the await had settled — 214 tests hung the moment it was removed, every one of them presenting as a network timeout rather than as a language rule. There is a test on it now, because the next person to touch the trap would reintroduce a hang that does not look like a bug in the trap.
+
+### Migrating
+
+Delete `.remote` from every call. `.remote!.` and `.remote?.` become `.`; a bare `.remote` used as a value goes entirely. Nothing read `name` or `target`, but if you did, they are no longer there — `proxy()` was given both, so the caller already knows them.
+
 ## Source RPC 3.4.3
 
 **Nothing in either package has changed.** Both exclude tests from what they publish, and the two commits since 3.4.2 are a test and two workflow files, so the tarballs are the same code 3.4.2 shipped. The release is worth making for the image, which floats on `node:24-alpine` and runs `apk upgrade`, so rebuilding is how it picks up whatever has been fixed in the base since — the case the scheduled scan exists to notice.

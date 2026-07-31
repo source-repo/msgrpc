@@ -281,6 +281,19 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 if (typeof prop === 'string') {
                     if (target[prop]) {
                         return target[prop]
+                    } else if (prop === 'then') {
+                        // Undefined, so this is not a thenable. `proxy()` is async and hands one of
+                        // these back, and `await` probes whatever it is given for `then` - without
+                        // this the trap answers with a caller for a remote method named `then`, the
+                        // runtime treats the proxy as a promise and adopts it, and the await never
+                        // settles because nothing on the far end is ever going to answer. Every call
+                        // in the library hung on this the moment `proxy()` stopped wrapping its
+                        // result in a plain object.
+                        //
+                        // The cost is that `then` joins `$with` as a name a remote class cannot
+                        // expose. That is inherent rather than incidental: an object you await
+                        // cannot also have a method called `then`.
+                        return undefined
                     } else if (prop === '$with') {
                         // The one name on a proxy that is not a remote method: it returns another
                         // proxy for the same instance whose calls carry these options. Prefixed with

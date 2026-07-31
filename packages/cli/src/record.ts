@@ -213,7 +213,7 @@ export const replaySession = async (options: ReplayOptions, onCall?: (call: Repl
             }
             try {
                 const proxy = await connected.network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(namespace, target)
-                const got = await proxy.remote[method](...params)
+                const got = await proxy[method](...params)
                 outcome.ms = Date.now() - started
                 const recorded = call.id ? replies.get(call.id) : undefined
                 if (!recorded || (recorded.kind === RpcMessageType.success && recorded.result === undefined)) {

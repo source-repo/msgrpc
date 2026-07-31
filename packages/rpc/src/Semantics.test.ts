@@ -60,7 +60,7 @@ test('a method says what it does to the world, and describe() passes it on', asy
     const client = new RpcClient('http://localhost:3821', { name: peer('semanticsCaller'), defaultTarget: peer('semanticsServer') })
     await client.ready()
     const introspection = await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')
-    const described = await introspection.remote.describe()
+    const described = await introspection.describe()
 
     const gate = described.namespaces.find((namespace) => namespace.name === 'gate')!
     const semantics = Object.fromEntries(gate.methods.map((method) => [method.name, method.semantics]))
@@ -87,7 +87,7 @@ test('a call cut off after it was sent is an unknown outcome, not a failure', as
 
     const client = new RpcClient('http://localhost:3822', { name: peer('cutOff'), defaultTarget: peer('slowServer'), callTimeout: 30000 })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
 
     // In flight and unanswered when the link goes: the request is out there, the method is running,
     // and nothing on this side can say whether it will finish.
@@ -114,7 +114,7 @@ test('a call that never left is a transport error, because it certainly did not 
 
     const client = new RpcClient('http://localhost:3823', { name: peer('neverSent'), defaultTarget: peer('goneServer') })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
     t.is(await remote.readMode(), 'auto')
     await client.close()
 
@@ -150,7 +150,7 @@ test('a serial instance runs one call at a time', async (t) => {
 
     const client = new RpcClient('http://localhost:3824', { name: peer('serialCaller'), defaultTarget: peer('serialServer'), callTimeout: 5000 })
     await client.ready()
-    const remote = (await client.proxy<SerialCell>('cell')).remote
+    const remote = (await client.proxy<SerialCell>('cell'))
 
     await Promise.all([remote.slow('a'), remote.slow('b')])
 
@@ -184,7 +184,7 @@ test('serial by key keeps one device in order without holding up the others', as
 
     const client = new RpcClient('http://localhost:3825', { name: peer('fleetCaller'), defaultTarget: peer('fleetServer'), callTimeout: 5000 })
     await client.ready()
-    const remote = (await client.proxy<Fleet>('fleet')).remote
+    const remote = (await client.proxy<Fleet>('fleet'))
 
     const started = Date.now()
     await Promise.all([remote.move('cell1'), remote.move('cell1'), remote.move('cell2')])
@@ -222,7 +222,7 @@ test('a command that waited out its caller behind others is refused rather than 
 
     const client = new RpcClient('http://localhost:3826', { name: peer('queueCaller'), defaultTarget: peer('queueServer'), callTimeout: 400 })
     await client.ready()
-    const remote = (await client.proxy<SlowQueue>('queue')).remote
+    const remote = (await client.proxy<SlowQueue>('queue'))
 
     const results = await Promise.allSettled([remote.work('first'), remote.work('second'), remote.work('third')])
 
@@ -249,7 +249,7 @@ test('two attempts at one command run it once and get the same answer', async (t
 
     const client = new RpcClient('http://localhost:3827', { name: peer('idemCaller'), defaultTarget: peer('idemServer') })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
 
     // The operator pressed the button, did not get an answer they trusted, and pressed it again.
     // Same work order, so the same command - which is the only thing the caller knows that the
@@ -284,7 +284,7 @@ test('only a non-repeatable command is guarded, so a query costs no store round 
 
     const client = new RpcClient('http://localhost:3828', { name: peer('scopeCaller'), defaultTarget: peer('scopeServer') })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
 
     await remote.readMode()
     await remote.setMode('manual')
@@ -314,7 +314,7 @@ test('a command whose store cannot be reached is refused, not run', async (t) =>
 
     const client = new RpcClient('http://localhost:3829', { name: peer('brokenCaller'), defaultTarget: peer('brokenStore') })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
 
     const failure = await t.throwsAsync(remote.startPump())
     t.true(/UnknownOutcome/.test(String(failure?.message)), `expected an unknown outcome, got: ${failure?.message}`)
@@ -343,7 +343,7 @@ test('what a command answered is written down before the answer is sent', async 
 
     const client = new RpcClient('http://localhost:3830', { name: peer('orderCaller'), defaultTarget: peer('orderServer') })
     await client.ready()
-    const remote = (await client.proxy<Gate>('gate')).remote
+    const remote = (await client.proxy<Gate>('gate'))
 
     const answer = await remote.startPump()
     events.push(`answered ${answer}`)

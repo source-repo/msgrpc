@@ -97,7 +97,7 @@ await peer.ready()
 
 // The point of rung 4: it calls out as well as answering.
 const panel = await peer.proxy<Panel>('panel', 'hmi1')
-await panel.remote.annunciate('pump simulator online')
+await panel.annunciate('pump simulator online')
 ```
 
 Run it with `node scripts/pump-sim.ts` — Node runs TypeScript directly from 22.6, so there is no build step and `import type` gives you the same typed proxy the rest of your code has.

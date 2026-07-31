@@ -32,7 +32,7 @@ test('a token admits its holder as the peer it names', async (t) => {
     const client = new RpcClient('http://localhost:3241', { name: 'plantServer', credentials: { token: 'plant-token' }, readyTimeout: 2000 })
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant', 'bus')).remote.readSetpoint(), 42)
+    t.is(await (await client.proxy<Plant>('plant', 'bus')).readSetpoint(), 42)
 
     await client.close()
     await server.close()
@@ -48,7 +48,7 @@ test('a stolen token gets a socket and nothing else', async (t) => {
     const client = new RpcClient('http://localhost:3242', { name: 'plantServer-impostor', credentials: { token: 'plant-token' }, readyTimeout: 2000, callTimeout: 700 })
     await client.ready()
 
-    await t.throwsAsync(async () => (await client.proxy<Plant>('plant', 'bus')).remote.readSetpoint())
+    await t.throwsAsync(async () => (await client.proxy<Plant>('plant', 'bus')).readSetpoint())
     t.false(server.peers.names().includes('plantServer-impostor'))
 
     await client.close()

@@ -115,7 +115,7 @@ test('a peer connects the way the page does, through the base path', async (t) =
     t.true(await page.awaitPeer(name), `the console never became addressable: ${JSON.stringify(page.peers.names())}`)
 
     const proxy = await page.proxy<{ peers: () => Promise<{ peers: string[] }> }>('console', name)
-    const { peers } = await proxy.remote.peers()
+    const { peers } = await proxy.peers()
     t.true(peers.includes(peer('page')), `console saw: ${JSON.stringify(peers)}`)
 
     await page.close()

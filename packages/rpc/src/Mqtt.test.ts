@@ -139,7 +139,7 @@ test('a call is answered over MQTT', async (t) => {
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
 
-    t.is(await plant.remote?.add(5, 6), 21)
+    t.is(await plant.add(5, 6), 21)
 
     await client.close()
     await server.close()
@@ -163,7 +163,7 @@ test('rpc traffic is published per peer, not to a shared topic', async (t) => {
         defaultTarget: peer('mqttServer2')
     })
     await client.ready()
-    await (await client.proxy<Plant>('plant')).remote?.add(1, 1)
+    await (await client.proxy<Plant>('plant')).add(1, 1)
     // Counting every message would let the two presence announcements satisfy the wait, and the
     // reply is the message this test is about - so wait for the rpc topics themselves.
     const rpcTopics = () => [...new Set(topics)].filter((topic) => !topic.includes('/presence/')).sort()
@@ -191,7 +191,7 @@ test('a departing peer releases its subscriptions through presence', async (t) =
     })
     await client.ready()
     const proxy = await client.proxy<Plant>('plant')
-    await proxy.remote?.on('alarm', () => {})
+    await proxy.on('alarm', () => {})
     t.is(server.rpc.eventProxies.size, 1)
 
     // MQTT has no connection to the server, so the will and the retained presence topic are what
@@ -219,7 +219,7 @@ test('events reach a subscriber over MQTT', async (t) => {
     await client.ready()
     const proxy = await client.proxy<Plant>('plant')
     const received: string[] = []
-    await proxy.remote?.on('alarm', (value: string) => received.push(value))
+    await proxy.on('alarm', (value: string) => received.push(value))
 
     plant.fire()
     await waitFor(() => received.length === 1)
@@ -239,7 +239,7 @@ test('a client built from an mqtt url connects through the on-demand transport',
     const client = new RpcClient(BROKER_URL, { name: peer('mqttClient5'), defaultTarget: peer('mqttServer5') })
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant')).remote?.add(1, 1), 5)
+    t.is(await (await client.proxy<Plant>('plant')).add(1, 1), 5)
 
     await client.close()
     await server.close()
@@ -262,8 +262,8 @@ test('one client watching two peers keeps their events apart', async (t) => {
     await client.ready()
     const fromA: string[] = []
     const fromB: string[] = []
-    await (await client.proxy<Plant>('plant', peer('routeA'))).remote.on('alarm', (value: string) => fromA.push(value))
-    await (await client.proxy<Plant>('plant', peer('routeB'))).remote.on('alarm', (value: string) => fromB.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeA'))).on('alarm', (value: string) => fromA.push(value))
+    await (await client.proxy<Plant>('plant', peer('routeB'))).on('alarm', (value: string) => fromB.push(value))
 
     plantA.fire()
     await waitFor(() => fromA.length === 1)

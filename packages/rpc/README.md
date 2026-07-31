@@ -95,9 +95,9 @@ const client = new RpcClient('http://localhost:7843')
 await client.ready()
 
 const calculator = await client.proxy<Calculator>('calculator')
-console.log(await calculator.remote.square(3))      // 9
-console.log(await calculator.remote.add(10))        // 10
-console.log(await calculator.remote.add(5))         // 15 - one instance, holding its own state
+console.log(await calculator.square(3))      // 9
+console.log(await calculator.add(10))        // 10
+console.log(await calculator.add(5))         // 15 - one instance, holding its own state
 
 await client.close()
 ```
@@ -108,7 +108,9 @@ Three things worth noticing:
 
 **`import type`** on the client is the point of the whole design: the client compiles against the class but imports none of its code, so the implementation never reaches the browser bundle. In a monorepo, put the class in a package both sides depend on. If the client cannot see the class at all — a different language, a different repo — describe the surface with an `interface` instead and pass that to `proxy<T>()`.
 
-**`.remote`** — `proxy()` returns a small record (`{ name, target?, remote }`) whose `remote` is the typed proxy. `target` is optional because a call can go to the default one; `remote` is not, so no `!` is needed. It used to be optional, which is why older code says `remote!` — the type described the record halfway through being built rather than the one handed back. Those assertions still compile; they are simply no longer doing anything.
+**`proxy()` hands back the instance**, so calling a remote method reads like calling a local one. It used to return a record — `{ name, target?, remote }` — and every call went through `.remote`; the wrapper carried two fields nothing ever read, so it is gone as of 4.0.
+
+Two names are reserved on a proxy, and a remote class cannot expose either. `$with` attaches [per-call options](#running-a-command-once). `then` must answer `undefined` or `await` would treat the proxy as a promise and adopt it — inherent rather than incidental, since an object you await cannot also have a method called `then`.
 
 ## Connecting
 
@@ -172,7 +174,7 @@ cellSrv.exposeClassInstance(new Cell(), 'cell')
 
 // The same object calls back out, over the same connection and under the same name.
 const oven = await cellSrv.proxy<Oven>('oven', 'ovenSrv')
-await oven.remote.temperature()
+await oven.temperature()
 ```
 
 Read the last two lines again, because they are the part that surprises people. `cellSrv` is a *server* — and it is calling out. `RpcServer.proxy()` takes the name of a namespace and the name of the peer holding it, and returns the same typed object `RpcClient.proxy()` would. The call leaves over the connection `cellSrv` already opened to the bus, the bus forwards it to `ovenSrv`, and the answer comes back the same way.
@@ -367,7 +369,7 @@ Undeclared stays undeclared. The library will not guess that a method is safe to
 
 ```typescript
 try {
-    await pump.remote.dispense()
+    await pump.dispense()
 } catch (e) {
     if (e instanceof RpcError && e.code === 'UnknownOutcome') {
         // The request went out. It may have run. Go and look before sending it again.
@@ -390,7 +392,7 @@ The library ships the interface and a `MemoryIdempotencyStore` for tests - delib
 The store is consulted only for `non-repeatable-command` methods, so reads pay nothing. What it records is keyed by the **request id**, which makes a redelivered packet the same command. An operator pressing the button again is a *different* request, and only the caller knows the two are one intent:
 
 ```typescript
-await pump.remote.$with({ idempotencyKey: workOrder }).dispense()
+await pump.$with({ idempotencyKey: workOrder }).dispense()
 ```
 
 `$with` returns another proxy for the same instance, so the key never leaks into calls that did not ask for it. The outcome is recorded **before** the answer is sent - the other order leaves a window where the caller has the result and the store does not.
@@ -437,7 +439,7 @@ A call rejects with an `RpcError` carrying a `code`, the remote `message`, and t
 import { RpcError } from '@source-repo/rpc'
 
 try {
-    await calculator.remote.square(3)
+    await calculator.square(3)
 } catch (e) {
     if (e instanceof RpcError) console.log(e.code, e.message, e.remoteStack)
 }
@@ -477,8 +479,8 @@ An exposed instance that extends `EventEmitter` can push to subscribers:
 
 ```typescript
 const plant = await client.proxy<Plant>('plant')
-await plant.remote.on('alarm', (message: string) => console.log(message))
-await plant.remote.off('alarm', handler)     // same handler reference
+await plant.on('alarm', (message: string) => console.log(message))
+await plant.off('alarm', handler)     // same handler reference
 ```
 
 `RpcClient` is itself an `EventEmitter` reporting the state of its link, so an application can show it rather than infer it from failed calls:
@@ -571,7 +573,7 @@ A server can report what it exposes, so a peer or a person can find out without 
 ```typescript
 const server = new RpcServer({ transports: [{ brokerurl }], exposeIntrospection: true })
 
-const described = await (await client.proxy<Introspection>('msgrpc')).remote.describe()
+const described = await (await client.proxy<Introspection>('msgrpc')).describe()
 ```
 
 It reports each namespace with its class, its contract version, whether the instance was created at runtime, its methods with types when a schema describes them, and its events with how many peers are currently subscribed. `source-rpc console` renders this in a browser.

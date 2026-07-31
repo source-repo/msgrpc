@@ -58,8 +58,8 @@ test('an unmarked method is not callable even though it is on the class', async 
     await client.ready()
     const proxy = await client.proxy<Plant & { wipeConfiguration: () => Promise<string> }>('plant')
 
-    t.is(await proxy.remote.writeSetpoint(12), 12)
-    const error = await t.throwsAsync(async () => proxy.remote.wipeConfiguration(), { instanceOf: RpcError })
+    t.is(await proxy.writeSetpoint(12), 12)
+    const error = await t.throwsAsync(async () => proxy.wipeConfiguration(), { instanceOf: RpcError })
     t.is(error?.code, 'MethodNotFound')
 
     await client.close()
@@ -72,7 +72,7 @@ test('a class marking nothing still exposes everything, unless that is refused',
     open.exposeClassInstance(new Unmarked(), 'thing')
     const client = new RpcClient('http://localhost:3961')
     await client.ready()
-    t.is(await (await client.proxy<Unmarked>('thing')).remote.anything(), 'ok')
+    t.is(await (await client.proxy<Unmarked>('thing')).anything(), 'ok')
     await client.close()
     await open.close()
 
@@ -195,9 +195,9 @@ test('a call with the wrong argument type is refused before it reaches the metho
     await client.ready()
     const proxy = await client.proxy<Plant>('plant')
 
-    t.is(await proxy.remote.writeSetpoint(1200), 1200)
+    t.is(await proxy.writeSetpoint(1200), 1200)
 
-    const wrongType = await t.throwsAsync(async () => (proxy.remote as unknown as { writeSetpoint: (v: unknown) => Promise<number> }).writeSetpoint('banana'), {
+    const wrongType = await t.throwsAsync(async () => (proxy as unknown as { writeSetpoint: (v: unknown) => Promise<number> }).writeSetpoint('banana'), {
         instanceOf: RpcError
     })
     t.is(wrongType?.code, 'InvalidParams')
@@ -205,7 +205,7 @@ test('a call with the wrong argument type is refused before it reaches the metho
     // The namespace's contract version rides along, so a stale caller is recognisable as one.
     t.regex(wrongType?.message ?? '', /plant@3/)
 
-    const outOfRange = await t.throwsAsync(async () => proxy.remote.writeSetpoint(9999), { instanceOf: RpcError })
+    const outOfRange = await t.throwsAsync(async () => proxy.writeSetpoint(9999), { instanceOf: RpcError })
     t.regex(outOfRange?.message ?? '', /above the maximum 2000/)
 
     t.is(plant.setpoint, 1200, 'a refused call still reached the method')
@@ -220,7 +220,7 @@ test('an undescribed namespace passes unless validation is required', async (t) 
     lenient.exposeClassInstance(new Unmarked(), 'thing')
     const client = new RpcClient('http://localhost:3964')
     await client.ready()
-    t.is(await (await client.proxy<Unmarked>('thing')).remote.anything(), 'ok')
+    t.is(await (await client.proxy<Unmarked>('thing')).anything(), 'ok')
     await client.close()
     await lenient.close()
 
@@ -229,7 +229,7 @@ test('an undescribed namespace passes unless validation is required', async (t) 
     strict.exposeClassInstance(new Unmarked(), 'thing')
     const strictClient = new RpcClient('http://localhost:3965')
     await strictClient.ready()
-    const error = await t.throwsAsync(async () => (await strictClient.proxy<Unmarked>('thing')).remote.anything(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => (await strictClient.proxy<Unmarked>('thing')).anything(), { instanceOf: RpcError })
     t.is(error?.code, 'InvalidParams')
     t.regex(error?.message ?? '', /not described by the schema/)
     await strictClient.close()
@@ -249,7 +249,7 @@ test('result validation catches a server breaking its own contract', async (t) =
     const client = new RpcClient('http://localhost:3966')
     await client.ready()
 
-    const error = await t.throwsAsync(async () => (await client.proxy<Liar>('plant')).remote.readSetpoint(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => (await client.proxy<Liar>('plant')).readSetpoint(), { instanceOf: RpcError })
     t.is(error?.code, 'InvalidParams')
     t.regex(error?.message ?? '', /returned a value its own schema forbids/)
 
@@ -367,7 +367,7 @@ test('a caller declaring an incompatible version is refused with the reason', as
 
     const stale = new RpcClient('http://localhost:3967', { schema: callerContract })
     await stale.ready()
-    const error = await t.throwsAsync(async () => (await stale.proxy<Plant>('plant')).remote.writeSetpoint(50), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => (await stale.proxy<Plant>('plant')).writeSetpoint(50), { instanceOf: RpcError })
     t.is(error?.code, 'IncompatibleVersion')
     t.regex(error?.message ?? '', /plant@1 is not compatible with plant@2/)
     t.regex(error?.message ?? '', /writeSetpoint argument 0 narrowed/)
@@ -375,7 +375,7 @@ test('a caller declaring an incompatible version is refused with the reason', as
     // A caller declaring nothing is unaffected: only its arguments are checked.
     const current = new RpcClient('http://localhost:3967')
     await current.ready()
-    t.is(await (await current.proxy<Plant>('plant')).remote.writeSetpoint(50), 50)
+    t.is(await (await current.proxy<Plant>('plant')).writeSetpoint(50), 50)
 
     await stale.close()
     await current.close()
@@ -401,7 +401,7 @@ test('an older caller whose contract still holds keeps working', async (t) => {
     const older = new RpcClient('http://localhost:3968', { schema: { schema: 1, namespaces: { plant: { version: '1', methods: v1.methods } } } })
     await older.ready()
 
-    t.is(await (await older.proxy<Plant>('plant')).remote.writeSetpoint(50), 50, 'a caller whose contract still holds was refused')
+    t.is(await (await older.proxy<Plant>('plant')).writeSetpoint(50), 50, 'a caller whose contract still holds was refused')
 
     await older.close()
     await server.close()
@@ -435,7 +435,7 @@ test('introspection is off unless asked for', async (t) => {
     const client = new RpcClient('http://localhost:3970')
     await client.ready()
 
-    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote.describe(), {
+    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).describe(), {
         instanceOf: RpcError
     })
     t.is(error?.code, 'ClassNotFound')
@@ -466,9 +466,9 @@ test('describe reports namespaces, methods, events and live instances', async (t
 
     // A live subscription should show up in the description.
     const proxy = await client.proxy<Boiler>('boiler')
-    await proxy.remote.on('overheat', () => {})
+    await proxy.on('overheat', () => {})
 
-    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote.describe()
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).describe()
 
     t.is(described.version, '7')
     t.true(described.validating)
@@ -501,7 +501,7 @@ test('describe describes itself, and required validation does not refuse it', as
     const client = new RpcClient('http://localhost:3979')
     await client.ready()
 
-    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote.describe()
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).describe()
     const introspection = described.namespaces.find((namespace) => namespace.name === 'msgrpc')
     t.deepEqual(
         introspection!.methods.find((method) => method.name === 'describe')!.returns,
@@ -530,7 +530,7 @@ test('a schema of its own for the msgrpc namespace is left alone', async (t) => 
     const client = new RpcClient('http://localhost:3980')
     await client.ready()
 
-    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote.describe()
+    const described = await (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).describe()
     const introspection = described.namespaces.find((namespace) => namespace.name === 'msgrpc')
     t.deepEqual(introspection!.methods.find((method) => method.name === 'describe')!.returns, { kind: 'any' })
     t.falsy(described.types?.['msgrpc.ServerDescription'], 'nothing should have been merged in')
@@ -550,7 +550,7 @@ test('describe is subject to authorize like any other call', async (t) => {
     const client = new RpcClient('http://localhost:3972')
     await client.ready()
 
-    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).remote.describe(), {
+    const error = await t.throwsAsync(async () => (await client.proxy<{ describe: () => Promise<ServerDescription> }>('msgrpc')).describe(), {
         instanceOf: RpcError
     })
     t.is(error?.code, 'Forbidden')

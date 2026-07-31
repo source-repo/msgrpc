@@ -86,7 +86,7 @@ const browserClient = async (url: string) => {
     const { name } = (await (await fetch(`${url}${consoleIdentityPath}`)).json()) as { name: string }
     const client = new RpcClient(url, { defaultTarget: name, callTimeout: 8000, readyTimeout: 8000 })
     const proxy = await client.proxy<ConsoleService & { on: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown> }>('console')
-    return { client, remote: proxy.remote }
+    return { client, remote: proxy }
 }
 
 test('the console discovers a peer, describes it, calls it and streams its events over Source RPC', async (t) => {
@@ -217,7 +217,7 @@ test('the console describes its own service with argument types', async (t) => {
     // has not heard of yet is what made this the flakiest test in the suite.
     await waitFor(() => onlooker.peers.names().includes(peer('console-self')))
     const introspection = await onlooker.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer('console-self'))
-    const description = await introspection.remote.describe()
+    const description = await introspection.describe()
 
     const service = description.namespaces.find((namespace) => namespace.name === 'console')
     t.true(description.validating, 'the console should be checking its own arguments')

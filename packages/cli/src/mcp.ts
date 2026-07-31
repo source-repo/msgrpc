@@ -533,7 +533,7 @@ export const startMcp = async (options: McpOptions) => {
         }
         if (!(await connected.network.awaitPeer(target, 5000)))
             throw new Error(`'${target}' is not on this network. Run list_peers to see who is.`)
-        return (await connected.network.proxy<ScriptingService>('scripting', target)).remote
+        return (await connected.network.proxy<ScriptingService>('scripting', target))
     }
 
     /** A contract given inline, or the name of one saved in the contracts directory. */
@@ -572,7 +572,7 @@ export const startMcp = async (options: McpOptions) => {
 
     const describe = async (peer: string) => {
         const proxy = await network.proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', peer)
-        return await proxy.remote.describe()
+        return await proxy.describe()
     }
 
     const callTool = async (name: string, args: { [key: string]: unknown }): Promise<{ text: string; isError?: boolean }> => {
@@ -598,7 +598,7 @@ export const startMcp = async (options: McpOptions) => {
             if (!peer || !namespace || !method) return { text: 'call_method needs peer, namespace and method.', isError: true }
             try {
                 const proxy = await network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(namespace, peer)
-                const result = await proxy.remote[method](...parameters)
+                const result = await proxy[method](...parameters)
                 return { text: result === undefined ? 'The method returned nothing.' : JSON.stringify(result, null, 2) }
             } catch (e) {
                 return { text: `${peer}.${namespace}.${method} failed: ${failureText(e)}`, isError: true }
@@ -787,10 +787,10 @@ export const startMcp = async (options: McpOptions) => {
             const handler = (...emitted: unknown[]) => void heard.push({ at: Date.now(), args: emitted })
             try {
                 const proxy = await network.proxy<Subscribable>(namespace, peer)
-                await proxy.remote.on(event, handler)
+                await proxy.on(event, handler)
                 await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
                 // Dropped again, so a look does not leave a subscription behind on the device.
-                await proxy.remote.off(event, handler).catch(() => undefined)
+                await proxy.off(event, handler).catch(() => undefined)
                 return { text: JSON.stringify({ watchedFor: seconds, event: `${peer}.${namespace}.${event}`, heard }, null, 2) }
             } catch (e) {
                 return { text: `cannot watch ${peer}.${namespace}.${event}: ${failureText(e)}`, isError: true }

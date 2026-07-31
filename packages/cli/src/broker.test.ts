@@ -34,7 +34,7 @@ test('a broker relays between the peers that join it', async (t) => {
     await hmi.ready()
     await waitFor(() => bus.peers().includes(peer('panel')))
 
-    t.is(await (await hmi.proxy<Panel>('panel', peer('panel'))).remote.status(), 'the panel answered')
+    t.is(await (await hmi.proxy<Panel>('panel', peer('panel'))).status(), 'the panel answered')
     t.deepEqual(bus.peers(), [peer('hmi'), peer('panel')].sort())
     t.true(arrivals.includes(`+${peer('panel')}`))
 
@@ -59,7 +59,7 @@ test('two brokers joined by --upstream are one network', async (t) => {
     await hmi.ready()
 
     await waitFor(() => plant.peers().includes(peer('panel2')))
-    t.is(await (await hmi.proxy<Panel>('panel', peer('panel2'))).remote.status(), 'the panel answered')
+    t.is(await (await hmi.proxy<Panel>('panel', peer('panel2'))).status(), 'the panel answered')
 
     await panel.close()
     // The departure crosses back the other way, so nothing is left listed and unreachable.
@@ -93,7 +93,7 @@ test('an authenticating broker relays for the peers its tokens name, and nobody 
     await waitFor(() => bus.peers().includes(peer('panel3')))
 
     // Two authenticated peers, relaying through a bus that checked them both.
-    t.is(await (await hmi.proxy<Panel>('panel', peer('panel3'))).remote.status(), 'the panel answered')
+    t.is(await (await hmi.proxy<Panel>('panel', peer('panel3'))).status(), 'the panel answered')
 
     // Nothing without a token gets that far. ready() is what fails here, unlike the stolen-token
     // case: with no credentials at all there is no identity, so the handshake itself is refused.
@@ -114,7 +114,7 @@ test('a token holder cannot get itself listed under another peer"s name', async 
     // the announcement is refused, so the bus never lists it, and it never becomes addressable.
     const impostor = new RpcClient('http://localhost:8076', { name: peer('plantServer'), credentials: { token: 'hmi-token' }, readyTimeout: 2000, callTimeout: 700 })
     await impostor.ready()
-    await t.throwsAsync(async () => (await impostor.proxy<Panel>('panel', peer('panel4'))).remote.status())
+    await t.throwsAsync(async () => (await impostor.proxy<Panel>('panel', peer('panel4'))).status())
 
     t.deepEqual(bus.peers(), [])
 

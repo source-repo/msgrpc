@@ -91,7 +91,7 @@ test.serial('a peer that only listens is discovered, and can be called through t
     // It has never spoken to the caller, and the caller has never been told it exists.
     await waitFor(() => discovered.includes(peer('browserServer1')))
     t.true(discovered.includes(peer('browserServer1')), `discovered: ${JSON.stringify(discovered)}`)
-    t.is(await (await caller.proxy<Boiler>('boiler')).remote.whoAnswered(), 'the addressee')
+    t.is(await (await caller.proxy<Boiler>('boiler')).whoAnswered(), 'the addressee')
 
     const departed: string[] = []
     caller.options.transport!.on(TransportEvent.peerGone, (gone: string) => departed.push(gone))
@@ -118,9 +118,9 @@ test.serial('a call addressed to another peer is not executed by the server it p
     await caller.ready()
     await waitFor(() => (hub.transports[0] as unknown as { peerSockets: Map<string, unknown> }).peerSockets.has(peer('otherPeer2')))
 
-    t.is(await (await caller.proxy<Boiler>('boiler', peer('otherPeer2'))).remote.whoAnswered(), 'the addressee')
+    t.is(await (await caller.proxy<Boiler>('boiler', peer('otherPeer2'))).whoAnswered(), 'the addressee')
     // Addressed to the hub it is still the hub that answers, which is the ordinary case.
-    t.is(await (await caller.proxy<Boiler>('boiler', peer('hub2'))).remote.whoAnswered(), 'the hub')
+    t.is(await (await caller.proxy<Boiler>('boiler', peer('hub2'))).whoAnswered(), 'the hub')
 
     await caller.close()
     await other.close()
@@ -147,11 +147,11 @@ test.serial('a relay rule decides per connection, and covers the reply', async (
     const allowed = new RpcClient('http://localhost:3973', { name: peer('allowed3'), defaultTarget: peer('backend3'), callTimeout: 4000 })
     await allowed.ready()
     // The answer travels the other way, so a rule tested per frame would strand it.
-    t.is(await (await allowed.proxy<Boiler>('boiler')).remote.whoAnswered(), 'the addressee')
+    t.is(await (await allowed.proxy<Boiler>('boiler')).whoAnswered(), 'the addressee')
 
     const denied = new RpcClient('http://localhost:3973', { name: peer('denied3'), defaultTarget: peer('backend3'), callTimeout: 700 })
     await denied.ready()
-    const error = await t.throwsAsync(async () => (await denied.proxy<Boiler>('boiler')).remote.whoAnswered())
+    const error = await t.throwsAsync(async () => (await denied.proxy<Boiler>('boiler')).whoAnswered())
     // Refused, not quietly served by the hub's own instance - that would be the misdelivery again,
     // handed to a caller who was specifically not allowed to reach the peer it asked for.
     //
@@ -181,7 +181,7 @@ test.serial('relay false forwards nothing', async (t) => {
     // Still discovered - presence is not routing, and knowing who is there is not the same as
     // being allowed to reach them.
     await waitFor(() => (caller.options.transport as SocketIoClientTransport).knownPeers.has(peer('hidden4')))
-    const error = await t.throwsAsync(async () => (await caller.proxy<Boiler>('boiler')).remote.whoAnswered())
+    const error = await t.throwsAsync(async () => (await caller.proxy<Boiler>('boiler')).whoAnswered())
     // Told so, rather than left to time out. Knowing who is there still is not permission to reach
     // them - the refusal is the same, it just arrives at once and says which peer it is about.
     t.is((error as { code?: string }).code, 'Forbidden')
@@ -238,14 +238,14 @@ test.serial('a server calls out over its own connection, under its own name', as
     await waitFor(() => cell.peers.names().includes(peer('oven6')))
     await waitFor(() => oven.peers.names().includes(peer('cell6')))
 
-    t.is(await (await cell.proxy<Boiler>('boiler', peer('oven6'))).remote.whoAnswered(), 'the oven')
-    t.is(await (await oven.proxy<Boiler>('boiler', peer('cell6'))).remote.whoAnswered(), 'the cell')
+    t.is(await (await cell.proxy<Boiler>('boiler', peer('oven6'))).whoAnswered(), 'the oven')
+    t.is(await (await oven.proxy<Boiler>('boiler', peer('cell6'))).whoAnswered(), 'the cell')
 
     // Events too, so a server can watch its peers rather than poll them.
     const heard: number[] = []
     const watched = await cell.proxy<Boiler>('boiler', peer('oven6'))
-    await watched.remote.on('changed', (value: number) => heard.push(value))
-    await watched.remote.setTemperature(70)
+    await watched.on('changed', (value: number) => heard.push(value))
+    await watched.setTemperature(70)
     await waitFor(() => heard.length === 1)
     t.deepEqual(heard, [70])
 
@@ -275,11 +275,11 @@ test.serial('a peer two hops away is discovered, called and watched', async (t) 
 
     await waitFor(() => seen.includes(peer('panel7')), 8000)
     const proxy = await hmi.proxy<Boiler>('boiler', peer('panel7'))
-    t.is(await proxy.remote.whoAnswered(), 'the panel')
+    t.is(await proxy.whoAnswered(), 'the panel')
 
     const heard: number[] = []
-    await proxy.remote.on('changed', (value: number) => heard.push(value))
-    await proxy.remote.setTemperature(91)
+    await proxy.on('changed', (value: number) => heard.push(value))
+    await proxy.setTemperature(91)
     await waitFor(() => heard.length === 1)
     t.deepEqual(heard, [91])
 
@@ -313,7 +313,7 @@ test.serial('two hubs dialling each other do not storm or loop', async (t) => {
     await client.ready()
 
     await waitFor(() => events.includes(peer('service8')), 8000)
-    t.is(await (await client.proxy<Boiler>('boiler', peer('service8'))).remote.whoAnswered(), 'across the cycle')
+    t.is(await (await client.proxy<Boiler>('boiler', peer('service8'))).whoAnswered(), 'across the cycle')
 
     // Split horizon is what keeps this finite: without it the two hubs advertise each other's peers
     // back and forth and the presence traffic never settles.
@@ -356,13 +356,13 @@ test.serial('a socket.io peer discovers and calls a peer that only exists on the
     await waitFor(() => (browser.options.transport as SocketIoClientTransport).knownPeers.has(peer('plantSrv')), 8000)
 
     const proxy = await browser.proxy<Boiler>('boiler')
-    t.is(await proxy.remote.whoAnswered(), 'the addressee')
+    t.is(await proxy.whoAnswered(), 'the addressee')
 
     // Events come back the same way, and the far server sees the browser peer as the subscriber
     // rather than the bridge, so its per-peer bookkeeping still means something.
     const received: number[] = []
-    await proxy.remote.on('changed', (value: number) => received.push(value))
-    await proxy.remote.setTemperature(85)
+    await proxy.on('changed', (value: number) => received.push(value))
+    await proxy.setTemperature(85)
     await waitFor(() => received.length === 1)
     t.deepEqual(received, [85])
     t.is(plant.rpc.eventProxies.size, 1)

@@ -65,7 +65,7 @@ export const bench = async (options: BenchOptions): Promise<BenchReport> => {
             throw Object.assign(new Error(`${options.peer} did not appear within ${options.wait ?? 5000} ms`), { code: 'ClassNotFound' })
 
         const proxy = await connected.network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(options.namespace, options.peer)
-        const remote = proxy.remote
+        const remote = proxy
         const latencies: number[] = []
         const codes: { [code: string]: number } = {}
         let ok = 0
@@ -146,7 +146,7 @@ export const benchArguments = async (options: NetworkOptions & { peer: string; n
     try {
         const description = await connected.network
             .proxy<{ describe(): Promise<ServerDescription> }>('msgrpc', options.peer)
-            .then((proxy) => proxy.remote.describe())
+            .then((proxy) => proxy.describe())
             .catch(() => undefined)
         const method = description?.namespaces.find((namespace) => namespace.name === options.namespace)?.methods.find((entry) => entry.name === options.method)
         return coerceArguments(options.texts, method, description?.types)

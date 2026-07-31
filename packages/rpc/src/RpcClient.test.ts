@@ -88,13 +88,13 @@ testWithContext.before(async (t) => {
 
 testWithContext.serial('simple test', async (t) => {
     const ctx = t.context
-    const result = await ctx.proxy.remote?.square(3)
+    const result = await ctx.proxy.square(3)
     t.is(result, 9)
 })
 
 testWithContext.serial('a server-side throw rejects the caller promptly with the remote error', async (t) => {
     const started = Date.now()
-    const error = await t.throwsAsync(async () => t.context.proxy.remote?.boom(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => t.context.proxy.boom(), { instanceOf: RpcError })
     const elapsed = Date.now() - started
 
     t.is(error?.code, 'Exception')
@@ -104,26 +104,26 @@ testWithContext.serial('a server-side throw rejects the caller promptly with the
 })
 
 testWithContext.serial('a remote stack is carried back to the caller', async (t) => {
-    const error = await t.throwsAsync(async () => t.context.proxy.remote?.boom(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => t.context.proxy.boom(), { instanceOf: RpcError })
     t.regex(error?.remoteStack ?? '', /deliberate server-side failure/)
 })
 
 testWithContext.serial('calling a method that is not exposed rejects with MethodNotFound', async (t) => {
-    const untyped = t.context.proxy.remote as unknown as { nope: () => Promise<void> }
+    const untyped = t.context.proxy as unknown as { nope: () => Promise<void> }
     const error = await t.throwsAsync(async () => untyped.nope(), { instanceOf: RpcError })
     t.is(error?.code, 'MethodNotFound')
 })
 
 testWithContext.serial('calling into a namespace that is not exposed rejects with ClassNotFound', async (t) => {
     const missing = await t.context.rpcClient!.proxy<TestRpc>('noSuchInstance')
-    const error = await t.throwsAsync(async () => missing.remote?.square(2), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => missing.square(2), { instanceOf: RpcError })
     t.is(error?.code, 'ClassNotFound')
 })
 
 testWithContext.serial('an unanswered call rejects with Timeout after the configured interval', async (t) => {
     const proxy = await t.context.impatientClient!.proxy<TestRpc>('testRpc')
     const started = Date.now()
-    const error = await t.throwsAsync(async () => proxy.remote?.never(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => proxy.never(), { instanceOf: RpcError })
     const elapsed = Date.now() - started
 
     t.is(error?.code, 'Timeout')
@@ -132,7 +132,7 @@ testWithContext.serial('an unanswered call rejects with Timeout after the config
 
 testWithContext.serial('a Uint8Array survives a round trip intact', async (t) => {
     const sent = new Uint8Array([0, 1, 2, 250, 255])
-    const received = await t.context.proxy.remote?.echoBuffer(sent)
+    const received = await t.context.proxy.echoBuffer(sent)
 
     t.true(received instanceof Uint8Array, `expected a Uint8Array, got ${received?.constructor?.name}`)
     t.deepEqual(Array.from(received!), Array.from(sent))
@@ -140,7 +140,7 @@ testWithContext.serial('a Uint8Array survives a round trip intact', async (t) =>
 
 testWithContext.serial('a nested Uint8Array survives a round trip intact', async (t) => {
     const sent = { label: 'chunk', bytes: new Uint8Array([9, 8, 7]) }
-    const received = (await t.context.proxy.remote?.echo(sent)) as typeof sent
+    const received = (await t.context.proxy.echo(sent)) as typeof sent
 
     t.true(received.bytes instanceof Uint8Array)
     t.deepEqual(Array.from(received.bytes), [9, 8, 7])
@@ -149,8 +149,8 @@ testWithContext.serial('a nested Uint8Array survives a round trip intact', async
 
 testWithContext.serial('settled calls leave no pending state behind', async (t) => {
     const handler = t.context.rpcClient!.rpcClient!
-    await t.context.proxy.remote?.square(4)
-    await t.throwsAsync(async () => t.context.proxy.remote?.boom())
+    await t.context.proxy.square(4)
+    await t.throwsAsync(async () => t.context.proxy.boom())
 
     t.is(handler.responsePromiseMap.size, 0, 'pending response promises leaked')
     t.is(handler.responseTimeoutMap.size, 0, 'pending response timers leaked')
@@ -163,7 +163,7 @@ testWithContext.serial('a reply reaches only the client that made the call', asy
     const captured: unknown[] = []
     eavesdropper.on('message', (frame) => captured.push(frame))
 
-    t.is(await t.context.proxy.remote?.square(5), 25)
+    t.is(await t.context.proxy.square(5), 25)
     await new Promise((resolve) => setTimeout(resolve, 300))
     eavesdropper.close()
 
@@ -178,10 +178,10 @@ testWithContext.serial('an event reaches only the subscribing client', async (t)
 
     const subscriber = await t.context.rpcClient!.proxy<EventingRpc>('eventing')
     const received: string[] = []
-    await subscriber.remote?.on('ping', (value: string) => {
+    await subscriber.on('ping', (value: string) => {
         received.push(value)
     })
-    await subscriber.remote?.fire('hello')
+    await subscriber.fire('hello')
     await new Promise((resolve) => setTimeout(resolve, 300))
     eavesdropper.close()
 
@@ -191,7 +191,7 @@ testWithContext.serial('an event reaches only the subscribing client', async (t)
 
 testWithContext.serial('two clients each receive their own replies', async (t) => {
     const second = await t.context.impatientClient!.proxy<TestRpc>('testRpc')
-    const [a, b] = await Promise.all([t.context.proxy.remote.square(3), second.remote.square(4)])
+    const [a, b] = await Promise.all([t.context.proxy.square(3), second.square(4)])
     t.is(a, 9)
     t.is(b, 16)
 })
@@ -200,7 +200,7 @@ testWithContext.serial('repeating a subscription does not stack server-side list
     const { server, client, eventing, dispose } = await isolatedPair(3101)
     const proxy = await client.proxy<EventingRpc>('eventing')
 
-    for (let i = 0; i < 5; i++) await proxy.remote?.on('ping', () => {})
+    for (let i = 0; i < 5; i++) await proxy.on('ping', () => {})
 
     t.is(eventing.listenerCount('ping'), 1, 'each on() stacked another server-side listener')
     t.is(server.rpc.eventProxies.size, 1)
@@ -211,9 +211,9 @@ testWithContext.serial('events resume after the link drops and comes back', asyn
     const { server, client, eventing, socket, dispose } = await isolatedPair(3102)
     const proxy = await client.proxy<EventingRpc>('eventing')
     const received: string[] = []
-    await proxy.remote?.on('ping', (value: string) => received.push(value))
+    await proxy.on('ping', (value: string) => received.push(value))
 
-    await proxy.remote?.fire('before')
+    await proxy.fire('before')
     await waitFor(() => received.length === 1)
 
     // RpcClient emits connected only once resubscribe() has finished.
@@ -223,7 +223,7 @@ testWithContext.serial('events resume after the link drops and comes back', asyn
     socket().connect()
     await reconnected
 
-    await proxy.remote?.fire('after')
+    await proxy.fire('after')
     await waitFor(() => received.length === 2)
 
     t.deepEqual(received, ['before', 'after'])
@@ -234,7 +234,7 @@ testWithContext.serial('events resume after the link drops and comes back', asyn
 testWithContext.serial('a departing client releases its subscriptions', async (t) => {
     const { server, client, eventing, dispose } = await isolatedPair(3103)
     const proxy = await client.proxy<EventingRpc>('eventing')
-    await proxy.remote?.on('ping', () => {})
+    await proxy.on('ping', () => {})
     t.is(server.rpc.eventProxies.size, 1)
 
     await client.close()
@@ -250,7 +250,7 @@ testWithContext.serial('an in-flight call fails as soon as the link drops', asyn
 
     const started = Date.now()
     // The rejection lands synchronously inside disconnect(), so the assertion is attached first.
-    const pending = t.throwsAsync(proxy.remote.never(), { instanceOf: RpcError })
+    const pending = t.throwsAsync(proxy.never(), { instanceOf: RpcError })
     socket().disconnect()
     const error = await pending
     const elapsed = Date.now() - started
@@ -280,8 +280,8 @@ testWithContext.serial('an event reaches only the namespace it was taken out on'
 
     const fromPlant: string[] = []
     const fromBoiler: string[] = []
-    await (await client.proxy<EventingRpc>('plant')).remote.on('ping', (value: string) => fromPlant.push(value))
-    await (await client.proxy<EventingRpc>('boiler')).remote.on('ping', (value: string) => fromBoiler.push(value))
+    await (await client.proxy<EventingRpc>('plant')).on('ping', (value: string) => fromPlant.push(value))
+    await (await client.proxy<EventingRpc>('boiler')).on('ping', (value: string) => fromBoiler.push(value))
 
     plant.fire('only-plant')
     await waitFor(() => fromPlant.length === 1)
@@ -308,10 +308,10 @@ testWithContext.serial('unsubscribing one namespace leaves the other subscribed'
     const fromBoiler: string[] = []
     const plantHandler = (value: string) => fromPlant.push(value)
     const plantProxy = await client.proxy<EventingRpc>('plant')
-    await plantProxy.remote.on('ping', plantHandler)
-    await (await client.proxy<EventingRpc>('boiler')).remote.on('ping', (value: string) => fromBoiler.push(value))
+    await plantProxy.on('ping', plantHandler)
+    await (await client.proxy<EventingRpc>('boiler')).on('ping', (value: string) => fromBoiler.push(value))
 
-    await plantProxy.remote.off('ping', plantHandler)
+    await plantProxy.off('ping', plantHandler)
     await waitFor(() => server.rpc.eventProxies.size === 1)
 
     boiler.fire('still-here')
@@ -334,7 +334,7 @@ testWithContext.serial('an event that does not name its instance still reaches i
     const client = new RpcClient('http://localhost:3107')
     await client.ready()
     const got: string[] = []
-    await (await client.proxy<EventingRpc>('eventing')).remote.on('ping', (value: string) => got.push(value))
+    await (await client.proxy<EventingRpc>('eventing')).on('ping', (value: string) => got.push(value))
 
     const unnamed: RpcEventPayload = { type: RpcMessageType.event, event: 'ping', params: ['unnamed'] }
     await client.rpcClient!.receive({ type: MessageType.EventMessage, payload: unnamed }, '*')
@@ -343,6 +343,22 @@ testWithContext.serial('an event that does not name its instance still reaches i
 
     await client.close()
     await server.close()
+})
+
+testWithContext.serial('a proxy is not a thenable, so awaiting the one proxy() returns settles', async (t) => {
+    // `proxy()` is async and returns the proxy itself, so `await` probes it for `then`. If the trap
+    // answers with a caller for a remote method named `then`, the runtime adopts the proxy as a
+    // promise and the await never settles - every call in the library hangs, and the failure looks
+    // like a network timeout rather than a language rule. This is the guard on that.
+    const proxy = t.context.proxy as unknown as { then?: unknown }
+    t.is(proxy.then, undefined, 'a proxy that reports a `then` will be adopted by await')
+
+    // The same thing end to end: if the above regressed, this call would never return.
+    t.is(await t.context.proxy.square(7), 49)
+
+    // Passing one to Promise.resolve is the other way a thenable gets adopted.
+    const resolved = await Promise.resolve(t.context.proxy)
+    t.is(await resolved.square(8), 64)
 })
 
 testWithContext.after(async (t) => {

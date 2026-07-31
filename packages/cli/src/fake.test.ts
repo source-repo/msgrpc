@@ -68,7 +68,7 @@ const withFake = async (script: Parameters<typeof startFake>[0]['script'], body:
 
 test('a peer stood up from a contract answers in the declared shape', async (t) => {
     await withFake(undefined, async (caller, device) => {
-        const plant = (await caller.proxy<{ writeSetpoint(v: number, m?: string): Promise<boolean>; read(): Promise<{ celsius: number; tag: string; note?: string }> }>('plant', device)).remote
+        const plant = (await caller.proxy<{ writeSetpoint(v: number, m?: string): Promise<boolean>; read(): Promise<{ celsius: number; tag: string; note?: string }> }>('plant', device))
 
         t.is(await plant.writeSetpoint(1200, 'auto'), true)
 
@@ -84,7 +84,7 @@ test('a peer stood up from a contract answers in the declared shape', async (t) 
 
 test('it refuses what the real peer would refuse', async (t) => {
     await withFake(undefined, async (caller, device) => {
-        const plant = (await caller.proxy<{ writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote
+        const plant = (await caller.proxy<{ writeSetpoint(v: number): Promise<boolean> }>('plant', device))
         // The contract says 0..2000, and the fake is given the same schema the device would have.
         const refused = await t.throwsAsync(plant.writeSetpoint(3000))
         t.is((refused as unknown as { code?: string }).code, 'InvalidParams')
@@ -94,7 +94,7 @@ test('it refuses what the real peer would refuse', async (t) => {
 
 test('a scripted return replaces the generated one, and a scripted failure is a real failure', async (t) => {
     await withFake({ returns: { 'plant.read': { celsius: 84, tag: 'boiler-3' } }, fails: { 'plant.halt': 'Unauthorized' } }, async (caller, device) => {
-        const plant = (await caller.proxy<{ read(): Promise<unknown>; halt(): Promise<unknown> }>('plant', device)).remote
+        const plant = (await caller.proxy<{ read(): Promise<unknown>; halt(): Promise<unknown> }>('plant', device))
         t.deepEqual(await plant.read(), { celsius: 84, tag: 'boiler-3' })
 
         const refused = await t.throwsAsync(plant.halt())
@@ -104,7 +104,7 @@ test('a scripted return replaces the generated one, and a scripted failure is a 
 
 test('a method set to Timeout never answers, which is the failure a real device will not stage', async (t) => {
     await withFake({ fails: { 'plant.read': 'Timeout' } }, async (caller, device) => {
-        const plant = (await caller.proxy<{ read(): Promise<unknown>; writeSetpoint(v: number): Promise<boolean> }>('plant', device)).remote
+        const plant = (await caller.proxy<{ read(): Promise<unknown>; writeSetpoint(v: number): Promise<boolean> }>('plant', device))
         const started = Date.now()
         const failure = await t.throwsAsync(plant.read())
         t.regex(String(failure?.message), /[Tt]imeout/)
@@ -120,7 +120,7 @@ test('a method set to Timeout never answers, which is the failure a real device 
 test('declared events are emitted on a timer, with parameters of the declared shape', async (t) => {
     await withFake({ emits: [{ event: 'plant.alarm', every: 60 }] }, async (caller, device) => {
         const heard: unknown[][] = []
-        const plant = (await caller.proxy<{ on(e: string, h: (...a: unknown[]) => void): Promise<unknown> }>('plant', device)).remote
+        const plant = (await caller.proxy<{ on(e: string, h: (...a: unknown[]) => void): Promise<unknown> }>('plant', device))
         await plant.on('alarm', (...args: unknown[]) => void heard.push(args))
         await waitFor(() => heard.length >= 2)
         t.deepEqual(heard[0], ['sample', 2])
@@ -130,7 +130,7 @@ test('declared events are emitted on a timer, with parameters of the declared sh
 test('the fake describes itself, so a console can drive it like any peer', async (t) => {
     await withFake(undefined, async (caller, device) => {
         const introspection = await caller.proxy<{ describe(): Promise<{ namespaces: { name: string; methods: { name: string; paramNames?: string[] }[] }[] }> }>('msgrpc', device)
-        const description = await introspection.remote.describe()
+        const description = await introspection.describe()
         const plant = description.namespaces.find((namespace) => namespace.name === 'plant')
         t.truthy(plant, `namespaces: ${JSON.stringify(description.namespaces.map((n) => n.name))}`)
         t.deepEqual(plant!.methods.find((method) => method.name === 'writeSetpoint')?.paramNames, ['value', 'mode'])

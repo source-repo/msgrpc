@@ -54,7 +54,7 @@ test('a peer with valid credentials can call an allowed method', async (t) => {
     const client = await connect(3201, 'operator', 'operator-token')
     const plant = await client.proxy<Plant>('plant')
 
-    t.is(await plant.remote?.readSetpoint(), 42)
+    t.is(await plant.readSetpoint(), 42)
 
     await client.close()
     await server.close()
@@ -85,11 +85,11 @@ test('an authenticated peer is refused a method its role does not allow', async 
     const client = await connect(3204, 'operator', 'operator-token')
     const plant = await client.proxy<Plant>('plant')
 
-    const error = await t.throwsAsync(async () => plant.remote?.writeSetpoint(99), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => plant.writeSetpoint(99), { instanceOf: RpcError })
     t.is(error?.code, 'Forbidden')
     // The same call from a peer that does have the role still works.
     const engineer = await connect(3204, 'engineer', 'engineer-token')
-    t.is(await (await engineer.proxy<Plant>('plant')).remote?.writeSetpoint(99), 99)
+    t.is(await (await engineer.proxy<Plant>('plant')).writeSetpoint(99), 99)
 
     await engineer.close()
     await client.close()
@@ -104,7 +104,7 @@ test('event subscriptions are authorized too', async (t) => {
     const client = await connect(3205, 'operator', 'operator-token')
     const plant = await client.proxy<Plant>('plant')
 
-    const error = await t.throwsAsync(async () => plant.remote?.on('alarm', () => {}), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => plant.on('alarm', () => {}), { instanceOf: RpcError })
     t.is(error?.code, 'Forbidden')
     t.is(server.rpc.eventProxies.size, 0, 'a refused subscription still attached a listener')
 
@@ -125,7 +125,7 @@ test('a peer cannot address messages as another peer', async (t) => {
     const plant = await impostor.proxy<Plant>('plant')
 
     // The frame is dropped by the transport, so the call can only end in a timeout.
-    const error = await t.throwsAsync(async () => plant.remote?.readSetpoint(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => plant.readSetpoint(), { instanceOf: RpcError })
     t.is(error?.code, 'Timeout')
 
     await impostor.close()
@@ -137,7 +137,7 @@ test('the management surface is not exposed by default', async (t) => {
     const client = await connect(3207, 'engineer', 'engineer-token')
     const manage = await client.proxy<{ createRpcInstance: (c: string, n?: string) => Promise<string> }>('manageRpc')
 
-    const error = await t.throwsAsync(async () => manage.remote?.createRpcInstance('Dangerous', 'evil'), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => manage.createRpcInstance('Dangerous', 'evil'), { instanceOf: RpcError })
     t.is(error?.code, 'ClassNotFound')
     t.is(server.rpc.manageRpc.createdInstances.size, 0)
 
@@ -153,10 +153,10 @@ test('exposeManagement publishes only createRpcInstance, never the expose method
         exposeObject: (o: object, n: string) => Promise<void>
     }>('manageRpc')
 
-    t.is(await manage.remote?.createRpcInstance('Dangerous', 'evil'), 'evil')
+    t.is(await manage.createRpcInstance('Dangerous', 'evil'), 'evil')
 
     // exposeObject would let a peer publish arbitrary objects; it must not be reachable.
-    const error = await t.throwsAsync(async () => manage.remote?.exposeObject({}, 'whatever'), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => manage.exposeObject({}, 'whatever'), { instanceOf: RpcError })
     t.is(error?.code, 'MethodNotFound')
 
     await client.close()
@@ -176,7 +176,7 @@ test('an authorizer that throws denies rather than allows', async (t) => {
     const client = await connect(3209, 'operator', 'operator-token')
     const plant = await client.proxy<Plant>('plant')
 
-    const error = await t.throwsAsync(async () => plant.remote?.readSetpoint(), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => plant.readSetpoint(), { instanceOf: RpcError })
     t.is(error?.code, 'Forbidden')
 
     await client.close()
@@ -190,7 +190,7 @@ test('an open server still works when no auth is configured', async (t) => {
     const client = new RpcClient('http://localhost:3210')
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant')).remote?.readSetpoint(), 42)
+    t.is(await (await client.proxy<Plant>('plant')).readSetpoint(), 42)
 
     await client.close()
     await server.close()

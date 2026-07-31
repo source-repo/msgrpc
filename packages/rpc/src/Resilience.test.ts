@@ -93,11 +93,11 @@ test('a call that cannot be sent fails at once rather than waiting out its timeo
     const client = new RpcClient('http://localhost:3811', { name: peer('shortCircuit'), callTimeout: 30000 })
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
-    t.is(await plant.remote.add(1, 2), 3)
+    t.is(await plant.add(1, 2), 3)
 
     await client.close()
     const started = Date.now()
-    await t.throwsAsync(plant.remote.add(1, 2), { message: /TransportError/ })
+    await t.throwsAsync(plant.add(1, 2), { message: /TransportError/ })
     t.true(Date.now() - started < 5000, 'the call waited for its timeout instead of failing on the closed link')
 
     await server.close()
@@ -117,7 +117,7 @@ test('an event handler that throws does not take the client down', async (t) => 
 
     const reported: unknown[] = []
     client.rpcClient!.on('subscriberError', (e) => reported.push(e))
-    await proxy.remote.on('alarm', () => {
+    await proxy.on('alarm', () => {
         throw new Error('the subscriber is broken')
     })
 
@@ -126,7 +126,7 @@ test('an event handler that throws does not take the client down', async (t) => 
     t.is(reported.length, 1, 'the failing subscriber was not reported')
 
     // The client is still usable, which is the point: one bad handler is not everybody's problem.
-    t.is(await proxy.remote.add(2, 3), 5)
+    t.is(await proxy.add(2, 3), 5)
 
     await client.close()
     await server.close()
@@ -141,7 +141,7 @@ test('a method that throws answers the caller with the reason', async (t) => {
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
 
-    await t.throwsAsync(plant.remote.explode(), { message: /pressure relief valve stuck/ })
+    await t.throwsAsync(plant.explode(), { message: /pressure relief valve stuck/ })
 
     await client.close()
     await server.close()
@@ -175,7 +175,7 @@ test('a command whose caller has already given up is refused instead of run late
     await client.ready()
     const gate = await client.proxy<SlowGate>('gate')
 
-    await t.throwsAsync(gate.remote.startPump(), { message: /Timeout/ }, 'the caller should have given up')
+    await t.throwsAsync(gate.startPump(), { message: /Timeout/ }, 'the caller should have given up')
     // Long enough for the authorizer to finish and the method to run, if it were going to.
     await new Promise((resolve) => setTimeout(resolve, 600))
     t.is(started, 0, 'a command ran after its caller had already been told it timed out')
@@ -197,7 +197,7 @@ test('a request for a peer the far end cannot reach is answered, not dropped', a
     const absent = await client.proxy<Plant>('plant', 'a-peer-that-is-not-here')
 
     const started = Date.now()
-    const failure = await t.throwsAsync(absent.remote.add(1, 2))
+    const failure = await t.throwsAsync(absent.add(1, 2))
     const took = Date.now() - started
 
     // The code says the command certainly did not run, which is the useful thing to know: the bus
@@ -266,7 +266,7 @@ test('a stray JSON payload on the rpc topic is refused, not fatal', async (t) =>
     })
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
-    t.is(await plant.remote.add(20, 22), 42)
+    t.is(await plant.add(20, 22), 42)
 
     await client.close()
     await server.close()
@@ -295,7 +295,7 @@ test('a peer whose name contains $ can still call over the v1 framing', async (t
     await client.ready()
     const plant = await client.proxy<Plant>('plant')
 
-    t.is(await plant.remote.add(1, 2), 3, 'a call from a peer named with a $ was never delivered')
+    t.is(await plant.add(1, 2), 3, 'a call from a peer named with a $ was never delivered')
 
     await client.close()
     await server.close()

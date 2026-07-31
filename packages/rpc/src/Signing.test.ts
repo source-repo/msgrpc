@@ -182,7 +182,7 @@ test('a signed call is accepted end to end', async (t) => {
     const client = signedClient('hmi-ok', 'srv-ok', prefix, keys)
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant')).remote?.writeSetpoint(1200), 1200)
+    t.is(await (await client.proxy<Plant>('plant')).writeSetpoint(1200), 1200)
     t.is(plant.setpoint, 1200)
 
     await client.close()
@@ -208,7 +208,7 @@ test('a verified MQTT peer gains an identity that authorize can act on', async (
     const client = signedClient('hmi-id', 'srv-id', prefix, keys)
     await client.ready()
 
-    t.is(await (await client.proxy<Plant>('plant')).remote?.writeSetpoint(7), 7)
+    t.is(await (await client.proxy<Plant>('plant')).writeSetpoint(7), 7)
     t.deepEqual(seen, [peer('hmi-id')])
 
     await client.close()
@@ -233,7 +233,7 @@ test('an unsigned peer cannot reach a server that requires signatures', async (t
     })
     await client.ready()
 
-    const error = await t.throwsAsync(async () => (await client.proxy<Plant>('plant')).remote?.writeSetpoint(9999), { instanceOf: RpcError })
+    const error = await t.throwsAsync(async () => (await client.proxy<Plant>('plant')).writeSetpoint(9999), { instanceOf: RpcError })
     t.is(error?.code, 'Timeout', 'the frame should be dropped before the RPC layer, leaving nothing to answer')
     t.is(plant.setpoint, 0, 'an unsigned command reached the exposed method')
 
