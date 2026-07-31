@@ -420,9 +420,11 @@ server.exposeClassInstance(fleet, 'fleet', {                       // one call a
 
 A key function is how a server fronting many devices keeps each device's commands in order without serialising itself behind the slowest of them.
 
-**`parallel` stays the default**, despite `serial` being the safer-sounding choice. A serial instance that calls back into itself over RPC deadlocks - the second call queues behind the first, which is waiting for it - so serialising by default would break re-entrant designs that work today, silently and only under load. It is one line to opt in, and the class that needs it knows.
+**When nothing is declared, the default is graded by the semantics.** A method declaring `idempotent-command` or `non-repeatable-command` serialises per instance — command state is exactly what interleaving corrupts, and the contract already names which methods command — while a `query` and an undeclared method run as they arrive. Guessing that an unmarked method is safe to serialise would be the same mistake as guessing it is safe to repeat, so undeclared is left alone. A re-entrant design — a serialised method calling back into its own queue over RPC — declares `execution: 'parallel'` and does its own coordination; the deadline being read after the queue wait means such a pair unwinds as a Timeout and a refusal rather than hanging forever, but it is still a design to opt out of, not to leave to luck.
 
 The queue is also where the deadline is read: a command that waited behind others until its caller gave up is refused rather than run late.
+
+**The mailbox is bounded.** At most 100 calls wait in one queue — `mailbox` on the namespace or the expose options changes the number — and an arrival past the bound is refused `Busy` rather than queued, because a caller told `Busy` now can decide something, where one whose call dies in a backlog later cannot. And a setpoint-shaped command can declare `@rpc({ semantics: 'idempotent-command', conflate: true })`: while such a call waits in its queue, a newer call to the same method replaces it, and the replaced caller is answered `Superseded` immediately — only the newest value matters, and executing a backlog of stale setpoints serves nobody. Only an idempotent command may conflate; the combination is enforced when the instance is exposed, because dropping one of two queued non-repeatable commands would silently skip work a caller was promised.
 
 ### Not built
 

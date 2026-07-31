@@ -4,20 +4,26 @@ import type { RpcMethodSemantics } from './Messages.js'
 /**
  * How calls into one exposed instance may overlap.
  *
- * `parallel` is the default and has always been the behaviour: calls run as they arrive, which is
- * right for stateless services and for unrelated devices behind one server. It is not right for a
- * long-lived object holding mutable state, where `setMode('manual'); start(); setSetpoint(80)` from
- * one caller can interleave with `stop(); setMode('automatic')` from another and leave a machine in
- * a combination neither of them asked for.
+ * When nothing is declared, the default is graded by what each method says it does. A `query` runs
+ * as it arrives, and a method declaring `idempotent-command` or `non-repeatable-command` semantics
+ * is serialised per instance - command state is exactly what interleaving corrupts, where
+ * `setMode('manual'); start(); setSetpoint(80)` from one caller lands inside `stop();
+ * setMode('automatic')` from another and leaves a machine in a combination neither asked for, and
+ * the contract already names which methods command. A method that declares nothing keeps the old
+ * behaviour and runs in parallel: guessing that an unmarked method is safe to serialise would be
+ * the same mistake as guessing it is safe to repeat.
  *
- * `serial` runs one call at a time per exposed instance. A function instead runs one call at a time
- * per key it returns, which is how a server fronting many devices keeps each device's commands in
- * order without serialising the whole server behind the slowest one.
+ * `parallel` forces every call to run as it arrives, declared commands included - the opt-out for
+ * a re-entrant design. `serial` runs one call at a time per exposed instance, whatever the methods
+ * declare. A function instead runs one call at a time per key it returns, which is how a server
+ * fronting many devices keeps each device's commands in order without serialising the whole server
+ * behind the slowest one.
  *
- * **A serial instance must not call back into itself over RPC.** The second call queues behind the
- * first, which is waiting for it, and neither ever runs. That is why `parallel` remains the default
- * rather than the safer-sounding option: serialising by default would deadlock re-entrant designs
- * that work today, silently and only under load.
+ * **A serialised method must not call back into its own queue over RPC.** The second call waits
+ * behind the first, which is waiting for it. The deadline being read after the queue wait means
+ * the pair unwinds as a caller Timeout and an expired refusal rather than hanging forever - loud,
+ * but still wrong. A design that re-enters declares `execution: 'parallel'` and does its own
+ * coordination.
  */
 export type RpcExecution = 'parallel' | 'serial' | ((context: RpcCallContext) => string)
 
@@ -36,11 +42,18 @@ export type RpcExecution = 'parallel' | 'serial' | ((context: RpcCallContext) =>
 const marked = new WeakMap<object, Set<string>>()
 /** Declared semantics per constructor and method name, for the methods that declare any. */
 const semantics = new WeakMap<object, Map<string, RpcMethodSemantics>>()
+/** Methods declared conflatable per constructor, for the queues to read. */
+const conflated = new WeakMap<object, Set<string>>()
 
-const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics) => {
+const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean) => {
     let names = marked.get(constructor)
     if (!names) marked.set(constructor, (names = new Set()))
     names.add(method)
+    if (conflate) {
+        let conflatable = conflated.get(constructor)
+        if (!conflatable) conflated.set(constructor, (conflatable = new Set()))
+        conflatable.add(method)
+    }
     if (!declared) return
     let declarations = semantics.get(constructor)
     if (!declarations) semantics.set(constructor, (declarations = new Map()))
@@ -54,6 +67,17 @@ export interface RpcMethodOptions {
      * retried, and by the server deciding whether to consult a durable idempotency store.
      */
     semantics?: RpcMethodSemantics
+    /**
+     * Latest wins: while a call to this method waits in its queue, a newer call to the same method
+     * in the same queue replaces it, and the replaced caller is answered `Superseded` immediately.
+     * For setpoint-shaped commands, where only the newest value matters and executing a backlog of
+     * stale ones serves nobody.
+     *
+     * Only an `idempotent-command` may conflate - enforced when the instance is exposed. Dropping
+     * one of two queued non-repeatable commands would silently skip work a caller was promised,
+     * and a query has no queue to conflate in.
+     */
+    conflate?: boolean
 }
 
 type RpcMethodDecorator<This, Args extends unknown[], Return> = (
@@ -68,7 +92,7 @@ const mark = <This, Args extends unknown[], Return>(
     if (context.static) throw new Error('@rpc: static methods cannot be exposed')
     if (context.private) throw new Error('@rpc: private methods cannot be exposed')
     context.addInitializer(function (this: This) {
-        markOn((this as object).constructor, String(context.name), options.semantics)
+        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate)
     })
 }
 
@@ -126,6 +150,8 @@ export interface DeclaredNamespace {
     name: string
     version?: string
     execution?: RpcExecution
+    /** How many calls may wait in one of this instance's queues before arrivals are refused Busy. */
+    mailbox?: number
 }
 
 /**
@@ -142,9 +168,9 @@ export interface DeclaredNamespace {
  * ```
  */
 export const rpcNamespace =
-    (name: string, options: { version?: string; execution?: RpcExecution } = {}) =>
+    (name: string, options: { version?: string; execution?: RpcExecution; mailbox?: number } = {}) =>
     <T extends abstract new (...args: never[]) => unknown>(target: T, _context: ClassDecoratorContext) => {
-        namespaces.set(target, { name, version: options.version, execution: options.execution })
+        namespaces.set(target, { name, version: options.version, execution: options.execution, mailbox: options.mailbox })
         return target
     }
 
@@ -179,4 +205,13 @@ export const declaredSemantics = (instance: object): Map<string, RpcMethodSemant
         for (const [method, declared] of semantics.get(ctor) ?? []) if (!declarations.has(method)) declarations.set(method, declared)
     }
     return declarations
+}
+
+/** The methods an instance declares conflatable, walking the chain so a subclass inherits them. */
+export const declaredConflation = (instance: object): Set<string> => {
+    const methods = new Set<string>()
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        for (const method of conflated.get(ctor) ?? []) methods.add(method)
+    }
+    return methods
 }

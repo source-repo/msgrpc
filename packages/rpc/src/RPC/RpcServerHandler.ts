@@ -17,7 +17,7 @@ import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
 import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
 import { RpcSchema, validateParams, validateValue } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
 
@@ -73,11 +73,24 @@ export interface ExposeOptions {
      * call site knows how this particular instance is used.
      */
     execution?: RpcExecution
+    /**
+     * How many calls may wait in one of this instance's queues before arrivals are refused Busy.
+     * Overrides what the class declares, for the same reason execution does.
+     */
+    mailbox?: number
 }
 
 const isRpcCallInstanceMethodPayload = (payload: RpcMessage): payload is RpcCallInstanceMethodPayload => {
     return payload.type === RpcMessageType.CallInstanceMethod
 }
+
+/**
+ * How many calls may wait in one queue before new arrivals are refused Busy, unless the instance
+ * declares its own bound. A hundred waiting commands on one industrial instance is a malfunction
+ * upstream, not a load to absorb - and the callers of most of them have already stopped waiting,
+ * so admitting more only grows a backlog the deadline check will refuse one by one.
+ */
+const DEFAULT_MAILBOX = 100
 
 /**
  * The codes a method may answer with by throwing an error that carries one.
@@ -383,15 +396,78 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 return
             }
 
-            // The queue, when this instance asked for one, wraps everything from here on: the
+            // The queue, when this call belongs in one, wraps everything from here on: the
             // deadline has to be read after waiting in it, since that wait is exactly what it
             // exists to catch, and a duplicate has to be recognised before a sibling call can start
             // running the same command alongside it.
             const key = this.executionKey(payload, source)
             if (key === undefined) await this.invoke(payload, source, arrived, handler)
-            else await this.serialise(key, () => this.invoke(payload, source, arrived, handler))
+            else await this.enqueue(key, payload, source, arrived, handler)
         }
     }
+
+    /**
+     * Queue one call behind its key, bounded and conflatable.
+     *
+     * The bound is a flood guard, not a scheduler. Dequeue-time expiry already refuses whatever
+     * waited past its caller's deadline; what the bound catches is the queue itself growing without
+     * limit - memory, and a backlog nobody is still waiting for. It refuses on the way in, because
+     * a caller told Busy now can decide something, where one whose call dies in the queue later
+     * cannot.
+     *
+     * A conflatable method supersedes its own queued predecessor: the replaced caller hears
+     * Superseded immediately rather than when its turn comes, and the superseding call is admitted
+     * even at the bound, since it logically takes the replaced call's place - the zombie entry
+     * still drains through the chain, so the overshoot is bounded by the number of conflatable
+     * methods, not by callers.
+     */
+    private async enqueue(key: string, payload: RpcCallInstanceMethodPayload, source: string, arrived: number, handler: (...args: unknown[]) => unknown) {
+        // NUL as the separator because it cannot occur in a namespace or a method name, so the
+        // composite cannot be forged by a clever method string. Escaped, never the byte itself.
+        const conflateKey = this.manageRpc.exposedConflation[payload.path]?.has(payload.method) ? `${key}\u0000${payload.method}` : undefined
+        let replaced = false
+        if (conflateKey) {
+            const previous = this.conflatable.get(conflateKey)
+            if (previous) {
+                previous.supersede()
+                replaced = true
+            }
+        }
+        const waiting = this.executionWaiting.get(key) ?? 0
+        const limit = this.manageRpc.exposedMailbox[payload.path] ?? DEFAULT_MAILBOX
+        if (!replaced && waiting >= limit) {
+            await this.sendError(payload.id, source, 'Busy', `${payload.path}.${payload.method} was not queued: ${waiting} calls are already waiting on this instance`)
+            return
+        }
+
+        let superseded = false
+        const entry = conflateKey
+            ? {
+                  supersede: () => {
+                      superseded = true
+                      // Answered now rather than at its turn: the caller is freed the moment a newer
+                      // value replaces theirs, and an idempotent command that never ran leaves nothing
+                      // to record.
+                      void this.sendError(payload.id, source, 'Superseded', `${payload.path}.${payload.method} was superseded by a newer call before it ran`).catch(() => undefined)
+                  }
+              }
+            : undefined
+        if (conflateKey && entry) this.conflatable.set(conflateKey, entry)
+        this.executionWaiting.set(key, waiting + 1)
+        await this.serialise(key, async () => {
+            const now = this.executionWaiting.get(key) ?? 1
+            if (now <= 1) this.executionWaiting.delete(key)
+            else this.executionWaiting.set(key, now - 1)
+            if (conflateKey && this.conflatable.get(conflateKey) === entry) this.conflatable.delete(conflateKey)
+            if (superseded) return
+            await this.invoke(payload, source, arrived, handler)
+        })
+    }
+
+    /** Calls waiting per queue key, so the mailbox bound has something to read. */
+    private executionWaiting = new Map<string, number>()
+    /** The queued-and-not-started call per conflatable method and key, for the next one to replace. */
+    private conflatable = new Map<string, { supersede: () => void }>()
 
     /**
      * Run one call: check the budget, claim the command, invoke it, answer.
@@ -504,10 +580,18 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         return this.manageRpc.exposedSemantics[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.semantics
     }
 
-    /** The queue a call belongs in, or undefined when this instance lets calls overlap. */
+    /** The queue a call belongs in, or undefined when it may overlap with its siblings. */
     private executionKey(payload: RpcCallInstanceMethodPayload, source: string): string | undefined {
         const execution = this.manageRpc.exposedExecution[payload.path]
-        if (!execution || execution === 'parallel') return undefined
+        if (!execution) {
+            // Nothing declared: graded by what the method says it does. Commands serialise per
+            // instance, because command state is what interleaving corrupts and the contract
+            // already names which methods command; queries and undeclared methods run as they
+            // arrive. Undeclared is deliberately not guessed at - see RpcExecution in Expose.ts.
+            const semantics = this.semanticsOf(payload)
+            return semantics === 'idempotent-command' || semantics === 'non-repeatable-command' ? payload.path : undefined
+        }
+        if (execution === 'parallel') return undefined
         if (execution === 'serial') return payload.path
         const context: RpcCallContext = {
             identity: this.resolveIdentity?.(source),
@@ -605,8 +689,12 @@ export class ManageRpc implements IManageRpc {
     createdInstances = new Map<string, object>()
     /** What each exposed namespace's methods declare about repeating them. */
     exposedSemantics: { [nameSpace: string]: Map<string, RpcMethodSemantics> } = {}
-    /** How each exposed namespace lets its calls overlap. Absent is `parallel`. */
+    /** How each exposed namespace lets its calls overlap. Absent means graded by method semantics. */
     exposedExecution: { [nameSpace: string]: RpcExecution } = {}
+    /** Which of each namespace's methods conflate: a queued call replaced by a newer one. */
+    exposedConflation: { [nameSpace: string]: Set<string> } = {}
+    /** Each namespace's mailbox bound, where one was declared. Absent means the default. */
+    exposedMailbox: { [nameSpace: string]: number } = {}
 
     constructor(public logger?: ILogger) {}
 
@@ -661,6 +749,21 @@ export class ManageRpc implements IManageRpc {
         if (execution) this.exposedExecution[namespace] = execution
         const semantics = declaredSemantics(instance)
         if (semantics.size) this.exposedSemantics[namespace] = semantics
+        const conflation = declaredConflation(instance)
+        if (conflation.size) {
+            // Conflation drops a queued call in favour of a newer one, which is only safe when the
+            // contract says repeating - and therefore skipping - is free. Refused here, loudly,
+            // rather than discovered in production as a command that silently never ran.
+            for (const method of conflation)
+                if (semantics.get(method) !== 'idempotent-command')
+                    throw new Error(`exposeClassInstance: ${namespace}.${method} declares conflate without 'idempotent-command' semantics - only a command that is free to repeat is free to skip`)
+            this.exposedConflation[namespace] = conflation
+        }
+        const mailbox = settings.mailbox ?? declared?.mailbox
+        if (mailbox !== undefined) {
+            if (!Number.isInteger(mailbox) || mailbox < 1) throw new Error(`exposeClassInstance: ${namespace} declares a mailbox of ${mailbox}; the bound is a positive count of waiting calls`)
+            this.exposedMailbox[namespace] = mailbox
+        }
         // Iterate upwards to find all the methods within the prototype chain.
         let props = Object.getOwnPropertyNames(instance.constructor.prototype)
         let parent = Object.getPrototypeOf(instance.constructor.prototype)

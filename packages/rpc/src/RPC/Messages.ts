@@ -70,6 +70,17 @@ export type RpcErrorCode =
      * non-repeatable command that distinction is the difference between one pump start and two.
      */
     | 'UnknownOutcome'
+    /**
+     * The instance's mailbox is full, so the call was refused before it could queue. It certainly
+     * did not run, and retrying later is reasonable - unlike `Superseded`, where it is not.
+     */
+    | 'Busy'
+    /**
+     * A newer call to the same conflatable method replaced this one while it waited. It certainly
+     * did not run, and it should not be retried: the newer value won, which is what the method
+     * opted into by declaring `conflate`.
+     */
+    | 'Superseded'
 
 /**
  * What a method does to the world, which decides what a caller may do about an uncertain answer.
