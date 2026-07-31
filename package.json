@@ -12,12 +12,16 @@
         "clean": "npm run clean --workspaces",
         "test": "npm run test --workspace=@source-repo/rpc && npm run test --workspace=@source-repo/rpc-cli && npm run test --workspace=@source-repo/queue",
         "typecheck": "npm run typecheck --workspace=@source-repo/rpc && npm run typecheck --workspace=@source-repo/rpc-cli && npm run typecheck --workspace=@source-repo/queue",
-        "lint": "eslint . --max-warnings 0"
+        "lint": "eslint . --max-warnings 0",
+        "docs:dev": "vitepress dev docs",
+        "docs:build": "vitepress build docs",
+        "docs:preview": "vitepress preview docs"
     },
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "eslint": "^10.8.0",
         "globals": "^15.0.0",
-        "typescript-eslint": "^8.0.0"
+        "typescript-eslint": "^8.0.0",
+        "vitepress": "^1.6.4"
     }
 }

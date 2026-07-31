@@ -114,7 +114,7 @@ The two package READMEs are the complete reference for their package — every o
 | [Writing a simulator](https://github.com/source-repo/rpc/blob/main/docs/writing-a-simulator.md) | the four rungs from a fake built out of a contract to a peer of your own, and when to stop climbing |
 | [The security model](https://github.com/source-repo/rpc/blob/main/docs/security-model.md) | what is checked where, why the two transports differ, and the limits stated plainly |
 | [MQTT 5 frame spec](https://github.com/source-repo/rpc/blob/main/docs/mqtt5-frame-spec.md) | the wire format, so a peer that is not this library can join |
-| [Tooling roadmap](https://github.com/source-repo/rpc/blob/main/docs/tooling-roadmap.md) | what the CLI could become, and what each piece would cost |
+| [Tooling roadmap](https://github.com/source-repo/rpc/blob/main/notes/tooling-roadmap.md) | what the CLI could become, and what each piece would cost |
 
 | reference | |
 | --- | --- |

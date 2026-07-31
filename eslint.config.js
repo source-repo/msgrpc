@@ -3,7 +3,7 @@ import tseslint from 'typescript-eslint'
 import globals from 'globals'
 
 export default tseslint.config(
-    { ignores: ['**/dist/**', '**/dist-examples/**', '**/node_modules/**', '**/src/fixture/**'] },
+    { ignores: ['**/dist/**', '**/dist-examples/**', '**/node_modules/**', '**/src/fixture/**', 'docs/.vitepress/cache/**'] },
     js.configs.recommended,
     ...tseslint.configs.recommended,
     {
