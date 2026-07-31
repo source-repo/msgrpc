@@ -532,6 +532,8 @@ A call that does not match is refused with `InvalidParams` before it reaches the
 
 The type language is small on purpose. It describes what MsgPack actually carries, so `bytes` (`Uint8Array`) and `date` are values rather than string encodings, and it is checkable without pulling a validation engine into a package that ships to browsers and embedded targets. `ref` names a shared or recursive type; nesting beyond 32 levels is refused rather than exhausting the stack.
 
+The format itself is versioned by the exported `SCHEMA_VERSION`, carried as the `schema` field of every document and independent of the package version. What may be added without touching that number, what forces it up, and what a reader must tolerate or refuse is written down in [`docs/schema-compatibility.md`](https://github.com/source-repo/rpc/blob/main/docs/schema-compatibility.md) — the rules any package consuming these documents can rely on.
+
 `object` describes a known shape and `record` an open one — `{ [tag: string]: Reading }`, which is how plant data usually arrives. A record checks every value against one type and leaves the keys open, or constrains them with `keyPattern`; `maxEntries` bounds it the way `maxItems` bounds an array, since a dictionary is the other shape a caller can grow without limit.
 
 ```typescript

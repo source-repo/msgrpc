@@ -1,4 +1,4 @@
-import { namespaceProblems, type Incompatibility, type NamespaceSchema, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import { SCHEMA_VERSION, namespaceProblems, type Incompatibility, type NamespaceSchema, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { awaitPeer, connectNetwork, type ConnectedNetwork, type NetworkOptions } from './network.js'
 import { signatureOf } from './verbs.js'
 
@@ -24,7 +24,7 @@ const INTROSPECTION = 'msgrpc'
  * name.
  */
 export const schemaFromDescription = (description: ServerDescription): RpcSchema => ({
-    schema: 1,
+    schema: SCHEMA_VERSION,
     ...(description.version ? { version: description.version } : {}),
     types: description.types ?? {},
     namespaces: Object.fromEntries(

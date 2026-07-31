@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'events'
-import { MqttTransport, RpcServer, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import { MqttTransport, RpcServer, SCHEMA_VERSION, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { networkTransports, type NetworkOptions } from './network.js'
 import { BusService, DEFAULT_TAP_TTL, type TapFilter, type TappedFrame } from './bus.js'
 // The tap's own contract, merged with the console's below: one server, and a schema has to describe
@@ -511,7 +511,7 @@ const asFailure = (e: unknown) => {
  * whichever one added the duplicate rather than something to resolve at runtime.
  */
 const consoleAndBus: RpcSchema = {
-    schema: 1,
+    schema: SCHEMA_VERSION,
     namespaces: { ...(contract as RpcSchema).namespaces, ...(busContract as RpcSchema).namespaces },
     types: { ...(contract as RpcSchema).types, ...(busContract as RpcSchema).types }
 }

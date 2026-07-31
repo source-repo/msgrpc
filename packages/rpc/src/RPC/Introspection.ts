@@ -2,7 +2,7 @@ import EventEmitter from 'events'
 import { componentSnapshotEvent } from './Component.js'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
-import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from './Schema.js'
+import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcSchema, type TypeNode } from './Schema.js'
 import type { RpcMethodSemantics } from './Messages.js'
 // Extracted from this file by `npm run contract` in the CLI package and committed, so building
 // msgrpc never needs the extractor that reads it. A test there asserts it still matches this source.
@@ -130,7 +130,7 @@ export const introspectionSchema: { namespace: NamespaceSchema; types: { [name: 
 export const withIntrospection = (schema: RpcSchema | undefined): RpcSchema => {
     if (schema?.namespaces.msgrpc) return schema
     return {
-        schema: 1,
+        schema: SCHEMA_VERSION,
         ...schema,
         types: { ...schema?.types, ...introspectionSchema.types },
         namespaces: { ...schema?.namespaces, msgrpc: introspectionSchema.namespace }

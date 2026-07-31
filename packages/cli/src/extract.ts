@@ -1,6 +1,6 @@
 import { resolve as resolvePath, dirname } from 'node:path'
 import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
-import type { MethodSchema, NamespaceSchema, RpcMethodSemantics, RpcSchema, TypeNode } from '@source-repo/rpc'
+import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 
 /**
  * Reads a contract out of TypeScript source.
@@ -311,5 +311,5 @@ export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
         seen.add(key)
         return true
     })
-    return { schema: { schema: 1, ...(Object.keys(types).length ? { types } : {}), namespaces }, diagnostics: unique }
+    return { schema: { schema: SCHEMA_VERSION, ...(Object.keys(types).length ? { types } : {}), namespaces }, diagnostics: unique }
 }

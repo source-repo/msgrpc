@@ -87,9 +87,21 @@ export interface NamespaceSchema {
     history?: { [version: string]: Omit<NamespaceSchema, 'history'> }
 }
 
+/**
+ * The version of the schema *format* - the shape of `.types.json` documents and `describe()`
+ * answers - independent of the package version, because every ecosystem package reads this format
+ * and none of them care which npm release wrote it.
+ *
+ * It was a bare `1` in five places, which is a format version nobody can find, grep for, or reason
+ * about bumping. One definition, and a written policy beside it: `docs/schema-compatibility.md`
+ * says what may be added without touching this number, what forces it up, and what a consumer may
+ * assume. Change the number only with that document open.
+ */
+export const SCHEMA_VERSION = 1 as const
+
 export interface RpcSchema {
     /** Format version of this document, not of the contract it describes. */
-    schema: 1
+    schema: typeof SCHEMA_VERSION
     /** Contract version covering the document as a whole. */
     version?: string
     types?: { [name: string]: TypeNode }
