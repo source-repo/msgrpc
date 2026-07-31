@@ -13,13 +13,6 @@ import { RpcClient, RpcServer, rpc, rpcNamespace } from './index.js'
 const run = randomUUID().slice(0, 8)
 const peer = (name: string) => `${name}-${run}`
 
-// TEMPORARY diagnostic for a CI-only failure to exit: every second after the tests finish, say
-// what still holds the event loop. Unref'd, so the reporter cannot be the thing it is reporting.
-test.after.always(() => {
-    const dump = () => console.error('still holding the loop:', process.getActiveResourcesInfo?.() ?? 'unavailable')
-    dump()
-    setInterval(dump, 1000).unref()
-})
 
 const waitFor = async (condition: () => boolean, timeout = 5000) => {
     const deadline = Date.now() + timeout
@@ -186,7 +179,11 @@ test('conflate without idempotent-command semantics is refused at expose time', 
             return 1
         }
     }
-    const server = new RpcServer({ name: peer('refuses'), transports: [] })
+    // An explicit port, because an empty transports array is not "no transports" on Node - it is
+    // the default listener on 7843, which is how this test found the close-before-built race: on a
+    // machine with a free 7843 the constructor's async build bound the port after close() had
+    // already run, and the orphaned listener held the worker open. close() awaits construction now.
+    const server = new RpcServer({ name: peer('refuses'), transports: [{ port: 3845 }] })
     const failure = t.throws(() => server.exposeClassInstance(new Bad()))
     t.regex(String(failure?.message), /free to skip/)
 
@@ -200,7 +197,5 @@ test('conflate without idempotent-command semantics is refused at expose time', 
     const undeclared = t.throws(() => server.exposeClassInstance(new Undeclared()))
     t.regex(String(undeclared?.message), /free to skip/)
 
-    // Never ready()'d, but still holding whatever the constructor started - unclosed, it kept the
-    // event loop alive and the whole file was reported as failing to exit.
-    await server.close().catch(() => undefined)
+    await server.close()
 })

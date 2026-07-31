@@ -319,6 +319,13 @@ export class RpcServerBase implements IManageRpc {
     }
 
     async close() {
+        // Construction is asynchronous, so a server closed straight after `new` was closing an
+        // empty transport list while its listener was still being built - which then bound its
+        // port with nobody left holding a reference. Found on a machine where the default port was
+        // free; invisible on any machine where something else already owned it, because the bind
+        // failed and there was nothing to leak. Awaited settled-or-failed: initError is close's
+        // business to ignore, not to wait out.
+        await this.starting.catch(() => undefined)
         this.caller.failPendingCalls('server closed')
         this.caller.subscriptions.clear()
         await this.caller.close()
