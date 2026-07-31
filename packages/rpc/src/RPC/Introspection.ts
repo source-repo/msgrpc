@@ -1,4 +1,5 @@
 import EventEmitter from 'events'
+import { componentSnapshotEvent } from './Component.js'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import type { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from './Schema.js'
@@ -170,6 +171,9 @@ export class Introspection {
             // schema still knows what has been subscribed.
             const eventNames = new Set(Object.keys(described?.events ?? {}))
             for (const proxy of this.handler.eventProxies.values()) if (proxy.instanceName === name) eventNames.add(proxy.event)
+            // The component snapshot channel is the library's, not the contract's: listing it would
+            // invite subscribing to it as an ordinary event, which component() already does properly.
+            eventNames.delete(componentSnapshotEvent)
             const events: DescribedEvent[] = [...eventNames].sort().map((event) => ({
                 name: event,
                 ...(described?.events?.[event] ? { params: described.events[event].params } : {}),

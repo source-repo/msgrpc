@@ -18,6 +18,7 @@ import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type Sto
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
 import { declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { componentSnapshot, componentSnapshotEvent, installComponentPublisher, RpcComponent, type RpcComponentExposeOptions } from './Component.js'
 import { RpcSchema, validateParams, validateValue } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
 
@@ -78,6 +79,8 @@ export interface ExposeOptions {
      * Overrides what the class declares, for the same reason execution does.
      */
     mailbox?: number
+    /** Snapshot publishing for an instance extending RpcComponent. Ignored for anything else. */
+    component?: RpcComponentExposeOptions
 }
 
 const isRpcCallInstanceMethodPayload = (payload: RpcMessage): payload is RpcCallInstanceMethodPayload => {
@@ -341,6 +344,13 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 const instanceName = payload.path
                 const event = payload.params[0] as string
                 const inst = this.manageRpc.exposedNameSpaceInstances[instanceName]
+                // The snapshot event only exists on a component. Refused by name before the emitter
+                // check, because a plain instance is not an emitter either - and the answer "on is
+                // not exposed" would be true and useless, where this one says what to fix.
+                if (payload.method === 'on' && event === componentSnapshotEvent && inst && !(inst instanceof RpcComponent)) {
+                    await this.sendError(payload.id, source, 'ClassNotFound', `${payload.path} is not an observable component`)
+                    return
+                }
                 if (payload.method === 'on' && inst instanceof EventEmitter) {
                     const denied = await this.checkAccess(payload, source, true)
                     if (denied) {
@@ -358,6 +368,11 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                         eventProxy.attach()
                         result = 'ok'
                     }
+                    // A component subscription is answered with the current snapshot first - after
+                    // the listener is attached, so an update cannot fall between them, and on every
+                    // resubscription, so a reconnect repairs whatever was missed with one frame
+                    // rather than a replay. Targeted at this subscriber only: the others are current.
+                    if (event === componentSnapshotEvent) await this.sendEvent(source, componentSnapshotEvent, [componentSnapshot(inst)], instanceName)
                     await this.respond(payload.id, source, { type: RpcMessageType.success, result, id: payload.id } as RpcSuccessPayload, MessageType.ResponseMessage)
                 } else if ((payload.method === 'off' || payload.method === 'removeListener') && inst instanceof EventEmitter) {
                     // Deliberately not authorized. The key includes the caller, so a peer can only
@@ -764,6 +779,11 @@ export class ManageRpc implements IManageRpc {
             if (!Number.isInteger(mailbox) || mailbox < 1) throw new Error(`exposeClassInstance: ${namespace} declares a mailbox of ${mailbox}; the bound is a positive count of waiting calls`)
             this.exposedMailbox[namespace] = mailbox
         }
+        // A component's commits become snapshot events on its own emitter, which the ordinary event
+        // proxies then fan out - one mechanism for events and snapshots, not two. The publisher is
+        // installed here because exposure is when somebody can start listening.
+        if (instance instanceof RpcComponent)
+            installComponentPublisher(instance, settings.component ?? {}, () => void instance.emit(componentSnapshotEvent, componentSnapshot(instance)), this.logger)
         // Iterate upwards to find all the methods within the prototype chain.
         let props = Object.getOwnPropertyNames(instance.constructor.prototype)
         let parent = Object.getPrototypeOf(instance.constructor.prototype)

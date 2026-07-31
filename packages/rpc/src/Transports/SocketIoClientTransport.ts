@@ -48,7 +48,11 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
         queueMicrotask(() => void this.open().catch((e) => this.emit(TransportEvent.transportError, e)))
     }
 
+    /** Set for good by close(). What stops the server-restart retry from resurrecting the link. */
+    private closing = false
+
     override async close() {
+        this.closing = true
         const socket = this.socket
         this.socket = undefined
         this.connected = false
@@ -146,6 +150,19 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
                 this.emit(TransportEvent.peerGone, peer)
             }
             this.emit(TransportEvent.disconnected, reason)
+            // socket.io deliberately never auto-reconnects after 'io server disconnect' - and that
+            // is exactly what a restarting server sends on its way down. Left alone, a plant
+            // server reboot permanently orphans every client it had, which no HMI can accept. So a
+            // server-initiated close is retried like a network drop, on a delay so a server that
+            // kicks deliberately - displacement, a rejected handshake - is not hammered. Two peers
+            // configured with one name will fight through this; that is the misconfiguration's
+            // noise, not a reason to stay disconnected after every reboot.
+            if (reason === 'io server disconnect' && !this.closing) {
+                const retry = setTimeout(() => {
+                    if (!this.closing && this.socket?.disconnected) this.socket.connect()
+                }, 1000)
+                retry.unref?.()
+            }
         })
     }
 

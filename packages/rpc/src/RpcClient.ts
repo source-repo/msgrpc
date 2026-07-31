@@ -4,6 +4,7 @@ import { MessageSigner, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
+import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { codecFor } from './RPC/Codec.js'
@@ -216,5 +217,26 @@ export class RpcClient extends EventEmitter {
         // alternative is returning something that is not a proxy at all.
         if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
         return this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
+    }
+
+    /** Created on the first component() call; every channel this client holds lives in it. */
+    private componentChannels?: ComponentChannels
+
+    /**
+     * An observable component: the ordinary typed proxy plus cached, read-only `props` and `state`,
+     * and a store under the `rpcComponent` symbol carrying status and change notification.
+     *
+     * Resolves after the first authorized snapshot has been accepted, so the reads are synchronous
+     * from the first line that can execute. Repeated calls for one (target, namespace) share a
+     * channel and one remote subscription; each call owes one `store.close()`.
+     */
+    async component<T extends RpcComponentLike>(name: string, target?: string): Promise<RpcComponentProxy<T>> {
+        await this.ready()
+        if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
+        // Wired to this client's own forwarded lifecycle, which is what turns "the link is up but
+        // that peer is gone" into a stale channel instead of a frozen number.
+        this.componentChannels ??= new ComponentChannels(this.rpcClient, this)
+        const channel = await this.componentChannels.open(name, target ? target : this.options.defaultTarget)
+        return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
     }
 }
