@@ -337,3 +337,45 @@ test('socket.io: losing the server mid-poll is trouble, not a crash, and close s
     t.true(consumer.closed)
     await client.close()
 })
+
+test('socket.io: a latest task resolves the source host context when execution starts, or fails honestly', async (t) => {
+    const { server, queue, service, dispose } = await rig(3936)
+    // The source of truth: a token provided on the queue host itself, changed after enqueue -
+    // latest means the task runs under the world as it is, not as it was.
+    const { defineRpcContext, HOST_ROOT } = await import('@source-repo/rpc')
+    const recipe = defineRpcContext<{ revision: number }>({ id: `acme.recipe.${run}`, schemaVersion: '1', axis: 'physical' })
+    const handle = server.provideContext(HOST_ROOT, recipe, { revision: 12 })
+
+    await queue.enqueue({ job: 'bake' }, { context: { mode: 'latest', source: peer(`queue${3936}`), node: HOST_ROOT, tokenIds: [recipe.id] } })
+    handle.set({ revision: 13 })
+
+    let seen: { revision: number } | undefined
+    const consumer = await queue.consume(
+        async (_task, context) => {
+            const snapshot = context.resolvedContext as { tokens: { tokenId: string; entries: { value: { revision: number } }[] }[] }
+            seen = snapshot.tokens.find((token) => token.tokenId === recipe.id)?.entries[0]?.value
+        },
+        { consumerId: 'worker-1', waitMs: 300 }
+    )
+    await waitFor(() => seen !== undefined)
+    t.is(seen?.revision, 13, 'the task ran under revision 13, which existed only after it was enqueued')
+    await consumer.close()
+
+    // An unresolvable latest fails the delivery through the ordinary retry path - never the
+    // handler running context-blind. The source names a peer that is not there.
+    await queue.enqueue({ job: 'blind' }, { context: { mode: 'latest', source: peer('nobody-here'), tokenIds: ['acme.gone'] } })
+    let ran = false
+    const blind = await queue.consume(
+        async () => {
+            ran = true
+        },
+        { consumerId: 'worker-2', waitMs: 300 }
+    )
+    await waitFor(async () => (await queue.stats()).deadLettered === 1, 15_000)
+    t.false(ran, 'the handler never saw the task')
+    const page = await service.listDeadLetters()
+    t.regex(page.entries[0]?.failure ?? '', /latest context unresolved/)
+
+    await blind.close({ drain: false, timeoutMs: 1000 })
+    await dispose()
+})

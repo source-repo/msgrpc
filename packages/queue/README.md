@@ -62,7 +62,7 @@ An answer can be lost after the state changed, so both mutating requests carry s
 
 ## Tasks carry their context
 
-A task may carry queued context — `{ mode: 'snapshot' }` with values captured by the producer at enqueue time, travelling verbatim to the handler — and an owner fence naming the component authority generation it was submitted under. Both are delivered on the lease (`context.lease`). The `{ mode: 'latest' }` context form is part of the wire contract but capability-gated until the structural-context resolver ships; the fence likewise travels today and gains durable enforcement with the topology milestone.
+A task may carry queued context — `{ mode: 'snapshot' }` with values captured by the producer at enqueue time, travelling verbatim to the handler — and an owner fence naming the component authority generation it was submitted under. Both are delivered on the lease (`context.lease`). A `{ mode: 'latest' }` task is resolved by the consumer against the source host's `$context` when execution starts, and delivered to the handler as `context.resolvedContext` - an unresolvable `latest` fails the task through the ordinary retry path rather than running the handler context-blind. The owner fence travels with the task and gains durable enforcement from the topology records.
 
 ## Authorization
 

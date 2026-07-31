@@ -5,6 +5,7 @@ import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
 import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
+import { contextNamespace, type ContextWireSnapshot } from './RPC/Context.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { codecFor } from './RPC/Codec.js'
@@ -241,5 +242,15 @@ export class RpcClient extends EventEmitter {
         this.componentChannels ??= new ComponentChannels(this.rpcClient, this)
         const channel = await this.componentChannels.open(name, target ? target : this.options.defaultTarget)
         return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
+    }
+
+    /**
+     * One-shot: what a remote node's context looks like right now, as its host answers it. The
+     * subscription-and-cache machinery belongs to hosts resolving their own nodes; this is the
+     * question a tool - or a queue worker resolving `latest` task context - asks once.
+     */
+    async readContext(peer: string, node: string, tokenIds: string[]): Promise<ContextWireSnapshot> {
+        const proxy = await this.proxy<{ read(node: string, tokenIds: string[]): Promise<ContextWireSnapshot> }>(contextNamespace, peer)
+        return await proxy.read(node, tokenIds)
     }
 }

@@ -33,13 +33,13 @@ export interface WorkQueueRetryPolicy {
 /**
  * Context a task carries to its worker, per the adopted topology spec: `snapshot` is captured by
  * the producer at enqueue time and travels verbatim; `latest` names tokens to resolve when
- * execution starts. `latest` is on the wire from day one and capability-gated until the
- * structural-context resolver ships - the model is fixed early without pretending the
- * implementation exists.
+ * execution starts - resolved by the worker against the source host's `$context`, so the task
+ * runs under the world as it is, not as it was. An unresolvable `latest` fails the task rather
+ * than running it context-blind.
  */
 export type QueuedContext =
     | { mode: 'snapshot'; captured: unknown }
-    | { mode: 'latest'; source: string; tokenIds: readonly string[] }
+    | { mode: 'latest'; source: string; node?: string; tokenIds: readonly string[] }
 
 /**
  * The authority generation a task was submitted under - the component authority fence from the

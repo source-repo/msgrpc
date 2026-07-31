@@ -2,6 +2,8 @@ import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import { HostTopology, type HostTopologyOptions } from './RPC/Topology.js'
+import { contextEvent, contextNamespace, HostContext, type RpcCapturedContext, type RpcContextProviderHandle, type RpcContextToken } from './RPC/Context.js'
+import { ContextResolver, type RpcContextStore } from './RPC/ContextResolver.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, withIntrospection } from './RPC/Introspection.js'
@@ -153,6 +155,9 @@ export class RpcServerBase implements IManageRpc {
     readonly peers = new PeerRegistry()
     /** This host's parent/owner records: the federated topology core, host-authoritative. */
     readonly topology: HostTopology
+    /** This host's context providers, served under $context and resolved over the chains. */
+    readonly context: HostContext
+    private readonly contextResolver: ContextResolver
     /** Created on the first component() call; every channel this server observes lives in it. */
     private componentChannels?: ComponentChannels
     /**
@@ -209,6 +214,11 @@ export class RpcServerBase implements IManageRpc {
         this.topology = new HostTopology(this.options.name, this.options.topology)
         this.rpc.hostTopology = this.topology
         this.rpc.allowTopologyMutation = this.options.topology?.allowRemoteMutation ?? false
+        this.context = new HostContext(this.topology)
+        this.topology.onCommitted = () => this.context.changed()
+        this.rpc.hostContext = this.context
+        this.context.push = (source, frame) => void this.rpc.sendEvent(source, contextEvent, [frame], contextNamespace).catch(() => undefined)
+        this.contextResolver = new ContextResolver(this.context, this.options.name, this.caller, this.componentLifecycle)
 
         // Building a listener or a broker connection means loading a module, so this is where the
         // constructor stops being synchronous. ready() awaits it and reports what went wrong.
@@ -301,6 +311,7 @@ export class RpcServerBase implements IManageRpc {
             this.safely('peerGone', peer, () => {
                 // Drop the peer's event subscriptions and forget its route as soon as it goes.
                 this.rpc.removePeer(peer)
+                this.context.dropSubscriber(peer)
                 this.peers.delete(peer)
                 this.relayPresence(transport, peer, 'offline')
                 // A gateway subscription taken out for this peer has nothing left to collect.
@@ -317,11 +328,12 @@ export class RpcServerBase implements IManageRpc {
         // way RpcClient does it - otherwise a server that watches its peers goes deaf after a blip
         // with nothing to say so.
         transport.on(TransportEvent.connected, () => void this.caller.resubscribe().catch((e) => this.emitSafely('resubscribeError', e)))
-        // Component channels learn staleness from these three. Link down stales every picture;
-        // a peer going or being displaced stales only that peer's. Recovery needs no listener
-        // here: resubscribe() above replays the snapshot subscription, and the server answers a
-        // resubscribe with a targeted snapshot, which is what flips a channel back to live.
-        for (const event of [TransportEvent.disconnected, TransportEvent.peerGone, TransportEvent.peerDisplaced])
+        // Component channels and context chains learn staleness from the first three. Link down
+        // stales every picture; a peer going or being displaced stales only that peer's. The
+        // component channels need no recovery listener - resubscribe() above replays their event
+        // subscription - but the context resolver's subscriptions are method-registered, so
+        // `connected` is forwarded too and re-subscribing is its own replay.
+        for (const event of [TransportEvent.disconnected, TransportEvent.peerGone, TransportEvent.peerDisplaced, TransportEvent.connected])
             transport.on(event, (payload: unknown) => this.componentLifecycle.emit(event, payload))
     }
     /**
@@ -383,6 +395,30 @@ export class RpcServerBase implements IManageRpc {
         this.componentChannels ??= new ComponentChannels(this.caller, this.componentLifecycle)
         const channel = await this.componentChannels.open(name, target)
         return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
+    }
+
+    /**
+     * Provide one context value at one of this host's topology nodes. The handle is ownership:
+     * set() and clear() are the provider's own, and nothing remote can reach either - a remote
+     * caller that wants the value changed calls a method on whatever authority the value names.
+     */
+    provideContext<TValue>(instance: string, token: RpcContextToken<TValue>, initialValue: TValue): RpcContextProviderHandle<TValue> {
+        return this.context.provide(instance, token, initialValue)
+    }
+
+    /** The resolved, cached view of one token at one local node, live across every host it crosses. */
+    contextOf(instance: string, token: RpcContextToken): RpcContextStore {
+        return this.contextResolver.store(instance, token)
+    }
+
+    /** The policy gate: throws on invalid and missing, and on stale where the token rejects it. */
+    requireContext(instance: string, token: RpcContextToken): unknown {
+        return this.contextResolver.require(instance, token)
+    }
+
+    /** Deliberately capture what this node sees, for a payload - bounded, and explicit-only. */
+    captureContext(instance: string, tokens: RpcContextToken[]): RpcCapturedContext {
+        return this.contextResolver.capture(instance, tokens)
     }
 
     async close() {

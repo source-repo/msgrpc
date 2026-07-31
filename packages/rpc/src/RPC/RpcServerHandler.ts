@@ -18,6 +18,7 @@ import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type Sto
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
 import { declaredAuthority, declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { contextNamespace, type HostContext } from './Context.js'
 import {
     acquireComponentAuthority,
     componentAuthority,
@@ -178,6 +179,8 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     validation: 'off' | 'described' | 'required' = 'described'
     /** Set by RpcServer: this host's topology records, for describe() and the owner fence to read. */
     hostTopology?: import('./Topology.js').HostTopology
+    /** Set by RpcServer: this host's context providers and subscriptions, served under $context. */
+    hostContext?: HostContext
     /** Set by RpcServer: whether msgrpc.updateTopology accepts remote callers at all. Default no. */
     allowTopologyMutation = false
     /** Check what handlers return as well as what callers send. Off by default: it is a self-check. */
@@ -405,6 +408,28 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                         { type: RpcMessageType.success, result: eventProxy ? 'ok' : 'ok - was not subscribed', id: payload.id } as RpcSuccessPayload,
                         MessageType.ResponseMessage
                     )
+                } else if (payload.path === contextNamespace && (payload.method === 'read' || payload.method === 'subscribe' || payload.method === 'unsubscribe')) {
+                    // Dispatch-level like $acquire, because subscribe needs the caller's
+                    // transport-vouched identity to deliver to. authorize() rules first, with the
+                    // node and every token id visible in params - the authorization model at work.
+                    if (!this.hostContext) {
+                        await this.sendError(payload.id, source, 'ClassNotFound', 'this host serves no context')
+                        return
+                    }
+                    const denied = await this.checkAccess(payload, source, false)
+                    if (denied) {
+                        await this.sendError(payload.id, source, denied, `not permitted to call ${payload.path}.${payload.method}`)
+                        return
+                    }
+                    const asStrings = (value: unknown) => (Array.isArray(value) ? value.map(String) : [])
+                    let result: unknown
+                    if (payload.method === 'read') result = this.hostContext.snapshotFor(String(payload.params[0]), asStrings(payload.params[1]), 0, true)
+                    else if (payload.method === 'subscribe') result = this.hostContext.subscribe(source, String(payload.params[0]), String(payload.params[1]), asStrings(payload.params[2]))
+                    else {
+                        this.hostContext.unsubscribe(source, String(payload.params[0]))
+                        result = 'ok'
+                    }
+                    await this.respond(payload.id, source, { type: RpcMessageType.success, result, id: payload.id } as RpcSuccessPayload, MessageType.ResponseMessage)
                 } else if ((payload.method === '$acquire' || payload.method === '$release') && inst) {
                     // Arbitration is the dispatch layer's, like 'on' and 'off': the check needs the
                     // caller's identity, which methods do not see, and it must not queue behind the

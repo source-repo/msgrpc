@@ -15,6 +15,8 @@ export * from './RPC/Component.js'
 export * from './RPC/ComponentClient.js'
 // Topology, but not the file store: a page is a host too, volatile by nature - node:fs is not.
 export * from './RPC/Topology.js'
+export * from './RPC/Context.js'
+export * from './RPC/ContextResolver.js'
 
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'

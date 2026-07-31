@@ -133,6 +133,8 @@ export interface HostTopologyOptions {
 
 export class HostTopology {
     private readonly records = new Map<string, RpcTopologyRecord>()
+    /** Installed by the server: whoever derives from these records re-derives on every commit. */
+    onCommitted?: () => void
     private readonly listeners = new Map<string, Set<() => void>>()
     private readonly store: TopologyStore
     private loaded = false
@@ -354,6 +356,11 @@ export class HostTopology {
     }
 
     private notify(instance: string) {
+        try {
+            this.onCommitted?.()
+        } catch {
+            // A derived layer's bug is not the topology's failure to commit.
+        }
         for (const listener of [...(this.listeners.get(instance) ?? [])]) {
             try {
                 listener()

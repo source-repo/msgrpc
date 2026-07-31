@@ -35,6 +35,8 @@ export interface WorkContext<TTask = unknown> {
     readonly signal: AbortSignal
     /** The lease as delivered - including any queued context and owner fence the task carries. */
     readonly lease: WorkLease<TTask>
+    /** For a `latest` task: the source node's context as resolved when execution started. */
+    readonly resolvedContext?: unknown
     renew(extensionMs?: number): Promise<void>
 }
 
@@ -73,6 +75,9 @@ export interface QueuePeer {
 
 type MaybeOptioned<T> = T & { $with?(options: { timeoutMs?: number }): T }
 
+/** How a consumer reaches a source host's $context for a `latest` task. Absent in-process. */
+export type LatestResolver = (source: string, node: string, tokenIds: string[]) => Promise<unknown>
+
 /** The per-call timeout when the protocol can carry one; the protocol itself when it cannot. */
 const withTimeout = <T>(protocol: MaybeOptioned<T>, timeoutMs: number): T => (typeof protocol.$with === 'function' ? protocol.$with({ timeoutMs }) : protocol)
 
@@ -86,6 +91,9 @@ const delay = (ms: number) =>
         const timer = setTimeout(resolve, ms)
         timer.unref?.()
     })
+
+/** Thrown before the handler runs; travels the fail path like any other failed delivery. */
+class LatestUnresolvable extends Error {}
 
 const DEFAULT_WAIT_MS = 20_000
 /** The margin the RPC timeout keeps beyond the queue's own wait, so the queue answers first. */
@@ -101,7 +109,8 @@ class Consumer<TTask> extends EventEmitter implements WorkConsumer {
         public readonly id: string,
         private readonly protocol: MaybeOptioned<WorkQueueProtocol<TTask>>,
         private readonly handler: WorkHandler<TTask>,
-        private readonly options: ConsumeOptions
+        private readonly options: ConsumeOptions,
+        private readonly resolveLatest?: LatestResolver
     ) {
         super()
         const concurrency = Math.max(1, options.concurrency ?? 1)
@@ -164,12 +173,25 @@ class Consumer<TTask> extends EventEmitter implements WorkConsumer {
         renewTimer?.unref?.()
 
         try {
+            // A `latest` task runs under the world as it is when execution starts - or not at
+            // all: resolving is part of the work, and failing it routes through the ordinary
+            // retry-then-dead-letter path instead of running the handler context-blind.
+            let resolvedContext: unknown
+            if (lease.context?.mode === 'latest') {
+                if (!this.resolveLatest) throw new LatestUnresolvable(`task ${lease.taskId} asks for latest context, and this consumer has no way to a source host`)
+                try {
+                    resolvedContext = await this.resolveLatest(lease.context.source, lease.context.node ?? '$host', [...lease.context.tokenIds])
+                } catch (e) {
+                    throw new LatestUnresolvable(`task ${lease.taskId}: latest context unresolved from ${lease.context.source}: ${(e as Error)?.message ?? e}`)
+                }
+            }
             const context: WorkContext<TTask> = {
                 taskId: lease.taskId,
                 attempt: lease.attempt,
                 headers: lease.headers,
                 signal: aborter.signal,
                 lease,
+                ...(resolvedContext !== undefined ? { resolvedContext } : {}),
                 renew
             }
             await this.handler(lease.payload, context)
@@ -223,7 +245,8 @@ class Consumer<TTask> extends EventEmitter implements WorkConsumer {
 export const workQueueOver = <TTask>(
     protocol: MaybeOptioned<WorkQueueProtocol<TTask>>,
     name: string,
-    metrics?: () => Promise<RpcComponentStore<WorkQueueProps, WorkQueueState>>
+    metrics?: () => Promise<RpcComponentStore<WorkQueueProps, WorkQueueState>>,
+    resolveLatest?: LatestResolver
 ): WorkQueue<TTask> => ({
     async enqueue(task, options = {}) {
         const request = {
@@ -254,7 +277,7 @@ export const workQueueOver = <TTask>(
     },
 
     async consume(handler, options) {
-        return new Consumer(options.consumerId, protocol, handler, options)
+        return new Consumer(options.consumerId, protocol, handler, options, resolveLatest)
     },
 
     stats: () => protocol.stats(),
@@ -265,8 +288,17 @@ export const workQueueOver = <TTask>(
 /** Connect to a queue served elsewhere on the network, under this peer's own name and link. */
 export const connectWorkQueue = async <TTask>(peer: QueuePeer, name: string, target?: string): Promise<WorkQueue<TTask>> => {
     const protocol = await peer.proxy<MaybeOptioned<WorkQueueProtocol<TTask>>>(name, target)
-    return workQueueOver(protocol, name, async () => {
-        const remote = await peer.component<{ props: WorkQueueProps; state: WorkQueueState }>(name, target)
-        return remote[rpcComponent] as RpcComponentStore<WorkQueueProps, WorkQueueState>
-    })
+    return workQueueOver(
+        protocol,
+        name,
+        async () => {
+            const remote = await peer.component<{ props: WorkQueueProps; state: WorkQueueState }>(name, target)
+            return remote[rpcComponent] as RpcComponentStore<WorkQueueProps, WorkQueueState>
+        },
+        // The `latest` resolver: the source host's $context, asked over this peer's own link.
+        async (source, node, tokenIds) => {
+            const context = await peer.proxy<{ read(node: string, tokenIds: string[]): Promise<unknown> }>('$context', source)
+            return await context.read(node, tokenIds)
+        }
+    )
 }
