@@ -87,6 +87,13 @@ export interface RpcServerOptions {
     validation?: 'off' | 'described' | 'required'
     /** Check what handlers return against the schema too. Off by default: it is a self-check. */
     validateResults?: boolean
+    /**
+     * Check component props/state commits against the schema's component contract. Off by default
+     * for the same reason validateResults is: it is a self-check on this server's own code, not
+     * protection from callers. An invalid commit throws at the setState call site and the previous
+     * snapshot stays current.
+     */
+    validateComponentSnapshots?: boolean
     /** Refuse to expose a class that marks no @rpc methods, rather than publishing all of them. */
     requireExplicitExposure?: boolean
     /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
@@ -155,6 +162,11 @@ export class RpcServerBase implements IManageRpc {
         this.rpc.schema = this.options.schema
         this.rpc.validation = this.options.validation ?? (this.options.schema ? 'described' : 'off')
         this.rpc.validateResults = this.options.validateResults ?? false
+        if (this.options.validateComponentSnapshots)
+            this.rpc.manageRpc.componentContractFor = (namespace) => {
+                const component = this.rpc.schema?.namespaces[namespace]?.component
+                return component ? { component, types: this.rpc.schema?.types } : undefined
+            }
         this.rpc.unknownVersion = this.options.unknownVersion ?? 'allow'
         this.rpc.idempotency = this.options.idempotency
         this.rpc.manageRpc.requireExplicitExposure = this.options.requireExplicitExposure ?? false

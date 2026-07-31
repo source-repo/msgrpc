@@ -18,8 +18,8 @@ import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type Sto
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
 import { declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
-import { componentSnapshot, componentSnapshotEvent, installComponentPublisher, RpcComponent, type RpcComponentExposeOptions } from './Component.js'
-import { RpcSchema, validateParams, validateValue } from './Schema.js'
+import { componentSnapshot, componentSnapshotEvent, installComponentPublisher, installComponentValidator, RpcComponent, type RpcComponentExposeOptions } from './Component.js'
+import { RpcSchema, validateParams, validateValue, type ComponentSchema } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
 
 export class EventProxy {
@@ -710,6 +710,12 @@ export class ManageRpc implements IManageRpc {
     exposedConflation: { [nameSpace: string]: Set<string> } = {}
     /** Each namespace's mailbox bound, where one was declared. Absent means the default. */
     exposedMailbox: { [nameSpace: string]: number } = {}
+    /**
+     * Set by RpcServer when snapshot validation is on: the component contract to check commits
+     * against, read at expose time. A closure rather than a copy, because the schema may gain its
+     * introspection namespace after construction and the contract has to be the current one.
+     */
+    componentContractFor?: (namespace: string) => { component: ComponentSchema; types: RpcSchema['types'] } | undefined
 
     constructor(public logger?: ILogger) {}
 
@@ -782,8 +788,15 @@ export class ManageRpc implements IManageRpc {
         // A component's commits become snapshot events on its own emitter, which the ordinary event
         // proxies then fan out - one mechanism for events and snapshots, not two. The publisher is
         // installed here because exposure is when somebody can start listening.
-        if (instance instanceof RpcComponent)
+        if (instance instanceof RpcComponent) {
+            const contract = this.componentContractFor?.(namespace)
+            if (contract)
+                installComponentValidator(
+                    instance,
+                    (props, state) => validateValue(props, contract.component.props, contract.types, 'props') ?? validateValue(state, contract.component.state, contract.types, 'state')
+                )
             installComponentPublisher(instance, settings.component ?? {}, () => void instance.emit(componentSnapshotEvent, componentSnapshot(instance)), this.logger)
+        }
         // Iterate upwards to find all the methods within the prototype chain.
         let props = Object.getOwnPropertyNames(instance.constructor.prototype)
         let parent = Object.getPrototypeOf(instance.constructor.prototype)

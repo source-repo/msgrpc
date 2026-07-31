@@ -1,6 +1,6 @@
 import { resolve as resolvePath, dirname } from 'node:path'
 import { ClassDeclaration, MethodDeclaration, Node, Project, ts, Type } from 'ts-morph'
-import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
+import { SCHEMA_VERSION, type ComponentSchema, type MethodSchema, type NamespaceSchema, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 
 /**
  * Reads a contract out of TypeScript source.
@@ -263,6 +263,38 @@ const eventsFromDeclaration = (declaration: ClassDeclaration, context: Context) 
     return Object.keys(events).length ? events : undefined
 }
 
+/**
+ * The component contract, when the class extends RpcComponent: the resolved props and state types,
+ * read off the base-type chain so a subclass of a subclass still describes correctly.
+ *
+ * The rule about honesty applies with extra force here: a component whose generics cannot be
+ * resolved to concrete types is reported, never emitted as `any` - a snapshot schema that checks
+ * nothing would sit in the contract looking exactly like one that checks everything.
+ */
+const componentFromDeclaration = (declaration: ClassDeclaration, context: Context): ComponentSchema | undefined => {
+    for (let type: Type | undefined = declaration.getType(); type; type = type.getBaseTypes()[0]) {
+        const base = type.getBaseTypes()[0]
+        if (!base) return undefined
+        if (base.getSymbol()?.getName() !== 'RpcComponent') continue
+        const [props, state] = base.getTypeArguments()
+        const at = { ...context, node: declaration }
+        if (!props || !state) {
+            fail({ ...at, where: `${context.where} component` }, 'extends RpcComponent without resolvable type arguments')
+            return undefined
+        }
+        if (props.isTypeParameter() || state.isTypeParameter()) {
+            fail({ ...at, where: `${context.where} component` }, 'extends RpcComponent with an unresolved generic - props and state must be concrete types for the contract to describe them')
+            return undefined
+        }
+        return {
+            snapshot: 1,
+            props: typeToNode(props, { ...at, where: `${context.where} component props` }),
+            state: typeToNode(state, { ...at, where: `${context.where} component state` })
+        }
+    }
+    return undefined
+}
+
 export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
     const project = new Project({ tsConfigFilePath })
     // Exactly what include/files/exclude resolve to, asked of TypeScript rather than inferred.
@@ -299,7 +331,8 @@ export const extractSchema = (tsConfigFilePath: string): ExtractResult => {
                 continue
             }
             const events = eventsFromDeclaration(declaration, { ...context, where: declared.name })
-            namespaces[declared.name] = { ...(declared.version ? { version: declared.version } : {}), methods, ...(events ? { events } : {}) }
+            const component = componentFromDeclaration(declaration, { ...context, where: declared.name })
+            namespaces[declared.name] = { ...(declared.version ? { version: declared.version } : {}), methods, ...(events ? { events } : {}), ...(component ? { component } : {}) }
         }
     }
 

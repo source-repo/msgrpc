@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { RpcClient, RpcServer, rpc, rpcNamespace } from '../index.js'
+import { RpcClient, RpcServer, SCHEMA_VERSION, rpc, rpcNamespace, type RpcSchema } from '../index.js'
 import { RpcComponent, componentHost } from './Component.js'
 import { rpcComponent } from './ComponentClient.js'
 import type { SocketIoClientTransport } from '../Transports/SocketIoClientTransport.js'
@@ -47,6 +47,11 @@ class Oven extends RpcComponent<OvenProps, OvenState> {
     @rpc({ semantics: 'query' })
     async ping() {
         return 'pong'
+    }
+
+    /** Unmarked, so never exposed: the bug under test is local server code, not a caller. */
+    corrupt() {
+        this.setState({ temperature: 'boiling' as unknown as number })
     }
 }
 
@@ -226,4 +231,35 @@ test('a restarted component is a new epoch, and the fresh snapshot replaces the 
     await revived.close()
     // The first server is already closed; dispose would close the client again, harmlessly.
     await dispose().catch(() => undefined)
+})
+
+test('an invalid snapshot commit is refused before it becomes current', async (t) => {
+    const schema: RpcSchema = {
+        schema: SCHEMA_VERSION,
+        namespaces: {
+            oven: {
+                methods: {},
+                component: {
+                    snapshot: 1,
+                    props: { kind: 'object', fields: { unit: { type: { kind: 'string' } }, maximum: { type: { kind: 'number' } } } },
+                    state: { kind: 'object', fields: { temperature: { type: { kind: 'number' } }, mode: { type: { kind: 'string' } } } }
+                }
+            }
+        }
+    }
+    const server = new RpcServer({ name: peer('checked'), transports: [{ port: 3869 }], schema, validateComponentSnapshots: true, validation: 'off' })
+    await server.ready()
+    const oven = new Oven()
+    server.exposeClassInstance(oven)
+
+    // The bad commit throws at the setState call site - where the bug is - and changes nothing.
+    const failure = t.throws(() => oven.corrupt())
+    t.regex(String(failure?.message), /snapshot rejected/)
+    t.is(oven.state.temperature, 20, 'the previous snapshot should remain current')
+
+    // A valid commit still flows, so the validator gates rather than jams.
+    await oven.setMode('heating')
+    t.is(oven.state.mode, 'heating')
+
+    await server.close()
 })

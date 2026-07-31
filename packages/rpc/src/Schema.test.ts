@@ -558,3 +558,50 @@ test('describe is subject to authorize like any other call', async (t) => {
     await client.close()
     await server.close()
 })
+
+test('a component leaving or widening is named; arriving is additive', (t) => {
+    const component = {
+        snapshot: 1 as const,
+        props: { kind: 'object' as const, fields: { unit: { type: { kind: 'string' as const } } } },
+        state: { kind: 'object' as const, fields: { mode: { type: { kind: 'string' as const } } } }
+    }
+    const observed: NamespaceSchema = { methods: {}, component }
+    const plain: NamespaceSchema = { methods: {} }
+
+    // Becoming a component says nothing to an old caller: purely additive.
+    t.deepEqual(namespaceProblems(plain, observed), [])
+
+    // Ceasing to be one strands every observer with a cache that will never update.
+    t.true(
+        namespaceProblems(observed, plain).some((problem) => problem.where === 'component'),
+        'a component that stopped being served should be named'
+    )
+
+    // Widened state output: a snapshot the server may now send is not one the observer expects.
+    const widened: NamespaceSchema = {
+        methods: {},
+        component: { ...component, state: { kind: 'object', fields: { mode: { type: { kind: 'union', options: [{ kind: 'string' }, { kind: 'number' }] } } } } }
+    }
+    t.true(namespaceProblems(observed, widened).some((problem) => problem.where === 'component state'))
+
+    // A required state field removed is a reader's field that will never arrive.
+    const emptied: NamespaceSchema = { methods: {}, component: { ...component, state: { kind: 'object', fields: {} } } }
+    t.true(namespaceProblems(observed, emptied).some((problem) => problem.where === 'component state'))
+
+    // A field added to a strict state is named too. The schema *document* evolves additively, but
+    // snapshot values are validated strictly - an observer that checks what it receives would refuse
+    // the unknown field, and the checker must not promise compatibility the validator will break.
+    const extended: NamespaceSchema = {
+        methods: {},
+        component: { ...component, state: { kind: 'object', fields: { mode: { type: { kind: 'string' } }, since: { type: { kind: 'number' }, optional: true } } } }
+    }
+    t.true(namespaceProblems(observed, extended).some((problem) => problem.where === 'component state'))
+
+    // The blessed growth path: an observer that declared `additional` on its expectation accepts
+    // fields it has no name for, so the same extension raises nothing against it.
+    const tolerant: NamespaceSchema = {
+        methods: {},
+        component: { ...component, state: { kind: 'object', fields: { mode: { type: { kind: 'string' } } }, additional: true } }
+    }
+    t.deepEqual(namespaceProblems(tolerant, extended), [])
+})

@@ -161,3 +161,27 @@ test('the extracted contract feeds the same comparison the server uses', (t) => 
 
     t.deepEqual(namespaceProblems(current, current, schema.types), [], 'a contract should be compatible with itself')
 })
+
+test('a component describes its props and state, resolved through the base chain', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('component-tsconfig.json'))
+
+    const oven = schema.namespaces.oven
+    t.truthy(oven.component, 'a class extending RpcComponent should carry a component contract')
+    t.is(oven.component!.snapshot, 1)
+    // Named aliases become refs, so the console and the checker share one definition.
+    t.deepEqual(oven.component!.props, { kind: 'ref', name: 'OvenProps' })
+    t.deepEqual(oven.component!.state, { kind: 'ref', name: 'OvenState' })
+    t.truthy(schema.types?.OvenProps)
+    t.truthy(schema.types?.OvenState)
+
+    // A subclass one level down describes identically: the chain is walked, not the first extends.
+    t.deepEqual(schema.namespaces.grill.component, oven.component)
+
+    // The generic case is refused loudly, and its namespace carries no component at all - a
+    // snapshot schema of `any` would sit in the contract looking exactly like a real one.
+    t.true(
+        diagnostics.some((diagnostic) => /unresolved generic/.test(diagnostic.reason)),
+        `expected the unresolved-generic diagnostic, got: ${JSON.stringify(diagnostics)}`
+    )
+    t.falsy(schema.namespaces.half.component)
+})

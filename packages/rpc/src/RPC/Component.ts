@@ -43,6 +43,8 @@ interface ComponentInternals {
     state: Readonly<RpcComponentData>
     /** Installed at exposure. Until then commits are local and nobody is listening. */
     notify?: () => void
+    /** Installed at exposure when snapshot validation is on. A problem string refuses the commit. */
+    validate?: (props: Readonly<RpcComponentData>, state: Readonly<RpcComponentData>) => string | undefined
 }
 
 /** Internals live beside the instance, not on it, so nothing here appears on the prototype walk. */
@@ -57,10 +59,17 @@ const internalsOf = (component: object): ComponentInternals => {
 /** Shallow copy, shallow freeze. Deep freezing is expensive and hostile to typed arrays. */
 const frozen = <T extends RpcComponentData>(value: T): Readonly<T> => Object.freeze({ ...value })
 
-const commit = (component: object, next: Partial<ComponentInternals>) => {
+const commit = (component: object, next: { props?: Readonly<RpcComponentData>; state?: Readonly<RpcComponentData> }) => {
     const held = internalsOf(component)
-    if (next.props) held.props = next.props
-    if (next.state) held.state = next.state
+    const props = next.props ?? held.props
+    const state = next.state ?? held.state
+    // Validated before anything changes: an invalid snapshot must leave the previous one current,
+    // not poison the cache first and complain afterwards. This is a self-check on server code, so
+    // it throws at the setState call site - which is exactly where the bug is.
+    const problem = held.validate?.(props, state)
+    if (problem) throw new Error(`component snapshot rejected: ${problem}`)
+    held.props = props
+    held.state = state
     held.revision++
     held.notify?.()
 }
@@ -143,6 +152,11 @@ export interface RpcComponentExposeOptions {
 
 /** Beyond this, a snapshot is almost certainly carrying something that belongs in a stream. */
 const DEFAULT_MAX_SNAPSHOT_BYTES = 1_048_576
+
+/** Wire commit-time validation. Called by the exposure machinery when the server asks for it. */
+export const installComponentValidator = (component: object, validate: (props: Readonly<RpcComponentData>, state: Readonly<RpcComponentData>) => string | undefined) => {
+    internalsOf(component).validate = validate
+}
 
 /**
  * Wire a component's commits to a publisher, coalesced. Called by the exposure machinery; the

@@ -202,6 +202,19 @@ export const namespaceProblems = (caller: NamespaceSchema, current: NamespaceSch
         }
     }
 
+    // Component snapshots travel the event direction too: served here, read there. A namespace
+    // *becoming* a component is additive and says nothing; one that stops being a component leaves
+    // its observers with a cache that will never update again, which is worth naming.
+    if (caller.component) {
+        if (!current.component) problems.push({ where: 'component', reason: 'is no longer served, so an observer would wait forever for a snapshot' })
+        else {
+            if (!assignable(current.component.props, caller.component.props, types))
+                problems.push({ where: 'component props', reason: 'widened, so a snapshot this contract may serve is not one the observer expects' })
+            if (!assignable(current.component.state, caller.component.state, types))
+                problems.push({ where: 'component state', reason: 'widened, so a snapshot this contract may serve is not one the observer expects' })
+        }
+    }
+
     return problems
 }
 

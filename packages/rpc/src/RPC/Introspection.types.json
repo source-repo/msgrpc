@@ -77,6 +77,13 @@
           },
           "optional": true
         },
+        "component": {
+          "type": {
+            "kind": "ref",
+            "name": "DescribedComponent"
+          },
+          "optional": true
+        },
         "methods": {
           "type": {
             "kind": "array",
@@ -94,6 +101,921 @@
               "name": "DescribedEvent"
             }
           }
+        }
+      }
+    },
+    "DescribedComponent": {
+      "kind": "object",
+      "fields": {
+        "props": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "any"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "boolean"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "number"
+                    }
+                  },
+                  "integer": {
+                    "type": {
+                      "kind": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "min": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  },
+                  "max": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "string"
+                    }
+                  },
+                  "pattern": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "optional": true
+                  },
+                  "minLength": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  },
+                  "maxLength": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "bytes"
+                    }
+                  },
+                  "maxBytes": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "date"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "literal"
+                    }
+                  },
+                  "value": {
+                    "type": {
+                      "kind": "union",
+                      "options": [
+                        {
+                          "kind": "null"
+                        },
+                        {
+                          "kind": "string"
+                        },
+                        {
+                          "kind": "number"
+                        },
+                        {
+                          "kind": "literal",
+                          "value": false
+                        },
+                        {
+                          "kind": "literal",
+                          "value": true
+                        }
+                      ]
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "array"
+                    }
+                  },
+                  "items": {
+                    "type": {
+                      "kind": "ref",
+                      "name": "TypeNode"
+                    }
+                  },
+                  "maxItems": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "tuple"
+                    }
+                  },
+                  "items": {
+                    "type": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "ref",
+                        "name": "TypeNode"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "object"
+                    }
+                  },
+                  "fields": {
+                    "type": {
+                      "kind": "record",
+                      "values": {
+                        "kind": "ref",
+                        "name": "FieldNode"
+                      }
+                    }
+                  },
+                  "additional": {
+                    "type": {
+                      "kind": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "record"
+                    }
+                  },
+                  "values": {
+                    "type": {
+                      "kind": "ref",
+                      "name": "TypeNode"
+                    }
+                  },
+                  "keyPattern": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "optional": true
+                  },
+                  "maxEntries": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "union"
+                    }
+                  },
+                  "options": {
+                    "type": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "ref",
+                        "name": "TypeNode"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "ref"
+                    }
+                  },
+                  "name": {
+                    "type": {
+                      "kind": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "optional": true
+        },
+        "state": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "any"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "null"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "boolean"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "number"
+                    }
+                  },
+                  "integer": {
+                    "type": {
+                      "kind": "boolean"
+                    },
+                    "optional": true
+                  },
+                  "min": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  },
+                  "max": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "string"
+                    }
+                  },
+                  "pattern": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "optional": true
+                  },
+                  "minLength": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  },
+                  "maxLength": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "bytes"
+                    }
+                  },
+                  "maxBytes": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "date"
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "literal"
+                    }
+                  },
+                  "value": {
+                    "type": {
+                      "kind": "union",
+                      "options": [
+                        {
+                          "kind": "null"
+                        },
+                        {
+                          "kind": "string"
+                        },
+                        {
+                          "kind": "number"
+                        },
+                        {
+                          "kind": "literal",
+                          "value": false
+                        },
+                        {
+                          "kind": "literal",
+                          "value": true
+                        }
+                      ]
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "array"
+                    }
+                  },
+                  "items": {
+                    "type": {
+                      "kind": "ref",
+                      "name": "TypeNode"
+                    }
+                  },
+                  "maxItems": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "tuple"
+                    }
+                  },
+                  "items": {
+                    "type": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "ref",
+                        "name": "TypeNode"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "object"
+                    }
+                  },
+                  "fields": {
+                    "type": {
+                      "kind": "record",
+                      "values": {
+                        "kind": "ref",
+                        "name": "FieldNode"
+                      }
+                    }
+                  },
+                  "additional": {
+                    "type": {
+                      "kind": "boolean"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "record"
+                    }
+                  },
+                  "values": {
+                    "type": {
+                      "kind": "ref",
+                      "name": "TypeNode"
+                    }
+                  },
+                  "keyPattern": {
+                    "type": {
+                      "kind": "string"
+                    },
+                    "optional": true
+                  },
+                  "maxEntries": {
+                    "type": {
+                      "kind": "number"
+                    },
+                    "optional": true
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "union"
+                    }
+                  },
+                  "options": {
+                    "type": {
+                      "kind": "array",
+                      "items": {
+                        "kind": "ref",
+                        "name": "TypeNode"
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "kind": "object",
+                "fields": {
+                  "kind": {
+                    "type": {
+                      "kind": "literal",
+                      "value": "ref"
+                    }
+                  },
+                  "name": {
+                    "type": {
+                      "kind": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "optional": true
+        },
+        "subscribers": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "TypeNode": {
+      "kind": "union",
+      "options": [
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "any"
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "null"
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "boolean"
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "number"
+              }
+            },
+            "integer": {
+              "type": {
+                "kind": "boolean"
+              },
+              "optional": true
+            },
+            "min": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            },
+            "max": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "string"
+              }
+            },
+            "pattern": {
+              "type": {
+                "kind": "string"
+              },
+              "optional": true
+            },
+            "minLength": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            },
+            "maxLength": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "bytes"
+              }
+            },
+            "maxBytes": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "date"
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "literal"
+              }
+            },
+            "value": {
+              "type": {
+                "kind": "union",
+                "options": [
+                  {
+                    "kind": "null"
+                  },
+                  {
+                    "kind": "string"
+                  },
+                  {
+                    "kind": "number"
+                  },
+                  {
+                    "kind": "literal",
+                    "value": false
+                  },
+                  {
+                    "kind": "literal",
+                    "value": true
+                  }
+                ]
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "array"
+              }
+            },
+            "items": {
+              "type": {
+                "kind": "ref",
+                "name": "TypeNode"
+              }
+            },
+            "maxItems": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "tuple"
+              }
+            },
+            "items": {
+              "type": {
+                "kind": "array",
+                "items": {
+                  "kind": "ref",
+                  "name": "TypeNode"
+                }
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "object"
+              }
+            },
+            "fields": {
+              "type": {
+                "kind": "record",
+                "values": {
+                  "kind": "ref",
+                  "name": "FieldNode"
+                }
+              }
+            },
+            "additional": {
+              "type": {
+                "kind": "boolean"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "record"
+              }
+            },
+            "values": {
+              "type": {
+                "kind": "ref",
+                "name": "TypeNode"
+              }
+            },
+            "keyPattern": {
+              "type": {
+                "kind": "string"
+              },
+              "optional": true
+            },
+            "maxEntries": {
+              "type": {
+                "kind": "number"
+              },
+              "optional": true
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "union"
+              }
+            },
+            "options": {
+              "type": {
+                "kind": "array",
+                "items": {
+                  "kind": "ref",
+                  "name": "TypeNode"
+                }
+              }
+            }
+          }
+        },
+        {
+          "kind": "object",
+          "fields": {
+            "kind": {
+              "type": {
+                "kind": "literal",
+                "value": "ref"
+              }
+            },
+            "name": {
+              "type": {
+                "kind": "string"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "FieldNode": {
+      "kind": "object",
+      "fields": {
+        "type": {
+          "type": {
+            "kind": "ref",
+            "name": "TypeNode"
+          }
+        },
+        "optional": {
+          "type": {
+            "kind": "boolean"
+          },
+          "optional": true
         }
       }
     },
@@ -735,317 +1657,6 @@
                 "value": "non-repeatable-command"
               }
             ]
-          },
-          "optional": true
-        }
-      }
-    },
-    "TypeNode": {
-      "kind": "union",
-      "options": [
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "any"
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "null"
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "boolean"
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "number"
-              }
-            },
-            "integer": {
-              "type": {
-                "kind": "boolean"
-              },
-              "optional": true
-            },
-            "min": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            },
-            "max": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "string"
-              }
-            },
-            "pattern": {
-              "type": {
-                "kind": "string"
-              },
-              "optional": true
-            },
-            "minLength": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            },
-            "maxLength": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "bytes"
-              }
-            },
-            "maxBytes": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "date"
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "literal"
-              }
-            },
-            "value": {
-              "type": {
-                "kind": "union",
-                "options": [
-                  {
-                    "kind": "null"
-                  },
-                  {
-                    "kind": "string"
-                  },
-                  {
-                    "kind": "number"
-                  },
-                  {
-                    "kind": "literal",
-                    "value": false
-                  },
-                  {
-                    "kind": "literal",
-                    "value": true
-                  }
-                ]
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "array"
-              }
-            },
-            "items": {
-              "type": {
-                "kind": "ref",
-                "name": "TypeNode"
-              }
-            },
-            "maxItems": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "tuple"
-              }
-            },
-            "items": {
-              "type": {
-                "kind": "array",
-                "items": {
-                  "kind": "ref",
-                  "name": "TypeNode"
-                }
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "object"
-              }
-            },
-            "fields": {
-              "type": {
-                "kind": "record",
-                "values": {
-                  "kind": "ref",
-                  "name": "FieldNode"
-                }
-              }
-            },
-            "additional": {
-              "type": {
-                "kind": "boolean"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "record"
-              }
-            },
-            "values": {
-              "type": {
-                "kind": "ref",
-                "name": "TypeNode"
-              }
-            },
-            "keyPattern": {
-              "type": {
-                "kind": "string"
-              },
-              "optional": true
-            },
-            "maxEntries": {
-              "type": {
-                "kind": "number"
-              },
-              "optional": true
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "union"
-              }
-            },
-            "options": {
-              "type": {
-                "kind": "array",
-                "items": {
-                  "kind": "ref",
-                  "name": "TypeNode"
-                }
-              }
-            }
-          }
-        },
-        {
-          "kind": "object",
-          "fields": {
-            "kind": {
-              "type": {
-                "kind": "literal",
-                "value": "ref"
-              }
-            },
-            "name": {
-              "type": {
-                "kind": "string"
-              }
-            }
-          }
-        }
-      ]
-    },
-    "FieldNode": {
-      "kind": "object",
-      "fields": {
-        "type": {
-          "type": {
-            "kind": "ref",
-            "name": "TypeNode"
-          }
-        },
-        "optional": {
-          "type": {
-            "kind": "boolean"
           },
           "optional": true
         }

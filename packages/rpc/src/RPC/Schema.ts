@@ -68,6 +68,18 @@ export interface MethodSchema {
     semantics?: RpcMethodSemantics
 }
 
+/**
+ * What an observable component's snapshots carry: the shapes of its `props` and `state`, so a
+ * client can validate what it caches and a compatibility check can tell a narrowed snapshot from a
+ * widened one. The snapshots travel the event direction - served here, read there.
+ */
+export interface ComponentSchema {
+    /** Version of the snapshot wire shape itself, distinct from the document's schema version. */
+    snapshot: 1
+    props: TypeNode
+    state: TypeNode
+}
+
 export interface NamespaceSchema {
     /**
      * Contract version for this namespace, for diagnostics. Reported alongside a validation
@@ -76,6 +88,8 @@ export interface NamespaceSchema {
     version?: string
     methods: { [method: string]: MethodSchema }
     events?: { [event: string]: { params: TypeNode[] } }
+    /** Present when the namespace is an observable component. The first additive-section precedent. */
+    component?: ComponentSchema
     /** Skip validation for this namespace, for a hot path where the cost is not worth it. */
     validate?: boolean
     /**

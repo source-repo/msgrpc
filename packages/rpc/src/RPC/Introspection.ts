@@ -1,5 +1,5 @@
 import EventEmitter from 'events'
-import { componentSnapshotEvent } from './Component.js'
+import { componentSnapshotEvent, RpcComponent } from './Component.js'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcSchema, type TypeNode } from './Schema.js'
@@ -40,6 +40,18 @@ export interface DescribedEvent {
     subscribers: number
 }
 
+/**
+ * An observable component's shape, as a peer may see it. Types come from the schema when one is
+ * loaded; the subscriber count is live either way. Structure only - the current snapshot is served
+ * exclusively to authorized subscribers, and describing a thing must never leak its values.
+ */
+export interface DescribedComponent {
+    props?: TypeNode
+    state?: TypeNode
+    /** How many peers currently observe this component. */
+    subscribers: number
+}
+
 export interface DescribedNamespace {
     name: string
     version?: string
@@ -51,6 +63,8 @@ export interface DescribedNamespace {
     emitter: boolean
     /** True when calls into this instance run one at a time rather than side by side. */
     serialised?: boolean
+    /** Present when the instance is an observable component. */
+    component?: DescribedComponent
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }
@@ -181,6 +195,15 @@ export class Introspection {
             }))
 
             const execution = manage.exposedExecution[name]
+            // Structure and a live count, never the snapshot itself: current values go only to
+            // authorized subscribers, and describe() must not become the unauthorized way in.
+            const component: DescribedComponent | undefined =
+                instance instanceof RpcComponent
+                    ? {
+                          ...(described?.component ? { props: described.component.props, state: described.component.state } : {}),
+                          subscribers: [...this.handler.eventProxies.values()].filter((proxy) => proxy.instanceName === name && proxy.event === componentSnapshotEvent).length
+                      }
+                    : undefined
             return {
                 name,
                 ...(described?.version ? { version: described.version } : {}),
@@ -191,6 +214,7 @@ export class Introspection {
                 className: instance.constructor?.name,
                 created: created.has(name),
                 emitter: instance instanceof EventEmitter,
+                ...(component ? { component } : {}),
                 methods,
                 events
             }
