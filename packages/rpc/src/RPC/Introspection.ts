@@ -3,7 +3,7 @@ import { componentSnapshotEvent, RpcComponent } from './Component.js'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcSchema, type TypeNode } from './Schema.js'
-import { HOST_ROOT, type RpcRef, type RpcTopologyCapabilities } from './Topology.js'
+import { HOST_ROOT, type RpcRef, type RpcTopologyCapabilities, type RpcTopologyMutation, type RpcTopologyPatch, type RpcTopologyRecord } from './Topology.js'
 import type { RpcMethodSemantics } from './Messages.js'
 // Extracted from this file by `npm run contract` in the CLI package and committed, so building
 // msgrpc never needs the extractor that reads it. A test there asserts it still matches this source.
@@ -190,6 +190,38 @@ export const withIntrospection = (schema: RpcSchema | undefined): RpcSchema => {
 @rpcNamespace('msgrpc')
 export class Introspection {
     constructor(private handler: RpcServerHandler) {}
+
+    /**
+     * This host's topology records whole - what a console needs to draw the trees without asking
+     * per namespace. Structure only, like describe(): refs, epochs and labels, never process data.
+     * Rides the same opt-in and the same authorize() gate as describe(), because listing where
+     * everything sits is reconnaissance of exactly the same order as listing what everything does.
+     */
+    @rpc({ semantics: 'query' })
+    async topology(): Promise<{ records: RpcTopologyRecord[]; place?: string[]; capabilities: RpcTopologyCapabilities } | undefined> {
+        const held = this.handler.hostTopology
+        if (!held) return undefined
+        return { records: held.all(), ...(held.place ? { place: held.place } : {}), capabilities: held.capabilities() }
+    }
+
+    /**
+     * Remote topology mutation, and its authorization is the design rather than a paragraph on it:
+     * refused wholesale unless the server opted in with `topology.allowRemoteMutation` - a
+     * deployment that never enables it has no new surface at all - and when enabled, every call
+     * still passes authorize() as `msgrpc.updateTopology` with the instance and patch in params,
+     * which is where a plant decides who may restructure it. The CAS expectedVersion is mandatory:
+     * there is no blind write, so two administrators cannot silently overwrite each other, and a
+     * retry after an uncertain outcome fails the version check instead of applying twice - which
+     * is what makes `idempotent-command` the honest declaration.
+     */
+    @rpc({ semantics: 'idempotent-command' })
+    async updateTopology(instance: string, patch: RpcTopologyPatch, mutation: RpcTopologyMutation): Promise<RpcTopologyRecord> {
+        const held = this.handler.hostTopology
+        if (!held) throw new Error('this host keeps no topology records')
+        if (!this.handler.allowTopologyMutation)
+            throw new Error('this host does not accept remote topology mutation - it is enabled with topology.allowRemoteMutation, and gated by authorize() like any call')
+        return instance === HOST_ROOT ? held.updateHost(patch, mutation) : held.update(instance, patch, mutation)
+    }
 
     @rpc
     async describe(): Promise<ServerDescription> {

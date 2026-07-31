@@ -29,6 +29,13 @@ export interface RpcCallInstanceMethodPayload extends RpcMessage {
      */
     version?: string
     /**
+     * The owner generation the caller observed for this instance, when it chooses to fence. The
+     * target compares it with its durable topology record and refuses `OwnershipChanged` on any
+     * difference - which is what stops a delayed or retried command from running under an
+     * ownership that has since been reassigned. Optional: an unfenced call is the ordinary case.
+     */
+    fence?: { ownerEpoch: string }
+    /**
      * How many milliseconds the caller will still be waiting, measured when it sent this. A server
      * that finds the budget spent answers `Timeout` instead of running the method.
      *
@@ -88,6 +95,13 @@ export type RpcErrorCode =
      * `Busy`, which is why it is a code and not a domain result.
      */
     | 'NotInControl'
+    /**
+     * The call carried an owner fence and the target's owner generation is not the one the caller
+     * observed - the ownership was reassigned while the command was in flight, queued, or retried.
+     * It certainly did not run, and it must not be blindly retried: the caller re-reads the
+     * topology and decides again under the new generation, which is the fence doing its job.
+     */
+    | 'OwnershipChanged'
 
 /**
  * What a method does to the world, which decides what a caller may do about an uncertain answer.

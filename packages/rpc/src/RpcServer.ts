@@ -108,7 +108,14 @@ export interface RpcServerOptions {
      * epochs survive a restart. All optional: a host that declares nothing gets a synthetic
      * `$host` root and is done.
      */
-    topology?: HostTopologyOptions
+    topology?: HostTopologyOptions & {
+        /**
+         * Accept msgrpc.updateTopology from remote callers. Off by default: restructuring the
+         * plant from anywhere on the network is a decision, and enabling it without an authorize()
+         * that names who may is a decision made badly.
+         */
+        allowRemoteMutation?: boolean
+    }
     /**
      * Where to record what a non-repeatable command did, so a request redelivered after this
      * process died is answered from the record instead of run a second time.
@@ -201,6 +208,7 @@ export class RpcServerBase implements IManageRpc {
 
         this.topology = new HostTopology(this.options.name, this.options.topology)
         this.rpc.hostTopology = this.topology
+        this.rpc.allowTopologyMutation = this.options.topology?.allowRemoteMutation ?? false
 
         // Building a listener or a broker connection means loading a module, so this is where the
         // constructor stops being synchronous. ready() awaits it and reports what went wrong.

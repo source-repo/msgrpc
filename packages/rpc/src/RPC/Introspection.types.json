@@ -1,6 +1,201 @@
 {
   "schema": 1,
   "types": {
+    "RpcTopologyRecord": {
+      "kind": "object",
+      "fields": {
+        "ref": {
+          "type": {
+            "kind": "ref",
+            "name": "RpcRef"
+          }
+        },
+        "parent": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "owner": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "parentEpoch": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "ownerEpoch": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "version": {
+          "type": {
+            "kind": "ref",
+            "name": "RpcTopologyVersion"
+          }
+        },
+        "label": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
+    "RpcRef": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "instance": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
+    "RpcTopologyVersion": {
+      "kind": "object",
+      "fields": {
+        "epoch": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "revision": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "RpcTopologyCapabilities": {
+      "kind": "object",
+      "fields": {
+        "authorityScope": {
+          "type": {
+            "kind": "literal",
+            "value": "host"
+          }
+        },
+        "cycleGuarantee": {
+          "type": {
+            "kind": "literal",
+            "value": "detected"
+          }
+        },
+        "reverseIndex": {
+          "type": {
+            "kind": "literal",
+            "value": "eventual"
+          }
+        },
+        "deletion": {
+          "type": {
+            "kind": "literal",
+            "value": "tombstone"
+          }
+        },
+        "durability": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "volatile"
+              },
+              {
+                "kind": "literal",
+                "value": "durable"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "RpcTopologyPatch": {
+      "kind": "object",
+      "fields": {
+        "parent": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "owner": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "label": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
+    "RpcTopologyMutation": {
+      "kind": "object",
+      "fields": {
+        "expectedVersion": {
+          "type": {
+            "kind": "ref",
+            "name": "RpcTopologyVersion"
+          }
+        },
+        "reason": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
     "ServerDescription": {
       "kind": "object",
       "fields": {
@@ -1127,21 +1322,6 @@
         }
       }
     },
-    "RpcRef": {
-      "kind": "object",
-      "fields": {
-        "peer": {
-          "type": {
-            "kind": "string"
-          }
-        },
-        "instance": {
-          "type": {
-            "kind": "string"
-          }
-        }
-      }
-    },
     "DescribedMethod": {
       "kind": "object",
       "fields": {
@@ -1815,55 +1995,69 @@
           }
         }
       }
-    },
-    "RpcTopologyCapabilities": {
-      "kind": "object",
-      "fields": {
-        "authorityScope": {
-          "type": {
-            "kind": "literal",
-            "value": "host"
-          }
-        },
-        "cycleGuarantee": {
-          "type": {
-            "kind": "literal",
-            "value": "detected"
-          }
-        },
-        "reverseIndex": {
-          "type": {
-            "kind": "literal",
-            "value": "eventual"
-          }
-        },
-        "deletion": {
-          "type": {
-            "kind": "literal",
-            "value": "tombstone"
-          }
-        },
-        "durability": {
-          "type": {
-            "kind": "union",
-            "options": [
-              {
-                "kind": "literal",
-                "value": "volatile"
-              },
-              {
-                "kind": "literal",
-                "value": "durable"
-              }
-            ]
-          }
-        }
-      }
     }
   },
   "namespaces": {
     "msgrpc": {
       "methods": {
+        "topology": {
+          "params": [],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "records": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "ref",
+                    "name": "RpcTopologyRecord"
+                  }
+                }
+              },
+              "place": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string"
+                  }
+                },
+                "optional": true
+              },
+              "capabilities": {
+                "type": {
+                  "kind": "ref",
+                  "name": "RpcTopologyCapabilities"
+                }
+              }
+            }
+          },
+          "semantics": "query"
+        },
+        "updateTopology": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "ref",
+              "name": "RpcTopologyPatch"
+            },
+            {
+              "kind": "ref",
+              "name": "RpcTopologyMutation"
+            }
+          ],
+          "paramNames": [
+            "instance",
+            "patch",
+            "mutation"
+          ],
+          "returns": {
+            "kind": "ref",
+            "name": "RpcTopologyRecord"
+          },
+          "semantics": "idempotent-command"
+        },
         "describe": {
           "params": [],
           "returns": {

@@ -79,6 +79,12 @@ export interface RpcCallOptions {
      * usage error and is refused before anything is sent.
      */
     timeoutMs?: number
+    /**
+     * Fence this call on the target's owner generation, as this caller last observed it from the
+     * topology record. Reassign the owner and the fence refuses `OwnershipChanged` - the
+     * within-flight half of what the lease's target-side check cannot see.
+     */
+    ownerEpoch?: string
 }
 
 /** A proxy with per-call options attached. See `$with` on a proxy. */
@@ -271,7 +277,8 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             // what this caller is going to do. A request carrying no ttl is one with no deadline,
             // which is what a caller that has disabled its timeout is asking for.
             ttl: timeoutMs > 0 ? timeoutMs : undefined,
-            ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {})
+            ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
+            ...(options.ownerEpoch ? { fence: { ownerEpoch: options.ownerEpoch } } : {})
         }
         return new Promise((resolve, reject) => {
             // Registered before sending: a response can arrive before sendPayload's promise settles.

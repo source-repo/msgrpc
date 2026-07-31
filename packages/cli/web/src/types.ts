@@ -34,6 +34,21 @@ export interface DescribedEvent {
     subscribers: number
 }
 
+/** A stable identity: peer + instance, independent of where either sits. Never a path. */
+export interface DescribedRef {
+    peer: string
+    instance: string
+}
+
+/** Where a namespace sits on the two axes, as its home host declares it. Paths are derived here. */
+export interface DescribedTopology {
+    parent: DescribedRef | null
+    owner: DescribedRef | null
+    parentEpoch: string
+    ownerEpoch: string
+    label?: string
+}
+
 /** An observable component's shape: structure and a live count, never the snapshot itself. */
 export interface DescribedComponent {
     props?: TypeNode
@@ -48,6 +63,7 @@ export interface DescribedNamespace {
     created: boolean
     emitter: boolean
     component?: DescribedComponent
+    topology?: DescribedTopology
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }
@@ -57,6 +73,19 @@ export interface ServerDescription {
     version?: string
     validating: boolean
     namespaces: DescribedNamespace[]
+    host?: {
+        root: DescribedRef
+        parent: DescribedRef | null
+        place?: string[]
+        label?: string
+        capabilities: {
+            authorityScope: string
+            cycleGuarantee: string
+            reverseIndex: string
+            deletion: string
+            durability: string
+        }
+    }
     types?: { [name: string]: TypeNode }
 }
 

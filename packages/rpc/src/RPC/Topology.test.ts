@@ -228,3 +228,97 @@ test('a deep chain is depth-exceeded, distinguishable from a cycle', async (t) =
     const walked = topology.physicalPath(previous!.ref.instance)
     t.is(walked.validity.status, 'depth-exceeded', 'a guard, not a verdict: the resource bound is named as itself')
 })
+
+test('an owner fence refuses the previous generation, and fails closed where nothing is recorded', async (t) => {
+    const server = new RpcServer({ name: peer('host3878'), transports: [{ port: 3878 }] })
+    await server.ready()
+    await server.topology.declare('oven', { owner: { peer: 'mes', instance: 'batch-1' } })
+    class Oven {
+        async setMode(mode: string) {
+            return mode
+        }
+    }
+    class Pinger {
+        async ping() {
+            return 'pong'
+        }
+    }
+    server.exposeClassInstance(new Oven(), 'oven')
+    server.exposeClassInstance(new Pinger(), 'undeclared')
+
+    const client = new RpcClient('http://localhost:3878', { name: peer('caller3878'), defaultTarget: peer('host3878') })
+    await client.ready()
+    const observed = server.topology.get('oven')!
+
+    // The fence holds while the generation the caller observed is the generation that rules.
+    const oven = await client.proxy<{ setMode(mode: string): Promise<string>; $with(o: { ownerEpoch: string }): { setMode(mode: string): Promise<string> } }>('oven')
+    t.is(await oven.$with({ ownerEpoch: observed.ownerEpoch }).setMode('auto'), 'auto')
+
+    // The owner is reassigned - a maintenance job takes the unit - and the old world's fence
+    // finds a new generation: refused, with re-reading the topology as the named way forward.
+    await server.topology.update('oven', { owner: { peer: 'mes', instance: 'job-9' } }, { expectedVersion: observed.version })
+    const stale = await t.throwsAsync(oven.$with({ ownerEpoch: observed.ownerEpoch }).setMode('manual'))
+    t.regex(String(stale?.message), /OwnershipChanged/)
+    t.is(await oven.$with({ ownerEpoch: server.topology.get('oven')!.ownerEpoch }).setMode('manual'), 'manual', 'the new generation commands freely')
+
+    // A fence against an instance nobody recorded fails closed: asserting a generation that
+    // cannot be verified must not become running anyway.
+    const bare = await client.proxy<{ ping(): Promise<string>; $with(o: { ownerEpoch: string }): { ping(): Promise<string> } }>('undeclared')
+    const unverifiable = await t.throwsAsync(bare.$with({ ownerEpoch: 'e-imagined' }).ping())
+    t.regex(String(unverifiable?.message), /no topology record/)
+    t.is(await bare.ping(), 'pong', 'an unfenced call is the ordinary case and stays one')
+
+    await client.close()
+    await server.close()
+})
+
+test('remote topology mutation is refused by default, and gated by authorize when enabled', async (t) => {
+    const admin = peer('admin3879')
+    const bystander = peer('bystander3879')
+    const server = new RpcServer({
+        name: peer('host3879'),
+        transports: [{ port: 3879 }],
+        exposeIntrospection: true,
+        topology: { allowRemoteMutation: true },
+        // The authorization is the ordinary authorize, and restructuring is its own grant.
+        authorize: (context) => context.method !== 'updateTopology' || context.source === admin
+    })
+    await server.ready()
+    await server.topology.declare('oven')
+
+    const adminClient = new RpcClient('http://localhost:3879', { name: admin, defaultTarget: peer('host3879') })
+    const otherClient = new RpcClient('http://localhost:3879', { name: bystander, defaultTarget: peer('host3879') })
+    await adminClient.ready()
+    await otherClient.ready()
+    type TopologyApi = {
+        topology(): Promise<{ records: RpcTopologyRecord[] } | undefined>
+        updateTopology(instance: string, patch: object, mutation: object): Promise<RpcTopologyRecord>
+    }
+    const asAdmin = await adminClient.proxy<TopologyApi>('msgrpc')
+    const asOther = await otherClient.proxy<TopologyApi>('msgrpc')
+
+    // Reading rides the introspection gate; the trees a console draws come from here.
+    const read = await asOther.topology()
+    t.true((read?.records ?? []).some((record) => record.ref.instance === 'oven'))
+
+    const refused = await t.throwsAsync(asOther.updateTopology('oven', { owner: { peer: 'mes', instance: 'batch-2' } }, { expectedVersion: server.topology.get('oven')!.version }))
+    t.regex(String(refused?.message), /Forbidden/)
+
+    const committed = await asAdmin.updateTopology('oven', { owner: { peer: 'mes', instance: 'batch-2' } }, { expectedVersion: server.topology.get('oven')!.version })
+    t.deepEqual(committed.owner, { peer: 'mes', instance: 'batch-2' })
+
+    // And with the opt-in absent, there is no surface at all, whoever asks.
+    const closed = new RpcServer({ name: peer('shut3879'), transports: [{ port: 3880 }], exposeIntrospection: true })
+    await closed.ready()
+    await closed.topology.declare('oven')
+    const viewer = new RpcClient('http://localhost:3880', { name: peer('viewer3879'), defaultTarget: peer('shut3879') })
+    await viewer.ready()
+    const shut = await t.throwsAsync((await viewer.proxy<TopologyApi>('msgrpc')).updateTopology('oven', {}, { expectedVersion: closed.topology.get('oven')!.version }))
+    t.regex(String(shut?.message), /does not accept remote topology mutation/)
+
+    await adminClient.close()
+    await otherClient.close()
+    await viewer.close()
+    await server.close()
+    await closed.close()
+})

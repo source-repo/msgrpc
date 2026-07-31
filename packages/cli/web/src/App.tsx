@@ -8,6 +8,7 @@ import { ChatMessage, ChatService } from './ChatService'
 // `say(from: string, text: string)` instead of `say(…)`.
 import chatContract from './chat.types.json'
 import { ComponentPanel } from './ComponentPanel'
+import { StructurePanel } from './StructurePanel'
 import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
@@ -366,6 +367,7 @@ export const App = () => {
                                 {description.validating ? 'arguments checked' : 'arguments not checked'}
                             </span>
                         </header>
+                        <StructurePanel description={description} peers={peers} onSelectPeer={(other) => void select(other)} />
                         {description.namespaces.map((namespace) => (
                             <section key={namespace.name} className="namespace">
                                 <h2>

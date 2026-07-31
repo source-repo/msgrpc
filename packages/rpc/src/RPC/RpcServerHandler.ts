@@ -176,8 +176,10 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * partial schema is useful. 'required' refuses anything the schema does not describe.
      */
     validation: 'off' | 'described' | 'required' = 'described'
-    /** Set by RpcServer: this host's topology records, for describe() to read. */
+    /** Set by RpcServer: this host's topology records, for describe() and the owner fence to read. */
     hostTopology?: import('./Topology.js').HostTopology
+    /** Set by RpcServer: whether msgrpc.updateTopology accepts remote callers at all. Default no. */
+    allowTopologyMutation = false
     /** Check what handlers return as well as what callers send. Off by default: it is a self-check. */
     validateResults = false
     /**
@@ -461,6 +463,11 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 await this.sendError(payload.id, source, 'NotInControl', notInControl)
                 return
             }
+            const fenced = this.fenceRefusal(payload)
+            if (fenced) {
+                await this.sendError(payload.id, source, 'OwnershipChanged', fenced)
+                return
+            }
 
             // The queue, when this call belongs in one, wraps everything from here on: the
             // deadline has to be read after waiting in it, since that wait is exactly what it
@@ -548,12 +555,17 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
             return
         }
 
-        // The fence, this side of M4's durable ownerEpoch: authority is checked again after any
-        // queue wait, because the wait is exactly where a takeover or an expiry can land - and a
-        // command from the previous generation must be refused, not run under yesterday's grant.
+        // Both fences re-checked after any queue wait, because the wait is exactly where a
+        // takeover, an expiry or an owner reassignment lands - and a command from the previous
+        // generation must be refused, not run under yesterday's grant.
         const notInControl = this.authorityRefusal(payload, source)
         if (notInControl) {
             await this.sendError(payload.id, source, 'NotInControl', notInControl)
+            return
+        }
+        const fenced = this.fenceRefusal(payload)
+        if (fenced) {
+            await this.sendError(payload.id, source, 'OwnershipChanged', fenced)
             return
         }
 
@@ -662,6 +674,21 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         return holding
             ? `${payload.path}.${payload.method} requires authority: ${authority.holder} is in control`
             : `${payload.path}.${payload.method} requires authority: nobody is in control - $acquire it first`
+    }
+
+    /**
+     * Why this call's owner fence does not hold, or undefined when it does - or when none was
+     * carried, fencing being per-call opt-in. A fence against an instance this host keeps no
+     * record for fails closed: the caller asserted a generation nobody here can verify, and
+     * running anyway would be the fence quietly checking nothing.
+     */
+    private fenceRefusal(payload: RpcCallInstanceMethodPayload): string | undefined {
+        const fence = payload.fence
+        if (!fence) return undefined
+        const record = this.hostTopology?.get(payload.path)
+        if (!record) return `${payload.path} has no topology record here to check the owner fence against`
+        if (record.ownerEpoch !== fence.ownerEpoch) return `${payload.path} changed owner generation while this call was on its way - read the topology again and decide again`
+        return undefined
     }
 
     semanticsOf(payload: { path: string; method: string }): RpcMethodSemantics | undefined {
