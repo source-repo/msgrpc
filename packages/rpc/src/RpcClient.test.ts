@@ -375,3 +375,136 @@ testWithContext.after(async (t) => {
   }, 5000)
   */
 })
+
+// ---------------------------------------------------------------- the 4.1 prerequisites
+
+class SlowRpc {
+    async slow(ms: number) {
+        await new Promise((resolve) => setTimeout(resolve, ms))
+        return 'done'
+    }
+}
+
+test('a per-call timeout overrides the client default, in both directions', async (t) => {
+    const { client, dispose } = await isolatedPair(3851)
+    const proxy = await client.proxy<TestRpc>('testRpc')
+
+    // Shorter than the 10s default: the call gives up at the per-call number, and says which.
+    const started = Date.now()
+    const failure = await t.throwsAsync(proxy.$with({ timeoutMs: 150 }).never())
+    t.regex(String(failure?.message), /within 150 ms/, `expected the per-call timeout, got: ${failure?.message}`)
+    t.true(Date.now() - started < 5000, 'the call waited out the client default instead of the per-call timeout')
+
+    await dispose()
+})
+
+test('a per-call timeout can outlast an impatient client default', async (t) => {
+    const server = new RpcServer({ transports: [{ port: 3852 }] })
+    await server.ready()
+    server.exposeClassInstance(new SlowRpc(), 'slowRpc')
+    const client = new RpcClient('http://localhost:3852', { callTimeout: 150 })
+    await client.ready()
+    const proxy = await client.proxy<SlowRpc>('slowRpc')
+
+    // The default is provably too short for this method...
+    const failure = await t.throwsAsync(proxy.slow(400))
+    t.regex(String(failure?.message), /Timeout/)
+    // ...and the per-call override is what lets the same call succeed.
+    t.is(await proxy.$with({ timeoutMs: 5000 }).slow(400), 'done')
+
+    await client.close()
+    await server.close()
+})
+
+test('a zero timeout waits instead of timing out on the next tick', async (t) => {
+    // The bug this pins down: callTimeout 0 correctly omitted the wire ttl but still armed
+    // setTimeout(..., 0), so "no deadline" meant "no chance" - the timer fired before any reply
+    // could possibly arrive.
+    const server = new RpcServer({ transports: [{ port: 3853 }] })
+    await server.ready()
+    server.exposeClassInstance(new SlowRpc(), 'slowRpc')
+
+    const patient = new RpcClient('http://localhost:3853', { callTimeout: 0 })
+    await patient.ready()
+    const viaDefault = await patient.proxy<SlowRpc>('slowRpc')
+    t.is(await viaDefault.slow(300), 'done', 'a disabled client timeout timed the call out anyway')
+
+    const impatient = new RpcClient('http://localhost:3853', { callTimeout: 150 })
+    await impatient.ready()
+    const viaOption = await impatient.proxy<SlowRpc>('slowRpc')
+    t.is(await viaOption.$with({ timeoutMs: 0 }).slow(300), 'done', 'a disabled per-call timeout timed the call out anyway')
+
+    await patient.close()
+    await impatient.close()
+    await server.close()
+})
+
+test('a timeout that is not a finite non-negative integer is refused before anything is sent', async (t) => {
+    const { client, dispose } = await isolatedPair(3854)
+    const proxy = await client.proxy<TestRpc>('testRpc')
+
+    for (const wrong of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+        const failure = await t.throwsAsync(proxy.$with({ timeoutMs: wrong }).square(2))
+        t.regex(String(failure?.message), /finite non-negative integer/, `timeoutMs ${wrong} was not refused`)
+    }
+
+    await dispose()
+})
+
+test('removing one event handler does not unsubscribe the others', async (t) => {
+    const { server, client, eventing, dispose } = await isolatedPair(3855)
+    const proxy = await client.proxy<EventingRpc>('eventing')
+
+    const first: string[] = []
+    const second: string[] = []
+    const firstHandler = (value: string) => void first.push(value)
+    const secondHandler = (value: string) => void second.push(value)
+    await proxy.on('ping', firstHandler)
+    await proxy.on('ping', secondHandler)
+
+    eventing.fire('a')
+    await waitFor(() => first.includes('a') && second.includes('a'))
+    t.is(server.rpc.eventProxies.size, 1, 'two local handlers should share one remote subscription')
+
+    // The fix under test: this used to send the remote off, taking the feed away from the handler
+    // that was still listening.
+    await proxy.off('ping', firstHandler)
+    t.is(server.rpc.eventProxies.size, 1, 'the remote subscription left with the first local handler')
+    eventing.fire('b')
+    await waitFor(() => second.includes('b'))
+    t.false(first.includes('b'), 'a removed handler still received the event')
+
+    await proxy.off('ping', secondHandler)
+    t.is(server.rpc.eventProxies.size, 0, 'the last local handler leaving should end the remote subscription')
+    eventing.fire('c')
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    t.false(second.includes('c'), 'an unsubscribed handler received an event')
+
+    await dispose()
+})
+
+test('a client hears peers arriving and leaving, not just its own link', async (t) => {
+    // What separates a stale view of one device from a dead network: peerGone names the device,
+    // disconnected names the link. peerDisplaced rides the same forwarding loop.
+    const server = new RpcServer({ transports: [{ port: 3856 }] })
+    await server.ready()
+
+    const observer = new RpcClient('http://localhost:3856', { name: 'observer-3856' })
+    await observer.ready()
+    const online: string[] = []
+    const gone: string[] = []
+    observer.on(TransportEvent.peerOnline, (peer: string) => void online.push(peer))
+    observer.on(TransportEvent.peerGone, (peer: string) => void gone.push(peer))
+
+    const visitor = new RpcClient('http://localhost:3856', { name: 'visitor-3856' })
+    await visitor.ready()
+    await waitFor(() => online.includes('visitor-3856'))
+    t.true(online.includes('visitor-3856'))
+
+    await visitor.close()
+    await waitFor(() => gone.includes('visitor-3856'))
+    t.true(gone.includes('visitor-3856'))
+
+    await observer.close()
+    await server.close()
+})

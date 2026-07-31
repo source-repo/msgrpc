@@ -397,6 +397,8 @@ await pump.$with({ idempotencyKey: workOrder }).dispense()
 
 `$with` returns another proxy for the same instance, so the key never leaks into calls that did not ask for it. The outcome is recorded **before** the answer is sent - the other order leaves a window where the caller has the result and the store does not.
 
+`$with` also takes `timeoutMs`, a per-call override of the client's `callTimeout` that becomes the transmitted ttl, so what the far end is told is exactly what this caller will do. `0` disables both the local timer and the ttl - for a long poll whose bound lives on the server side - and it genuinely disables them: a zero timeout used to omit the ttl correctly while still arming a `setTimeout(…, 0)`, which is not "never" but "next tick".
+
 A store that cannot be reached refuses the command with `UnknownOutcome` rather than running it. Failing open would turn an unreachable guard into exactly the double execution it was installed to prevent.
 
 ### Calls that overlap

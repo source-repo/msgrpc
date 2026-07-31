@@ -76,8 +76,9 @@ export interface RpcClientOptions {
 export type RpcProxy<T> = T & WithOptions<T>
 
 /**
- * Emits the TransportEvent.connected and TransportEvent.disconnected lifecycle events so an
- * application can show link state instead of inferring it from failed calls.
+ * Emits the TransportEvent lifecycle events - connected and disconnected for the link itself, and
+ * peerOnline, peerGone and peerDisplaced for the peers on it - so an application can show link and
+ * peer state instead of inferring either from failed calls.
  */
 export class RpcClient extends EventEmitter {
     rpcClient?: RpcClientHandler
@@ -187,6 +188,11 @@ export class RpcClient extends EventEmitter {
                 // Not 'error': an EventEmitter throws on an unhandled 'error' event.
                 .catch((e) => this.emit('resubscribeError', e))
         })
+        // Forwarded so a consumer aimed at one named peer can tell "the link is up but that peer is
+        // gone" from "the whole link is down" - connected/disconnected alone cannot say which, and
+        // the difference is what separates a stale view of a device from a dead network.
+        for (const event of [TransportEvent.peerOnline, TransportEvent.peerGone, TransportEvent.peerDisplaced])
+            transport.on(event, (...args: unknown[]) => this.emit(event, ...args))
     }
 
     async ready() {

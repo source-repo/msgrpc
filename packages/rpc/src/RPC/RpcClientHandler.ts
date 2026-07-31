@@ -70,6 +70,15 @@ export interface RpcCallOptions {
      * the request id already is.
      */
     idempotencyKey?: string
+    /**
+     * How long this call waits, overriding the client's `callTimeout`. The same number becomes the
+     * transmitted ttl, so what the far end is told is exactly what this caller is going to do.
+     *
+     * `0` means no local timer and no ttl - a call that waits as long as it takes, for a long poll
+     * whose bound lives on the server side. A finite, non-negative integer; anything else is a
+     * usage error and is refused before anything is sent.
+     */
+    timeoutMs?: number
 }
 
 /** A proxy with per-call options attached. See `$with` on a proxy. */
@@ -228,6 +237,12 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * has already sent.
      */
     public callWith(options: RpcCallOptions, remote: string | undefined, instanceName: string, method: string, ...params: unknown[]): Promise<unknown> {
+        const timeoutMs = options.timeoutMs ?? this.callTimeout
+        // Refused rather than clamped or rounded: a negative, fractional or infinite timeout is a
+        // caller holding the option wrong, and a silently adjusted deadline is the kind of help
+        // that surfaces two layers away as a call timing out at a number nobody wrote.
+        if (!Number.isInteger(timeoutMs) || timeoutMs < 0)
+            return Promise.reject(new Error(`${instanceName}.${method}: timeoutMs must be a finite non-negative integer, not ${String(options.timeoutMs)}`))
         const payload: RpcCallInstanceMethodPayload = {
             id: uuidv4(),
             type: RpcMessageType.CallInstanceMethod,
@@ -237,23 +252,27 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
             version: this.schemaVersions?.[instanceName],
             // The same number that arms the timer below, so what the far end is told is exactly
             // what this caller is going to do. A request carrying no ttl is one with no deadline,
-            // which is what a caller that has disabled its own timeout is asking for.
-            ttl: this.callTimeout > 0 ? this.callTimeout : undefined,
+            // which is what a caller that has disabled its timeout is asking for.
+            ttl: timeoutMs > 0 ? timeoutMs : undefined,
             ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {})
         }
         return new Promise((resolve, reject) => {
             // Registered before sending: a response can arrive before sendPayload's promise settles.
             this.responsePromiseMap.set(payload.id, { resolve, reject })
-            this.responseTimeoutMap.set(
-                payload.id,
-                setTimeout(() => {
-                    // A timeout is an unknown outcome by definition: the request went out, and
-                    // nothing came back. Kept as Timeout because that names *why* nothing is known,
-                    // which is more use than the general case - but a caller reading it should treat
-                    // a command as possibly done. There is a note about this in the README.
-                    this.takePending(payload.id)?.reject(new RpcError('Timeout', `no response to ${instanceName}.${method} within ${this.callTimeout} ms`))
-                }, this.callTimeout)
-            )
+            // No timer at all when the timeout is zero. setTimeout(..., 0) is not "never" - it is
+            // "next tick", so a disabled timeout was an instant one: the ttl was correctly omitted
+            // from the wire while the local timer fired before the reply could possibly arrive.
+            if (timeoutMs > 0)
+                this.responseTimeoutMap.set(
+                    payload.id,
+                    setTimeout(() => {
+                        // A timeout is an unknown outcome by definition: the request went out, and
+                        // nothing came back. Kept as Timeout because that names *why* nothing is known,
+                        // which is more use than the general case - but a caller reading it should treat
+                        // a command as possibly done. There is a note about this in the README.
+                        this.takePending(payload.id)?.reject(new RpcError('Timeout', `no response to ${instanceName}.${method} within ${timeoutMs} ms`))
+                    }, timeoutMs)
+                )
             this.sendPayload(payload, MessageType.RequestMessage, this.name, remote).then(
                 () => {
                     // Recorded only once the transport has accepted it, and only while the call is
@@ -311,7 +330,17 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                                 // 'on' is the only form the server holds state for, so it is the
                                 // only one worth replaying after a reconnect.
                                 if (prop === 'on') this.subscriptions.set(key, { remote, instanceName: name, event })
-                                else if (prop === 'off' || prop === 'removeListener') this.subscriptions.delete(key)
+                                else if (prop === 'off' || prop === 'removeListener') {
+                                    // The remote subscription is one per key; the local emitter may
+                                    // hold several handlers under it. The emitter's own listener
+                                    // count is the reference count, so removing one handler while
+                                    // others remain must not unsubscribe them all remotely - which
+                                    // is exactly what it used to do, and the first component or
+                                    // console pane to leave took the feed away from the rest.
+                                    const emitter = this.eventEmitter as unknown as EventEmitter
+                                    if (emitter.listenerCount(key) > 0) return Promise.resolve('ok - other local handlers remain')
+                                    this.subscriptions.delete(key)
+                                }
                             } else {
                                 // removeAllListeners, setMaxListeners and friends take no event.
                                 ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(...args)
