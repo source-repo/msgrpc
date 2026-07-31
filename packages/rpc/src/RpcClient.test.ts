@@ -3,7 +3,7 @@ import { io as ioClient } from 'socket.io-client'
 import { EventEmitter } from 'events'
 import { RpcServer } from './index.js'
 import { RpcClient, RpcProxy } from './RpcClient.js'
-import { RpcError } from './RPC/RpcClientHandler.js'
+import { FailedResubscription, RpcError } from './RPC/RpcClientHandler.js'
 import { MessageType, TransportEvent } from './RPC/Core.js'
 import { RpcEventPayload, RpcMessageType } from './RPC/Messages.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
@@ -507,4 +507,43 @@ test('a client hears peers arriving and leaving, not just its own link', async (
 
     await observer.close()
     await server.close()
+})
+
+test('resubscribeFailed names each subscription the reconnect could not restore', async (t) => {
+    const server = new RpcServer({ name: 'revenant-3857', transports: [{ port: 3857 }] })
+    server.exposeClassInstance(new EventingRpc(), 'alpha')
+    server.exposeClassInstance(new EventingRpc(), 'beta')
+    await server.ready()
+
+    const client = new RpcClient('http://localhost:3857', { defaultTarget: 'revenant-3857' })
+    await client.ready()
+    const heard: string[] = []
+    const alpha = await client.proxy<{ on(event: string, handler: (value: string) => void): Promise<unknown> }>('alpha')
+    const beta = await client.proxy<{ on(event: string, handler: (value: string) => void): Promise<unknown> }>('beta')
+    await alpha.on('ping', (value) => heard.push(value))
+    await beta.on('ping', () => undefined)
+
+    const failures: FailedResubscription[][] = []
+    client.rpcClient!.on('resubscribeFailed', (failed) => void failures.push(failed as unknown as FailedResubscription[]))
+
+    // A restart that comes back smaller: alpha survives, beta is simply no longer served. The
+    // replay must restore one and name the other - a count could not say which values went stale.
+    await server.close()
+    const revived = new RpcServer({ name: 'revenant-3857', transports: [{ port: 3857 }] })
+    const revivedAlpha = new EventingRpc()
+    revived.exposeClassInstance(revivedAlpha, 'alpha')
+    await revived.ready()
+
+    await waitFor(() => failures.length > 0, 10000)
+    t.is(failures[0].length, 1, 'only the subscription that vanished should be named')
+    t.like(failures[0][0], { peer: 'revenant-3857', namespace: 'beta', event: 'ping' })
+    t.truthy(failures[0][0].error, 'the reason travels with the identity')
+
+    // The partial half of partial failure: the surviving subscription really was re-established.
+    revivedAlpha.fire('after the restart')
+    await waitFor(() => heard.includes('after the restart'))
+    t.pass()
+
+    await client.close()
+    await revived.close()
 })

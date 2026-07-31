@@ -84,6 +84,20 @@ export interface RpcCallOptions {
 /** A proxy with per-call options attached. See `$with` on a proxy. */
 export type WithOptions<T> = { $with(options: RpcCallOptions): T }
 
+/**
+ * One remote subscription resubscribe() could not re-establish, carried on `resubscribeFailed`.
+ * Named rather than counted, because the consumer that matters is a shadow copy deciding which of
+ * its values are now stale - and it cannot mark the right ones from a count.
+ */
+export interface FailedResubscription {
+    /** The peer the subscription addressed, absent when it was taken out without a target. */
+    peer?: string
+    namespace: string
+    event: string
+    /** Why this one failed, verbatim - most often an RpcError whose code says whether the server no longer serves it or could not be asked. */
+    error: unknown
+}
+
 export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMessage, Message<RpcMessage>, RpcMessage> implements RpcClientEmitter {
     responsePromiseMap = new Map<string, PromiseResolver<unknown>>()
     responseTimeoutMap = new Map<string, NodeJS.Timeout>()
@@ -168,12 +182,15 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * is what makes server-pushed events addressable again.
      */
     async resubscribe() {
-        const results = await Promise.allSettled(
-            [...this.subscriptions.values()].map((subscription) => this.call(subscription.remote, subscription.instanceName, 'on', subscription.event))
+        const held = [...this.subscriptions.values()]
+        const results = await Promise.allSettled(held.map((subscription) => this.call(subscription.remote, subscription.instanceName, 'on', subscription.event)))
+        const failed: FailedResubscription[] = results.flatMap((result, index) =>
+            result.status === 'rejected'
+                ? [{ peer: held[index].remote, namespace: held[index].instanceName, event: held[index].event, error: result.reason }]
+                : []
         )
-        const failed = results.filter((result) => result.status === 'rejected').length
-        if (failed) this.emit('resubscribeFailed', failed)
-        return results.length - failed
+        if (failed.length) this.emit('resubscribeFailed', failed)
+        return results.length - failed.length
     }
 
     /**
