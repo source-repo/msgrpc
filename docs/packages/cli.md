@@ -12,4 +12,4 @@ npm install -g @source-repo/rpc-cli
 - **The MCP server** — the whole network handed to an AI assistant: list, describe, call with local argument validation, find by capability, watch traffic, manage scripts and fakes.
 - **A broker and a node runtime** — `source-rpc broker` relays for anything that connects; `source-rpc node` makes a machine scriptable from the network.
 
-Full documentation: the [package README](https://github.com/source-repo/rpc/blob/main/packages/cli/README.md). On npm: [@source-repo/rpc-cli](https://www.npmjs.com/package/@source-repo/rpc-cli). Container images: `ghcr.io/source-repo/rpc-cli`.
+Full documentation: [the command line](../tools/cli.md), [the console](../tools/console.md) and [the MCP server](../tools/mcp.md). On npm: [@source-repo/rpc-cli](https://www.npmjs.com/package/@source-repo/rpc-cli). Container images: `ghcr.io/source-repo/rpc-cli`.

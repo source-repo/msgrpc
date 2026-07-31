@@ -13,4 +13,4 @@ npm install @source-repo/rpc
 - **Structural context** — `defineRpcContext` tokens resolved through one declared axis, across hosts, with atomic remounts and bounded, explicit capture.
 - **Security** — per-connection authentication, per-frame signing (HMAC or Ed25519), `authorize()` on every call and subscription, TLS with a plant's own CA.
 
-Full documentation: the [package README](https://github.com/source-repo/rpc/blob/main/packages/rpc/README.md) and the [CHANGELOG](https://github.com/source-repo/rpc/blob/main/CHANGELOG.md). On npm: [@source-repo/rpc](https://www.npmjs.com/package/@source-repo/rpc).
+Full documentation: [the guide](../guide/getting-started.md) and the [CHANGELOG](https://github.com/source-repo/rpc/blob/main/CHANGELOG.md). On npm: [@source-repo/rpc](https://www.npmjs.com/package/@source-repo/rpc).

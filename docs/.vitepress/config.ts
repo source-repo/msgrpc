@@ -25,7 +25,30 @@ export default defineConfig({
         sidebar: [
             {
                 text: 'Guide',
-                items: [{ text: 'Getting started', link: '/guide/getting-started' }]
+                items: [
+                    { text: 'Getting started', link: '/guide/getting-started' },
+                    { text: 'Connecting', link: '/guide/connecting' },
+                    { text: 'Exposing methods', link: '/guide/exposing' },
+                    { text: 'Commands', link: '/guide/commands' },
+                    { text: 'Events and reconnection', link: '/guide/events' },
+                    { text: 'Observable components', link: '/guide/components' },
+                    { text: 'Command authority', link: '/guide/authority' },
+                    { text: 'Topology', link: '/guide/topology' },
+                    { text: 'Structural context', link: '/guide/context' },
+                    { text: 'Contracts and validation', link: '/guide/contracts' },
+                    { text: 'Authentication and authorization', link: '/guide/security' },
+                    { text: 'MQTT', link: '/guide/mqtt' },
+                    { text: 'Reference', link: '/guide/reference' }
+                ]
+            },
+            {
+                text: 'Tools',
+                items: [
+                    { text: 'The command line', link: '/tools/cli' },
+                    { text: 'The console', link: '/tools/console' },
+                    { text: 'The MCP server', link: '/tools/mcp' },
+                    { text: 'Writing a simulator', link: '/writing-a-simulator' }
+                ]
             },
             {
                 text: 'Operations',
@@ -35,10 +58,6 @@ export default defineConfig({
                     { text: 'Schema compatibility', link: '/schema-compatibility' },
                     { text: 'MQTT 5 frame spec', link: '/mqtt5-frame-spec' }
                 ]
-            },
-            {
-                text: 'Tools',
-                items: [{ text: 'Writing a simulator', link: '/writing-a-simulator' }]
             },
             {
                 text: 'Packages',

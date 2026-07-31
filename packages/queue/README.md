@@ -4,6 +4,8 @@ A lease-based work queue for [Source RPC](https://github.com/source-repo/rpc) ne
 
 This is the ecosystem's first tool node: its own package with its own version, deliberately *not* bound to the rpc/rpc-cli versions-together rule, built against the library's public APIs only.
 
+**Documentation: [source-repo.github.io/rpc](https://source-repo.github.io/rpc/)** — the library guide this queue builds on, with search.
+
 ## The one paragraph to read before trusting it
 
 **A work-queue handler may run more than once.** A lease can expire after the handler changed the world but before completion reached the queue. Task IDs and lease tokens protect queue state; they do not make arbitrary external side effects exactly once. Handlers that cause non-repeatable effects need domain idempotency or a transactional design of their own.

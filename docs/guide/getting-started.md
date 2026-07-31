@@ -74,9 +74,12 @@ Three things worth noticing:
 
 ## Where to go next
 
-This page is deliberately the ten-minute version. The full story currently lives in the package READMEs, and is moving here section by section:
+This page is deliberately the ten-minute version.
 
-- [`@source-repo/rpc`](https://github.com/source-repo/rpc/blob/main/packages/rpc/README.md) — commands and semantics, events and reconnection, observable components, command authority, topology and context, contracts and validation, authentication and signing, MQTT.
-- [`@source-repo/rpc-cli`](https://github.com/source-repo/rpc/blob/main/packages/cli/README.md) — extract and check contracts, the browser console, taps, record and replay, fakes, the MCP server, `find` by capability.
-- [`@source-repo/queue`](https://github.com/source-repo/rpc/blob/main/packages/queue/README.md) — the lease-based work queue.
+- [Connecting](./connecting.md) — what a network of these looks like: ports, buses, discovery, serving over a connection you open.
+- [Commands](./commands.md) — semantics, idempotency, serialised execution, the bounded mailbox.
+- [Observable components](./components.md) — cached props and state, statuses that tell the truth, React integration.
+- [Command authority](./authority.md) and [Topology](./topology.md) — the plant's arbitration concept, and where everything sits.
+- [Contracts and validation](./contracts.md) — schemas, runtime checking, serving older callers, `describe()`.
+- [The command line](../tools/cli.md), [the console](../tools/console.md) and [the MCP server](../tools/mcp.md).
 - [Deploying a network](../deploying-a-network.md) — brokers, hubs, TLS and signing, and what a bus actually is.
