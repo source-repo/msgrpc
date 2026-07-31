@@ -1,28 +1,31 @@
 # Extensions and an ecosystem
 
-Designs that are **not built**. Everything else in `docs/` describes what Source RPC does; this describes what it could grow, and is kept separate for that reason. Distilled from [a long conversation](archived/rpc-extensions-chat.md), then hardened by [a critical review](archived/extensions-and-ecosystem-review.md) that checked every load-bearing claim against the code — seven findings resolved in review, and the one it left open settled shortly after: process values are class instances, and primitive properties are rejected. The paths tried and abandoned are collected at the end rather than left lying across the middle.
+What Source RPC could grow — and, since the 4.1–4.3 releases, in large part what it did. This began as the ledger of designs that were **not built**; the load-bearing half has since shipped, and each section now opens with where it stands. What is built lives as fact in the code, the CHANGELOG and the package READMEs; what remains design stays here, keeping the reasoning that will shape it. Distilled from [a long conversation](archived/rpc-extensions-chat.md), then hardened by [a critical review](archived/extensions-and-ecosystem-review.md) that checked every load-bearing claim against the code — seven findings resolved in review, and the one it left open settled shortly after: process values are class instances, and primitive properties are rejected. The paths tried and abandoned are collected at the end rather than left lying across the middle.
 
 One thread runs through all of it. The library already makes a network **self-describing**: a class is the contract, `extract` reads it off the AST before minification can touch it, and `describe()` serves it at runtime. Almost every idea below is a consequence of that one property — once a peer can say what it is, a console, a compiler, another peer or a model can all work out what to do with it without being told in advance.
 
 A second thread emerged in review: the pieces keep meeting in the middle. The command semantics shipped for idempotency turn out to grade the UI's confirmation dialogs; the place tree wanted for viewing ranks the wiring picker; the designations a sector's drawing standard prints on cabinet labels are the role names a capability contract declares. Where a design needed a mechanism, an existing one kept fitting — which is usually the sign the designs pull in one direction.
 
-| | |
-| --- | --- |
-| [Process values](#process-values) | the gap in the programming model, closed as objects |
-| [The concurrency model](#the-concurrency-model) | the peer is an actor; say so and default accordingly |
-| [Observable components and work queues](#observable-components-and-work-queues) | the 4.1/4.2 spec, adopted with six amendments |
-| [Server-driven UI](#server-driven-ui) | a node describes its interface; something else renders it |
-| [Capability discovery](#capability-discovery) | find by what a peer *does*, address by *which* peer it is |
-| [Actions and events](#actions-and-events) | interaction surfaces a console and a model share |
-| [Server-driven logic](#server-driven-logic) | expression trees, structure, and where declarative stops |
-| [Execution tiers](#execution-tiers-and-the-real-time-boundary) | how far down toward the metal this goes |
-| [Authorization](#authorization) | seven rules, held rigidly |
-| [A business: assessment first](#a-business-assessment-first) | why any of it gets maintained |
-| [Where things belong](#where-things-belong) | what is core, what is a package |
-| [What to build first](#what-to-build-first) | the two features everything else waits on |
-| [Considered and dropped](#considered-and-dropped) | with the reasons, so they stay dropped |
+| | | |
+| --- | --- | --- |
+| [Process values](#process-values) | the gap in the programming model, closed as objects | carrier **built**; domain classes pending |
+| [The concurrency model](#the-concurrency-model) | the peer is an actor; say so and default accordingly | **built** 4.2.0 |
+| [Observable components and work queues](#observable-components-and-work-queues) | the 4.1/4.2 spec, adopted with six amendments | **built** 4.2.0 / queue 0.2.0 |
+| [Topology and structural context](#topology-and-structural-context) | parent, owner, and inherited context, federated | **built** 4.2.0–4.3.0 |
+| [Server-driven UI](#server-driven-ui) | a node describes its interface; something else renders it | design |
+| [Capability discovery](#capability-discovery) | find by what a peer *does*, address by *which* peer it is | **built** 4.2.0 |
+| [Actions and events](#actions-and-events) | interaction surfaces a console and a model share | design |
+| [Server-driven logic](#server-driven-logic) | expression trees, structure, and where declarative stops | design; its structure axis **built** |
+| [Execution tiers](#execution-tiers-and-the-real-time-boundary) | how far down toward the metal this goes | positioning |
+| [Authorization](#authorization) | seven rules, held rigidly | held through every build |
+| [A business: assessment first](#a-business-assessment-first) | why any of it gets maintained | direction |
+| [Where things belong](#where-things-belong) | what is core, what is a package | held; queue landed as placed |
+| [What to build first](#what-to-build-first) | the two features everything else waited on | **all of it built** |
+| [Considered and dropped](#considered-and-dropped) | with the reasons, so they stay dropped | standing |
 
 ## Process values
+
+**Status: the carrier is built; the vocabulary is next.** The observable component shipped in 4.2.0 — snapshots, epoch/revision, per-channel status, extraction, validation, the console panel — exactly as the layered design below places it. What remains design here is the entry: the process-value domain classes (`Temperature`, `Setpoint`) and the sector contract packages they live in, and with them the extractor's projection rule.
 
 **A process value is a class instance, and there are no primitive properties.** The `@rpcProperty` decorator on a bare field — this section's earlier draft — is rejected outright, not kept as sugar and not kept as a debug view; the reasoning is written into [the dropped list](#considered-and-dropped) so it stays rejected. Everything downstream that binds live state — the UI's `bind`, the expression trees' `state.*` references — builds on this section, which is why it sits first in [the build order](#what-to-build-first).
 
@@ -50,6 +53,8 @@ Two details of broadcast filtering carry over, and one placement follows from th
 
 ## The concurrency model
 
+**Status: built** (4.2.0). Graded execution defaults, the bounded mailbox answering `Busy`, and setpoint-shaped commands conflating into `Superseded` all shipped as designed.
+
 **A peer is an actor in every sense that carries load, and the design's job is to say so and default accordingly.** The library already has the pieces: `execution: 'serial'` is a mailbox — one promise chain per instance, or per key, which is actor-per-unit; the deadline is deliberately read *after* the wait in that queue, so a command that queued past its ttl is refused rather than applied late — the stale-setpoint hazard every naive mailbox has, already handled; and the idempotency claim happens before the run, so a duplicate is recognised before a sibling starts the same command alongside it.
 
 The vocabulary matters less than it seems. Erlang's `gen_server` — the actor tradition's own workhorse — is a process with named operations, handling one message at a time, where `call` blocks the caller until the reply. That *is* typed methods over async. What is genuinely modern is not tell-only messaging but **explicit concurrency discipline instead of accidental interleaving** — and accidental interleaving is exactly what the current default permits: `parallel` execution on a stateful node lets two awaited calls interleave at every `await` inside them, shared-state races without a thread in sight. That, not the class syntax, is the discredited part of OOP.
@@ -63,6 +68,8 @@ The vocabulary matters less than it seems. Erlang's `gen_server` — the actor t
 What is deliberately not imported from actor frameworks: tell-first untyped messaging, which would trade away the typed contract that is this library's entire value; supervision trees as doctrine, though the owner tree is already the right shape if supervision ever wants a home; and virtual-actor machinery — the plant hands out identity physically, and nobody needs a framework to invent it.
 
 ## Observable components and work queues
+
+**Status: built.** The components shipped in 4.2.0 with every amendment below honoured; the queue shipped as `@source-repo/queue` — 0.1.0 with the full lease state machine, 0.2.0 with `latest` task context made real by the context resolver.
 
 [The 4.1/4.2 design spec](extending-rpc-design/source-rpc-next-design-spec.md) is **adopted** as the design for both capabilities — the observable component (cached `props`/`state` snapshots, epoch/revision ordering, race-free subscribe, per-channel status) and the lease-based work queue (acquire-ID replay, lease tokens, retry and dead-letter state machine, reject-new capacity, the at-least-once statement said plainly). It was written against the 4.0 code and its refusals are as valuable as its designs: no stringly-typed dispatch beside the typed contract, no MQTT shared subscription dressed up as a work queue, no zero-copy claim the runtime cannot keep. Its §2.1 prerequisites — the per-call timeout, the zero-timeout timer bug, event-subscription reference counting, peer lifecycle forwarding — are core fixes worth shipping ahead of everything else. Six amendments ride the adoption.
 
@@ -79,6 +86,8 @@ What is deliberately not imported from actor frameworks: tell-first untyped mess
 **Per-value filtering stays with the value**, as the [process-values section](#process-values) records: the component coalesces the channel, the process value filters itself.
 
 ## Topology and structural context
+
+**Status: built**, across 4.2.0 and 4.3.0: the federated topology core with durable epochs, the owner fence on calls, opt-in remote mutation, the console's trees, and then the whole context layer — tokens, providers, the cross-host resolver with atomic remounts and named rings, and bounded capture. The coordinated `TopologyAuthority` remains what the amendments made it: a deferred adapter contract.
 
 [The distributed topology and context spec](extending-rpc-design/source-rpc-distributed-context-topology-design-spec.md) is **adopted with amendments**, settled through [a review round](extending-rpc-design/source-rpc-distributed-context-topology-design-spec-review-review.md) that accepted most of the first review and improved the rest. The spine survives intact: `parent` is physical location, `owner` is logical scope, identity depends on neither, paths are display data derived by lookup, context is an immutable versioned view inherited through exactly one declared axis, and shared mutable state stays in an authoritative component rather than becoming transparent distributed memory. Its Phase 0 prerequisites are the component work already shipped, which is the sequencing test an honest spec passes.
 
@@ -99,6 +108,8 @@ What is deliberately not imported from actor frameworks: tell-first untyped mess
 **The resolver is last, and context is its own milestone.** Topology core, then invocation and fencing, then the queue envelope, and only then the distributed context resolver — the largest single piece of machinery in the spec, built to move the least dynamic data, which is exactly why it must not lead. The queue adopts the `snapshot | latest` context discriminant on the wire now and capability-gates `latest` until the resolver exists: specify the context model now, implement the distributed resolver later.
 
 ## Server-driven UI
+
+**Status: design.** Its gating dependency — process values to `bind` against — now exists in carrier form, so this is buildable when wanted.
 
 A scripted node on a plant floor is often behind NAT with one outbound MQTT connection. It cannot open an HTTP port, so its UI has to travel the way everything else does — over the bus.
 
@@ -138,6 +149,8 @@ The honest residue: a granted, authenticated peer lying in its own panel about i
 
 ## Capability discovery
 
+**Status: built** (4.2.0). `implements` becomes a package-qualified capability at extract time with the closure flattened in, `describe()` serves it from the schema, and `source-rpc find` and the MCP `find_capability` answer with who implements what — a hallucinated capability answering empty, and a wrong-shaped call failing `InvalidParams` before the wire.
+
 Three distinct things get confused with each other, and the design only works when they stay apart:
 
 | | | |
@@ -160,6 +173,8 @@ Capability packages have a governance model with two tiers. Where a sector has p
 
 ## Actions and events
 
+**Status: design.** The designation vocabulary it leans on arrives with the sector contract packages.
+
 Two small capability interfaces, distributed as contract-only packages with no implementation and no dependencies. A node implements one and becomes usable by any console or agent without either side being rebuilt.
 
 **`ActionProvider`** — what a user may do *right now*. The node evaluates its own state and returns only valid actions, so a running pump does not offer "Start". An action returns either a toast or a `ui_modal` naming the qualified compiler capability it needs, its layout, and a window size. The console never compiles a dashboard until an action asks for one, and it never encodes any of the node's business logic.
@@ -179,6 +194,8 @@ The hard stop the industry does accept already exists, at the right boundary: th
 Because the CLI already hosts an MCP server, all of this reaches a model through the same discovery cache and the same schemas the human sees. There is no second implementation to drift.
 
 ## Server-driven logic
+
+**Status: design — except the structure it consumes.** Both axes now exist as topology records and the console draws both trees, so the selectors' "where" coordinate is real; the expression trees and the flow runner remain design.
 
 The same move as the UI, one layer down: if a node can describe its interface, a *flow* can describe orchestration. A condition is a tree of typed nodes — operators applied to operands, operands being references or literals — and the runner never parses anything, because the tree already is the parse:
 
@@ -210,6 +227,8 @@ The grammar is a recursive union type, which the extractor already handles, so a
 
 ## Execution tiers and the real-time boundary
 
+**Status: positioning, unchanged.**
+
 This is where the conversation stopped flattering itself, and the honesty is the useful part.
 
 **A mesh on a general-purpose OS cannot do hard real-time.** Not with Rust, not with WebAssembly, not with careful code. The Linux CFS or the Windows kernel will preempt a thread for a few hundred microseconds to service an interrupt, and worst-case execution time is destroyed. TwinCAT achieves what it achieves by hijacking a core and bypassing the kernel. A cutting tool does not care about average latency; it cares that the command is never late.
@@ -239,6 +258,8 @@ On a Linux PLC the same idea removes the network entirely. A real-time daemon dr
 A few dozen lines of deliberately crude Structured Text de-risk everything above them. Synthesised logic can be deployed a hundred times a day, and the worst case is a rejected command or a halted machine.
 
 ## Authorization
+
+**Status: held, rigidly, through every build.** Each shipped feature carried its authorization paragraph before implementation — the component channel's subscription path, the queue's produce/consume/admin split, topology mutation's opt-in, the context service's silent local-exposure filtering — and the rule did its work: no feature shipped with authorization as an afterthought.
 
 Every feature above causes calls to happen on real devices, so the authorization model is stated once and held rigidly. None of its rules is new — each already ships somewhere in the library, which is the evidence the model is livable rather than aspirational:
 
@@ -277,6 +298,8 @@ Core versus ecosystem is the wrong axis. The repo already has a sharper one, fro
 Three placement notes. **Components span both packages** — the runtime in `rpc`, the extraction in `rpc-cli` — so that feature is a coupled release across both, which the versions-together rule absorbs but the plan should state. **A workspace is not the versions-together rule**: rpc and rpc-cli version together because the CLI depends on the library's exact shape; `packages/queue` shares the repository for its CI and HEAD-parity tests and versions on its own — worth a line in `CLAUDE.md` the day the workspace appears, so nobody generalizes the rule by accident. And **the contract-only packages are the interoperability crown jewels**: they can live in separate repositories, but which packages exist is governed centrally, while role naming inside a sector package defers to that sector's standards body.
 
 ## What to build first
+
+**Status: all of it built**, in the order argued for below, across 4.1–4.3 — and the ecosystem test this section names was run: `packages/queue` was built against public APIs only, gated on the version constant and the component machinery, exactly as written. The section stands as the record of the order chosen and why.
 
 Not the exciting parts. Two features change the schema, and everything else in this document is downstream of them:
 
