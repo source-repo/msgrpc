@@ -968,3 +968,185 @@ textarea.control {
     color: var(--bad);
     border-color: var(--bad);
 }
+
+/*
+ * The component panel: the library's store rendered honestly. Status is a badge, staleness dims
+ * the data without hiding it, and a forced value is loud - the person at this console is exactly
+ * who must not mistake a decree for a measurement.
+ */
+
+.component {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    margin-bottom: 6px;
+    padding: 9px 12px;
+    background: var(--panel);
+}
+
+.component-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 12px;
+    flex-wrap: wrap;
+}
+
+.component-head .toggle {
+    margin-left: auto;
+}
+
+.comp-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+}
+
+.status-badge {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: var(--mono);
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+.status-badge.live {
+    border-color: var(--ok);
+    color: var(--ok);
+}
+
+.status-badge.stale {
+    border-color: var(--warn);
+    color: var(--warn);
+}
+
+.status-badge.closed {
+    border-color: var(--bad);
+    color: var(--bad);
+}
+
+.component-body {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+}
+
+/* Dimmed, never blanked: last known with its age on it is the whole point of keeping it. */
+.component.stale .component-body {
+    opacity: 0.55;
+}
+
+.value-table {
+    min-width: 200px;
+    flex: 1;
+}
+
+.value-table h4 {
+    margin: 0 0 4px;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+}
+
+.value-row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(38, 46, 58, 0.6);
+    font-size: 13px;
+}
+
+.value-name {
+    color: var(--muted);
+    min-width: 110px;
+}
+
+.value {
+    word-break: break-word;
+}
+
+.value .unit {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.quality {
+    padding: 0 7px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: var(--mono);
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+.quality.q-good {
+    border-color: var(--ok);
+    color: var(--ok);
+}
+
+.quality.q-stale,
+.quality.q-uncertain {
+    border-color: var(--warn);
+    color: var(--warn);
+}
+
+.quality.q-bad {
+    border-color: var(--bad);
+    color: var(--bad);
+}
+
+/* Forced is not a quality grade, so it does not borrow the stale palette: visibly its own thing. */
+.quality.forced {
+    border-color: #c792ea;
+    color: #c792ea;
+}
+
+.component-error {
+    color: var(--bad);
+    font-size: 12px;
+    margin: 6px 0 0;
+}
+
+/* The semantics grade on a method row, readable before the panel is opened. */
+.sem {
+    flex: none;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-family: var(--mono);
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+.sem.idempotent {
+    border-color: var(--accent-dim);
+    color: var(--accent);
+}
+
+.sem.once {
+    border-color: var(--warn);
+    color: var(--warn);
+}
+
+/* The arm-then-fire step for a command that cannot be taken back, in the console's own chrome. */
+.confirm {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    margin: 8px 0;
+    border: 1px solid var(--warn);
+    border-radius: 6px;
+    background: rgba(240, 180, 41, 0.08);
+    font-size: 12px;
+}
+
+.confirm span {
+    flex: 1;
+}

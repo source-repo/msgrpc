@@ -7,6 +7,7 @@ import { ChatMessage, ChatService } from './ChatService'
 // read the source of at runtime, so shipping its contract is what lets another console show
 // `say(from: string, text: string)` instead of `say(…)`.
 import chatContract from './chat.types.json'
+import { ComponentPanel } from './ComponentPanel'
 import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
@@ -375,6 +376,20 @@ export const App = () => {
                                         {namespace.created ? ' · created at runtime' : ''}
                                     </span>
                                 </h2>
+                                {/* Observed by the page itself over its own peer link - the console
+                                    relays nothing. Refreshing the description after subscribing is
+                                    only so the observer count moves while you watch it. */}
+                                {namespace.component && (
+                                    <ComponentPanel
+                                        peer={selected!}
+                                        namespace={namespace.name}
+                                        component={namespace.component}
+                                        server={peer}
+                                        onSubscribed={() => {
+                                            if (service && selected) void service.describe(selected).then(setDescribed).catch(() => undefined)
+                                        }}
+                                    />
+                                )}
                                 {namespace.methods.map((method) => (
                                     <MethodPanel
                                         key={method.name}

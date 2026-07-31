@@ -263,3 +263,30 @@ test('an invalid snapshot commit is refused before it becomes current', async (t
 
     await server.close()
 })
+
+test('a server observes a component over its own dialled link, like a console page does', async (t) => {
+    const host = new RpcServer({ name: peer('host3870'), transports: [{ port: 3870 }] })
+    await host.ready()
+    const oven = new Oven()
+    host.exposeClassInstance(oven)
+
+    // The observer is itself a server that dials out - the browser console's exact shape, which is
+    // the peer this surface exists for: it serves chat and observes components over one link.
+    const page = new RpcServer({ name: peer('page3870'), transports: [{ connect: 'http://localhost:3870' }] })
+    const remote = await page.component<Oven>('oven', peer('host3870'))
+
+    t.is(remote.props.unit, '°C')
+    t.is(await remote.setMode('heating'), 'heating')
+    await waitFor(() => remote.state.mode === 'heating')
+
+    const store = remote[rpcComponent]
+    t.is(store.getSnapshot().status, 'live')
+
+    // The host going away must read as staleness, not as a number that stopped moving.
+    await host.close()
+    await waitFor(() => store.getSnapshot().status === 'stale')
+    t.is(remote.state.mode, 'heating', 'last known stays readable while stale')
+
+    await page.close()
+    t.is(store.getSnapshot().status, 'closed', 'closing the observer tells its stores')
+})

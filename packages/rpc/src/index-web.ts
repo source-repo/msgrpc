@@ -9,6 +9,11 @@ export { RpcServerBase as RpcServer } from './RpcServer.js'
 export * from './Transports/Presence.js'
 export * from './Transports/SocketIoClientTransport.js'
 
+// Both halves of observable components: a page can host one and, through the server it dials
+// with, observe one - which is exactly what the console's component panel does.
+export * from './RPC/Component.js'
+export * from './RPC/ComponentClient.js'
+
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'
 export * from './RPC/Tokens.js'

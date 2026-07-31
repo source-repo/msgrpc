@@ -16,17 +16,28 @@ export type TypeNode =
     | { kind: 'union'; options: TypeNode[] }
     | { kind: 'ref'; name: string }
 
+/** What calling a method does to the world, when the contract says. Absent means it does not say. */
+export type RpcMethodSemantics = 'query' | 'idempotent-command' | 'non-repeatable-command'
+
 export interface DescribedMethod {
     name: string
     params?: TypeNode[]
     paramNames?: string[]
     rest?: TypeNode
     returns?: TypeNode
+    semantics?: RpcMethodSemantics
 }
 
 export interface DescribedEvent {
     name: string
     params?: TypeNode[]
+    subscribers: number
+}
+
+/** An observable component's shape: structure and a live count, never the snapshot itself. */
+export interface DescribedComponent {
+    props?: TypeNode
+    state?: TypeNode
     subscribers: number
 }
 
@@ -36,6 +47,7 @@ export interface DescribedNamespace {
     className?: string
     created: boolean
     emitter: boolean
+    component?: DescribedComponent
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }

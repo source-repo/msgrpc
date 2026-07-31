@@ -1,4 +1,6 @@
+import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
+import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, withIntrospection } from './RPC/Introspection.js'
@@ -133,6 +135,14 @@ export class RpcServerBase implements IManageRpc {
     transports: Transport[] = []
     /** Peer name -> transport, shared by this server's modules and nothing outside them. */
     readonly peers = new PeerRegistry()
+    /** Created on the first component() call; every channel this server observes lives in it. */
+    private componentChannels?: ComponentChannels
+    /**
+     * The lifecycle feed component channels stale from. RpcClient re-emits transport events on
+     * itself and hands the channels `this`; this class deliberately does not re-emit - transports
+     * are its public surface - so the channels get their own emitter, fed from attach().
+     */
+    private readonly componentLifecycle = new EventEmitter()
     options: RpcServerOptions = { name: '*', transports: [], useMsgPack: true, readyTimeout: 30000 }
     constructor(options: Partial<RpcServerOptions> = {}) {
         this.options = { ...this.options, ...options }
@@ -280,6 +290,12 @@ export class RpcServerBase implements IManageRpc {
         // way RpcClient does it - otherwise a server that watches its peers goes deaf after a blip
         // with nothing to say so.
         transport.on(TransportEvent.connected, () => void this.caller.resubscribe().catch((e) => this.emitSafely('resubscribeError', e)))
+        // Component channels learn staleness from these three. Link down stales every picture;
+        // a peer going or being displaced stales only that peer's. Recovery needs no listener
+        // here: resubscribe() above replays the snapshot subscription, and the server answers a
+        // resubscribe with a targeted snapshot, which is what flips a channel back to live.
+        for (const event of [TransportEvent.disconnected, TransportEvent.peerGone, TransportEvent.peerDisplaced])
+            transport.on(event, (payload: unknown) => this.componentLifecycle.emit(event, payload))
     }
     /**
      * Pass a presence change from the transport that saw it to the other links: told directly to
@@ -330,6 +346,18 @@ export class RpcServerBase implements IManageRpc {
         return this.caller.proxy<T>(name, target ?? '*')
     }
 
+    /**
+     * Observe another peer's component over this server's own link and name - the mirror of
+     * RpcClient.component, for the same reason proxy() exists: a peer that both serves and calls
+     * needs one object, and a browser page hosting a service is exactly such a peer.
+     */
+    async component<T extends RpcComponentLike>(name: string, target?: string): Promise<RpcComponentProxy<T>> {
+        await this.ready()
+        this.componentChannels ??= new ComponentChannels(this.caller, this.componentLifecycle)
+        const channel = await this.componentChannels.open(name, target)
+        return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
+    }
+
     async close() {
         // Construction is asynchronous, so a server closed straight after `new` was closing an
         // empty transport list while its listener was still being built - which then bound its
@@ -338,6 +366,9 @@ export class RpcServerBase implements IManageRpc {
         // failed and there was nothing to leak. Awaited settled-or-failed: initError is close's
         // business to ignore, not to wait out.
         await this.starting.catch(() => undefined)
+        // Stores are told 'closed' rather than left waiting on a link that is gone; the server at
+        // the far end reaps a departed subscriber, so local teardown is all that is owed.
+        this.componentChannels?.closeAll()
         this.caller.failPendingCalls('server closed')
         this.caller.subscriptions.clear()
         await this.caller.close()

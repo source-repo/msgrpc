@@ -85,6 +85,11 @@ export const MethodPanel = ({
         params.map((type) => ({ text: initialText(type, types), include: !isOptional(type) }))
     )
     const [busy, setBusy] = useState(false)
+    // A non-repeatable command is armed rather than fired: the first click turns the button into a
+    // confirmation in the console's own chrome, and only the second sends. Native chrome and not
+    // window.confirm - the trust model grants UI to the console, never to a dialog the browser
+    // draws over it, and a blocking dialog freezes every live pane behind it.
+    const [confirming, setConfirming] = useState(false)
     const [outcome, setOutcome] = useState<{ ok: boolean; text: string } | null>(null)
     // Kept rather than shown once and forgotten: one call's timing says almost nothing, and the
     // question worth asking of a device is what it does the twentieth time.
@@ -173,6 +178,12 @@ export const MethodPanel = ({
             <button className="method-head" onClick={() => setOpen(!open)} aria-expanded={open}>
                 <span className="chevron">{open ? '▾' : '▸'}</span>
                 <code>{signature}</code>
+                {/* The grade worth seeing before opening: a query reads as safe at a glance, and a
+                    command that cannot be taken back says so from the list. Undeclared shows
+                    nothing here - its warning belongs next to the button that would press it. */}
+                {method.semantics === 'query' && <span className="sem query">query</span>}
+                {method.semantics === 'idempotent-command' && <span className="sem idempotent">idempotent</span>}
+                {method.semantics === 'non-repeatable-command' && <span className="sem once">won't repeat</span>}
             </button>
             {open && (
                 <div className="method-body">
@@ -206,13 +217,44 @@ export const MethodPanel = ({
                     )}
                     {method.rest && <p className="muted">Takes further {typeText(method.rest)} arguments, which this form does not send.</p>}
                     {!method.params && <p className="muted">No schema describes this method, so its arguments cannot be shown as fields.</p>}
+                    {!method.semantics && (
+                        <p className="muted">The contract does not say what calling this does. Treat it as a command until someone who knows says otherwise.</p>
+                    )}
+                    {confirming && (
+                        <div className="confirm">
+                            <span>
+                                Not free to repeat — sent once, it has happened. Send <code>{method.name}</code>?
+                            </span>
+                            <button
+                                className="primary"
+                                onClick={() => {
+                                    setConfirming(false)
+                                    void invoke()
+                                }}
+                            >
+                                send once
+                            </button>
+                            <button className="toggle" onClick={() => setConfirming(false)}>
+                                cancel
+                            </button>
+                        </div>
+                    )}
                     <div className="actions">
-                        <button className="primary" onClick={() => void invoke()} disabled={busy}>
+                        <button
+                            className="primary"
+                            onClick={() => (method.semantics === 'non-repeatable-command' ? setConfirming(true) : void invoke())}
+                            disabled={busy || confirming}
+                        >
                             {busy ? 'calling…' : 'Call'}
                         </button>
-                        <button className="toggle" onClick={() => void invoke(REPEAT)} disabled={busy} title="call it repeatedly and keep the timings">
-                            ×{REPEAT}
-                        </button>
+                        {/* The declaration is what buys the repeat button: benchmarking is for
+                            methods whose contract says repeating them is free. On a non-repeatable
+                            or undeclared method, twenty timed calls is twenty commands. */}
+                        {(method.semantics === 'query' || method.semantics === 'idempotent-command') && (
+                            <button className="toggle" onClick={() => void invoke(REPEAT)} disabled={busy} title="call it repeatedly and keep the timings">
+                                ×{REPEAT}
+                            </button>
+                        )}
                         <button className="toggle" onClick={copyCommand} title="the command line that makes the same call">
                             {copied ? 'copied' : 'copy as CLI'}
                         </button>

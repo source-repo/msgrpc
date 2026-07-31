@@ -117,6 +117,9 @@ export class RpcClient extends EventEmitter {
     /** Why init() failed, rethrown by ready() so the caller sees the cause and not a timeout. */
     private initError?: unknown
     async close() {
+        // Stores are told 'closed' rather than left waiting on a link that is gone; the server at
+        // the far end reaps a departed subscriber, so local teardown is all that is owed.
+        this.componentChannels?.closeAll()
         this.rpcClient?.failPendingCalls('client closed')
         this.rpcClient?.subscriptions.clear()
         await this.rpcClient?.close()
