@@ -108,6 +108,18 @@ export interface PeerChange {
  */
 export type PeerRole = 'broker' | 'console' | 'page' | 'device' | 'undescribed'
 
+/**
+ * Where a peer sits, harvested from descriptions the console already made - the same bargain the
+ * roles strike: peers structure themselves as the network is used, never described on sight.
+ */
+export interface PeerStructure {
+    /** The peer whose host root this one is attached under, root to root. */
+    parent?: string
+    place?: string[]
+    label?: string
+    owner?: { peer: string; instance: string }
+}
+
 /** A tap the console holds, and where it holds it. */
 export interface ConsoleTap {
     token: string
@@ -220,6 +232,7 @@ export class ConsoleService extends EventEmitter {
 
     /** What each peer turned out to be, from descriptions already made. */
     private readonly roles = new Map<string, PeerRole>()
+    private readonly structure = new Map<string, PeerStructure>()
 
     notePresence(change: PeerChange) {
         this.comings.unshift(change)
@@ -264,6 +277,9 @@ export class ConsoleService extends EventEmitter {
             network: this.startedWith,
             // Filled in as peers are described for other reasons, so this costs no extra traffic.
             roles: Object.fromEntries(this.roles),
+            // Same bargain as roles: filled in as peers are described, so the tree grows as the
+            // network is used and costs nothing on a network that is only being watched.
+            structure: Object.fromEntries(this.structure),
             // Which link each peer was found on. The console holds the browser's, the broker's and
             // the hub's at once, and on a plant where the devices are on one and the HMIs on
             // another that is the first thing worth knowing about a peer.
@@ -298,6 +314,13 @@ export class ConsoleService extends EventEmitter {
             const description = await proxy.describe()
             // Every description teaches what the peer is, whoever asked for it and why.
             this.roles.set(peer, roleFrom(description))
+            if (description.host)
+                this.structure.set(peer, {
+                    ...(description.host.parent ? { parent: description.host.parent.peer } : {}),
+                    ...(description.host.owner ? { owner: { peer: description.host.owner.peer, instance: description.host.owner.instance } } : {}),
+                    ...(description.host.place ? { place: description.host.place } : {}),
+                    ...(description.host.label !== undefined ? { label: description.host.label } : {})
+                })
             return description
         } catch (e) {
             const failure = asFailure(e)
@@ -368,6 +391,7 @@ export class ConsoleService extends EventEmitter {
     forgetBus(peer: string) {
         this.knownBuses.delete(peer)
         this.roles.delete(peer)
+        this.structure.delete(peer)
     }
 
     /**

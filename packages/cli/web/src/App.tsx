@@ -13,7 +13,7 @@ import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
 import { Presence } from './Presence'
-import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, socketPath, typeText } from './types'
+import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, PeerStructure, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, socketPath, typeText } from './types'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -184,6 +184,7 @@ export const App = () => {
     const [links, setLinks] = useState<{ [peer: string]: string }>({})
     const [network, setNetwork] = useState<{ broker?: string; hub?: string; prefix?: string }>({})
     const [roles, setRoles] = useState<{ [peer: string]: PeerRole }>({})
+    const [structure, setStructure] = useState<{ [peer: string]: PeerStructure }>({})
     const [comings, setComings] = useState<PeerChange[]>([])
     const [eventFilter, setEventFilter] = useState('')
     const [eventsPaused, setEventsPaused] = useState(false)
@@ -196,6 +197,7 @@ export const App = () => {
         setLinks(state.links ?? {})
         setNetwork(state.network ?? {})
         setRoles(state.roles ?? {})
+        setStructure(state.structure ?? {})
     }, [service])
 
     // The tab is where two consoles are told apart when both are open, so it carries the peer name
@@ -330,22 +332,61 @@ export const App = () => {
                     <span className={`status ${status === 'connected' ? 'ok' : 'warn'}`}>{status}</span>
                 </header>
                 {peers.length === 0 && <p className="muted">Waiting for a peer to announce itself…</p>}
-                {peers.map((peer) => (
-                    <button key={peer} className={`peer${peer === selected ? ' selected' : ''}`} onClick={() => void select(peer)}>
-                        <span className={`dot${offline.has(peer) ? ' off' : ''}`} />
-                        {peer}
-                        {peer === me && <span className="you">you</span>}
-                        {/* Which peer to select. The tab count says a message is waiting; without
-                            this you would have to click through every peer to find out whose. */}
-                        {unread[peer] > 0 && <span className="count">{unread[peer]}</span>}
-                        {/* Which link it was found on. On a plant with the devices on a broker and
-                            the HMIs on a hub, that is the first thing worth knowing about a peer. */}
-                        {/* Learned from a description already made, so peers label themselves as
-                            the network is used rather than by describing everything on sight. */}
-                        {roles[peer] && <span className={`role ${roles[peer]}`}>{roles[peer] === 'undescribed' ? 'no contract' : roles[peer]}</span>}
-                        {links[peer] && links[peer] !== 'this console' && <span className="link">{links[peer]}</span>}
-                    </button>
-                ))}
+                {/*
+                 * A tree over what the descriptions have taught so far: a peer whose host root is
+                 * attached under another renders beneath it, place beside the name. A peer with no
+                 * declared structure - or whose parent is not here - sits at the root, which is
+                 * where an unknown belongs. The tree grows as the network is used, like the roles.
+                 */}
+                {(() => {
+                    const known = new Set(peers)
+                    const roots = peers.filter((name) => {
+                        const parent = structure[name]?.parent
+                        return !parent || parent === name || !known.has(parent)
+                    })
+                    const entry = (name: string, depth: number, seen: Set<string>) => (
+                        <div key={name}>
+                            <button
+                                className={`peer${name === selected ? ' selected' : ''}`}
+                                style={depth > 0 ? { paddingLeft: 10 + depth * 14 } : undefined}
+                                onClick={() => void select(name)}
+                            >
+                                <span className={`dot${offline.has(name) ? ' off' : ''}`} />
+                                <span className="peer-lines">
+                                    <span>
+                                        {name}
+                                        {name === me && <span className="you">you</span>}
+                                        {/* Which peer to select. The tab count says a message is
+                                            waiting; without this you would have to click through
+                                            every peer to find out whose. */}
+                                        {unread[name] > 0 && <span className="count">{unread[name]}</span>}
+                                        {/* Learned from a description already made, so peers label
+                                            themselves as the network is used rather than by
+                                            describing everything on sight. */}
+                                        {roles[name] && <span className={`role ${roles[name]}`}>{roles[name] === 'undescribed' ? 'no contract' : roles[name]}</span>}
+                                        {/* Which link it was found on. On a plant with the devices
+                                            on a broker and the HMIs on a hub, that is the first
+                                            thing worth knowing about a peer. */}
+                                        {links[name] && links[name] !== 'this console' && <span className="link">{links[name]}</span>}
+                                    </span>
+                                    {(structure[name]?.place || structure[name]?.label) && (
+                                        <span className="peer-place">
+                                            {structure[name]?.place?.join(' / ') ?? ''}
+                                            {structure[name]?.label ? `  ${structure[name].label}` : ''}
+                                        </span>
+                                    )}
+                                </span>
+                            </button>
+                            {/* The visited set is the cycle guard: two hosts each claiming the
+                                other as parent must not recurse the sidebar to death. */}
+                            {!seen.has(name) &&
+                                peers
+                                    .filter((child) => structure[child]?.parent === name && child !== name)
+                                    .map((child) => entry(child, depth + 1, new Set([...seen, name])))}
+                        </div>
+                    )
+                    return roots.map((name) => entry(name, 0, new Set()))
+                })()}
             </aside>
 
             <main>

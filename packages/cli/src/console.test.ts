@@ -271,3 +271,52 @@ test('the console app is served and needs no network to render', async (t) => {
 
     await running.close()
 })
+
+test('peers() carries the structure the descriptions have taught, so the sidebar can grow a tree', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-tree'), transports: [{ port: 3989 }] })
+    await hub.ready()
+
+    // A machine host attached under the plant host, root to root, with its place declared at
+    // deployment - the shape a real commissioning produces.
+    const plantName = peer('plantHost')
+    const plant = new RpcServer({
+        name: plantName,
+        transports: [{ connect: 'http://localhost:3989' }],
+        exposeIntrospection: true,
+        topology: { place: ['site-7', 'building-b'], label: 'Building B' }
+    })
+    await plant.ready()
+    const machineName = peer('machineHost')
+    const machine = new RpcServer({ name: machineName, transports: [{ connect: 'http://localhost:3989' }], exposeIntrospection: true, topology: { place: ['site-7', 'building-b', 'cell-3'] } })
+    await machine.ready()
+    await machine.topology.updateHost({ parent: { peer: plantName, instance: '$host' } }, { expectedVersion: machine.topology.get('$host')!.version })
+    machine.exposeClassInstance(new Boiler())
+
+    const running = await startConsole({ hub: 'http://localhost:3989', port: 7394, host: '127.0.0.1', name: peer('console-tree'), callTimeout: 5000 })
+    const { client, remote } = await browserClient(running.url)
+    await pollUntil(
+        async () => (await remote.peers()).peers,
+        (found) => found.includes(machineName) && found.includes(plantName)
+    )
+
+    // Before anyone describes, nothing is structured: the tree grows as the network is used,
+    // and an unknown renders sensibly at the root rather than being probed on sight.
+    const before = await remote.peers()
+    t.falsy(before.structure[machineName])
+
+    await remote.describe(machineName)
+    const after = await remote.peers()
+    t.is(after.structure[machineName]?.parent, plantName, 'the described machine hangs under the plant host')
+    t.deepEqual(after.structure[machineName]?.place, ['site-7', 'building-b', 'cell-3'])
+    t.falsy(after.structure[plantName], 'the plant host is still undescribed, so it structures nothing yet')
+
+    await remote.describe(plantName)
+    const both = await remote.peers()
+    t.is(both.structure[plantName]?.label, 'Building B')
+
+    await client.close()
+    await running.close()
+    await machine.close()
+    await plant.close()
+    await hub.close()
+})

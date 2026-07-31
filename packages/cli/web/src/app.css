@@ -1230,3 +1230,22 @@ textarea.control {
     color: var(--accent);
     font-weight: 400;
 }
+
+/* The sidebar tree: name on the first line, derived place and label small beneath it. */
+.peer-lines {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1px;
+    min-width: 0;
+}
+
+.peer-place {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 180px;
+}

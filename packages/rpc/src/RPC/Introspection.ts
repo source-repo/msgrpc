@@ -108,6 +108,8 @@ export interface ServerDescription {
     host?: {
         root: RpcRef
         parent: RpcRef | null
+        /** The root's logical owner, when one is declared - the other axis a peer tree can group by. */
+        owner?: RpcRef | null
         place?: string[]
         label?: string
         capabilities: RpcTopologyCapabilities
@@ -312,6 +314,7 @@ export class Introspection {
                       host: {
                           root: root.ref,
                           parent: root.parent,
+                          ...(root.owner ? { owner: root.owner } : {}),
                           ...(hostTopology.place ? { place: hostTopology.place } : {}),
                           ...(root.label !== undefined ? { label: root.label } : {}),
                           capabilities: hostTopology.capabilities()

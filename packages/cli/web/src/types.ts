@@ -77,6 +77,7 @@ export interface ServerDescription {
     host?: {
         root: DescribedRef
         parent: DescribedRef | null
+        owner?: DescribedRef | null
         place?: string[]
         label?: string
         capabilities: {
@@ -179,6 +180,14 @@ export interface PeerChange {
 /** What a peer turned out to be, from a description the console had already made. */
 export type PeerRole = 'broker' | 'console' | 'page' | 'device' | 'undescribed'
 
+/** Where a peer sits, from the same descriptions: the sidebar's tree is drawn from these. */
+export interface PeerStructure {
+    parent?: string
+    place?: string[]
+    label?: string
+    owner?: DescribedRef
+}
+
 /** What the console's own service offers over msgrpc. */
 export interface ConsoleService {
     peers(): Promise<{
@@ -190,6 +199,8 @@ export interface ConsoleService {
         network: { broker?: string; hub?: string; prefix?: string }
         /** Filled in as peers are described for other reasons, so it costs no extra traffic. */
         roles: { [peer: string]: PeerRole }
+        /** Same bargain: the tree grows as the network is used. */
+        structure: { [peer: string]: PeerStructure }
     }>
     /** Who has come and gone, newest first — including before this page was opened. */
     presence(): Promise<{ changes: PeerChange[] }>

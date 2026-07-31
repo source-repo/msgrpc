@@ -26,6 +26,50 @@
         }
       ]
     },
+    "PeerStructure": {
+      "kind": "object",
+      "fields": {
+        "parent": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "place": {
+          "type": {
+            "kind": "array",
+            "items": {
+              "kind": "string"
+            }
+          },
+          "optional": true
+        },
+        "label": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
+        "owner": {
+          "type": {
+            "kind": "object",
+            "fields": {
+              "peer": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "instance": {
+                "type": {
+                  "kind": "string"
+                }
+              }
+            }
+          },
+          "optional": true
+        }
+      }
+    },
     "NetworkProblem": {
       "kind": "object",
       "fields": {
@@ -129,6 +173,21 @@
                 }
               },
               "parent": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "RpcRef"
+                    }
+                  ]
+                },
+                "optional": true
+              },
+              "owner": {
                 "type": {
                   "kind": "union",
                   "options": [
@@ -2198,6 +2257,15 @@
                   "values": {
                     "kind": "ref",
                     "name": "PeerRole"
+                  }
+                }
+              },
+              "structure": {
+                "type": {
+                  "kind": "record",
+                  "values": {
+                    "kind": "ref",
+                    "name": "PeerStructure"
                   }
                 }
               },

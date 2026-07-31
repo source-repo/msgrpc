@@ -249,6 +249,21 @@
                 },
                 "optional": true
               },
+              "owner": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "RpcRef"
+                    }
+                  ]
+                },
+                "optional": true
+              },
               "place": {
                 "type": {
                   "kind": "array",
