@@ -13,6 +13,8 @@ export * from './Transports/SocketIoClientTransport.js'
 // with, observe one - which is exactly what the console's component panel does.
 export * from './RPC/Component.js'
 export * from './RPC/ComponentClient.js'
+// Topology, but not the file store: a page is a host too, volatile by nature - node:fs is not.
+export * from './RPC/Topology.js'
 
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'

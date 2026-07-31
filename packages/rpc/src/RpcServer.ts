@@ -1,6 +1,7 @@
 import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
+import { HostTopology, type HostTopologyOptions } from './RPC/Topology.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, withIntrospection } from './RPC/Introspection.js'
@@ -101,6 +102,14 @@ export interface RpcServerOptions {
     /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
     unknownVersion?: 'allow' | 'reject'
     /**
+     * Where this host physically is and how it displays: `place` is a sequence of ids declared at
+     * deployment - never in a class contract, since the same class is bolted into every building -
+     * `label` is free text from the project's own drawings, and `store` decides whether topology
+     * epochs survive a restart. All optional: a host that declares nothing gets a synthetic
+     * `$host` root and is done.
+     */
+    topology?: HostTopologyOptions
+    /**
      * Where to record what a non-repeatable command did, so a request redelivered after this
      * process died is answered from the record instead of run a second time.
      *
@@ -135,6 +144,8 @@ export class RpcServerBase implements IManageRpc {
     transports: Transport[] = []
     /** Peer name -> transport, shared by this server's modules and nothing outside them. */
     readonly peers = new PeerRegistry()
+    /** This host's parent/owner records: the federated topology core, host-authoritative. */
+    readonly topology: HostTopology
     /** Created on the first component() call; every channel this server observes lives in it. */
     private componentChannels?: ComponentChannels
     /**
@@ -188,9 +199,17 @@ export class RpcServerBase implements IManageRpc {
             this.rpc.schema = withIntrospection(this.rpc.schema)
         }
 
+        this.topology = new HostTopology(this.options.name, this.options.topology)
+        this.rpc.hostTopology = this.topology
+
         // Building a listener or a broker connection means loading a module, so this is where the
         // constructor stops being synchronous. ready() awaits it and reports what went wrong.
-        this.starting = this.buildTransports().then(
+        // Topology loads first: a durable store's epochs must be in memory before anything can be
+        // asked about them, and ready() is the promise that they are.
+        this.starting = this.topology
+            .init()
+            .then(() => this.buildTransports())
+            .then(
             () => {
                 this.readyFlag = true
             },

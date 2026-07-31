@@ -25,6 +25,8 @@ export * from './RPC/Signing.js'
 export * from './RPC/Idempotency.js'
 export * from './RPC/Component.js'
 export * from './RPC/ComponentClient.js'
+export * from './RPC/Topology.js'
+export * from './RPC/TopologyFileStore.js'
 export * from './RPC/RpcClientHandler.js'
 export * from './RPC/RpcServerHandler.js'
 

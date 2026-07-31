@@ -176,6 +176,8 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * partial schema is useful. 'required' refuses anything the schema does not describe.
      */
     validation: 'off' | 'described' | 'required' = 'described'
+    /** Set by RpcServer: this host's topology records, for describe() to read. */
+    hostTopology?: import('./Topology.js').HostTopology
     /** Check what handlers return as well as what callers send. Off by default: it is a self-check. */
     validateResults = false
     /**

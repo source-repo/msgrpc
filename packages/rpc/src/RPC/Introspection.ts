@@ -3,6 +3,7 @@ import { componentSnapshotEvent, RpcComponent } from './Component.js'
 import { rpc, rpcNamespace } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcSchema, type TypeNode } from './Schema.js'
+import { HOST_ROOT, type RpcRef, type RpcTopologyCapabilities } from './Topology.js'
 import type { RpcMethodSemantics } from './Messages.js'
 // Extracted from this file by `npm run contract` in the CLI package and committed, so building
 // msgrpc never needs the extractor that reads it. A test there asserts it still matches this source.
@@ -54,6 +55,18 @@ export interface DescribedComponent {
     subscribers: number
 }
 
+/**
+ * Where a namespace sits in the two structures, as its home host declares it. Refs and epochs,
+ * never paths: paths are derived display data, and a reader derives them by looking records up.
+ */
+export interface DescribedTopology {
+    parent: RpcRef | null
+    owner: RpcRef | null
+    parentEpoch: string
+    ownerEpoch: string
+    label?: string
+}
+
 export interface DescribedNamespace {
     name: string
     version?: string
@@ -67,6 +80,8 @@ export interface DescribedNamespace {
     serialised?: boolean
     /** Present when the instance is an observable component. */
     component?: DescribedComponent
+    /** Present when this host declared where the instance sits. */
+    topology?: DescribedTopology
     methods: DescribedMethod[]
     events: DescribedEvent[]
 }
@@ -79,6 +94,18 @@ export interface ServerDescription {
     /** True when arguments are being checked, which tells a caller how much to trust the types. */
     validating: boolean
     namespaces: DescribedNamespace[]
+    /**
+     * This host in the physical structure: its effective root - synthetic when nothing was
+     * registered - the root's cross-host parent when one is declared, the deployment's place ids,
+     * and which topology guarantees are actually active here. Stated, never implied.
+     */
+    host?: {
+        root: RpcRef
+        parent: RpcRef | null
+        place?: string[]
+        label?: string
+        capabilities: RpcTopologyCapabilities
+    }
     /** Named types the described methods refer to. */
     types?: { [name: string]: TypeNode }
 }
@@ -197,6 +224,16 @@ export class Introspection {
                 subscribers: [...this.handler.eventProxies.values()].filter((proxy) => proxy.instanceName === name && proxy.event === event).length
             }))
 
+            const record = this.handler.hostTopology?.get(name)
+            const topology: DescribedTopology | undefined = record
+                ? {
+                      parent: record.parent,
+                      owner: record.owner,
+                      parentEpoch: record.parentEpoch,
+                      ownerEpoch: record.ownerEpoch,
+                      ...(record.label !== undefined ? { label: record.label } : {})
+                  }
+                : undefined
             const execution = manage.exposedExecution[name]
             // Structure and a live count, never the snapshot itself: current values go only to
             // authorized subscribers, and describe() must not become the unauthorized way in.
@@ -218,16 +255,30 @@ export class Introspection {
                 created: created.has(name),
                 emitter: instance instanceof EventEmitter,
                 ...(component ? { component } : {}),
+                ...(topology ? { topology } : {}),
                 methods,
                 events
             }
         })
 
+        const hostTopology = this.handler.hostTopology
+        const root = hostTopology?.get(HOST_ROOT)
         return {
             name: this.handler.name,
             ...(schema?.version ? { version: schema.version } : {}),
             validating: !!schema && this.handler.validation !== 'off',
             namespaces: namespaces.sort((a, b) => a.name.localeCompare(b.name)),
+            ...(hostTopology && root
+                ? {
+                      host: {
+                          root: root.ref,
+                          parent: root.parent,
+                          ...(hostTopology.place ? { place: hostTopology.place } : {}),
+                          ...(root.label !== undefined ? { label: root.label } : {}),
+                          capabilities: hostTopology.capabilities()
+                      }
+                  }
+                : {}),
             ...(schema?.types ? { types: schema.types } : {})
         }
     }

@@ -29,6 +29,56 @@
             }
           }
         },
+        "host": {
+          "type": {
+            "kind": "object",
+            "fields": {
+              "root": {
+                "type": {
+                  "kind": "ref",
+                  "name": "RpcRef"
+                }
+              },
+              "parent": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "ref",
+                      "name": "RpcRef"
+                    }
+                  ]
+                },
+                "optional": true
+              },
+              "place": {
+                "type": {
+                  "kind": "array",
+                  "items": {
+                    "kind": "string"
+                  }
+                },
+                "optional": true
+              },
+              "label": {
+                "type": {
+                  "kind": "string"
+                },
+                "optional": true
+              },
+              "capabilities": {
+                "type": {
+                  "kind": "ref",
+                  "name": "RpcTopologyCapabilities"
+                }
+              }
+            }
+          },
+          "optional": true
+        },
         "types": {
           "type": {
             "kind": "record",
@@ -81,6 +131,13 @@
           "type": {
             "kind": "ref",
             "name": "DescribedComponent"
+          },
+          "optional": true
+        },
+        "topology": {
+          "type": {
+            "kind": "ref",
+            "name": "DescribedTopology"
           },
           "optional": true
         },
@@ -1019,6 +1076,72 @@
         }
       }
     },
+    "DescribedTopology": {
+      "kind": "object",
+      "fields": {
+        "parent": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "owner": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "ref",
+                "name": "RpcRef"
+              }
+            ]
+          },
+          "optional": true
+        },
+        "parentEpoch": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "ownerEpoch": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "label": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        }
+      }
+    },
+    "RpcRef": {
+      "kind": "object",
+      "fields": {
+        "peer": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "instance": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
     "DescribedMethod": {
       "kind": "object",
       "fields": {
@@ -1689,6 +1812,50 @@
         "subscribers": {
           "type": {
             "kind": "number"
+          }
+        }
+      }
+    },
+    "RpcTopologyCapabilities": {
+      "kind": "object",
+      "fields": {
+        "authorityScope": {
+          "type": {
+            "kind": "literal",
+            "value": "host"
+          }
+        },
+        "cycleGuarantee": {
+          "type": {
+            "kind": "literal",
+            "value": "detected"
+          }
+        },
+        "reverseIndex": {
+          "type": {
+            "kind": "literal",
+            "value": "eventual"
+          }
+        },
+        "deletion": {
+          "type": {
+            "kind": "literal",
+            "value": "tombstone"
+          }
+        },
+        "durability": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "volatile"
+              },
+              {
+                "kind": "literal",
+                "value": "durable"
+              }
+            ]
           }
         }
       }
