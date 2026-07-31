@@ -1,6 +1,6 @@
 {
     "name": "@source-repo/queue",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "description": "A lease-based work queue for Source RPC networks: at-least-once, bounded, transport-neutral over socket.io and MQTT 5",
     "keywords": [
         "queue",
@@ -43,7 +43,7 @@
         "prepack": "npm run clean && npm run build"
     },
     "dependencies": {
-        "@source-repo/rpc": "^4.0.0",
+        "@source-repo/rpc": "^4.3.0",
         "uuid": "^14.0.1"
     },
     "devDependencies": {

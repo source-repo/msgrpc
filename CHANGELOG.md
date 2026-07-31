@@ -1,5 +1,21 @@
 # Changelog
 
+## Source RPC 4.3.0
+
+The final milestone of the adopted architecture: **structural context** — inherited, cached, versioned ambient data, resolved through exactly one declared topology axis. Everything is additive over 4.2.0.
+
+### Structural context
+
+`defineRpcContext` declares a token: a namespaced id, a schema version, exactly one axis (`physical` or `logical` — there is no logical-then-physical search, by design), `nearest` or `collect` resolution, a stale policy, a capture policy, and an exposure. A host provides at most one value per token per topology node through `server.provideContext()`, owned by a handle nothing remote can reach; a restarted provider is a new provider epoch. `server.contextOf(node, token)` returns a live store — the same `getSnapshot()`/`subscribe()` shape the component channel proved against React — and `requireContext()` is the policy gate that fails closed.
+
+Resolution crosses hosts the way the topology does: the physical chain root to root, the logical chain through remote owners, one register-then-snapshot subscription per upstream host with full frames only, token sets widened by re-subscribing, and reconnects replayed with retry. Twenty tokens inherited over one host cost one subscription. The public lifecycle is `initializing | live | stale | missing | invalid | closed` with a `transitionReason`: a lost providing host is `stale` with the last value kept and its age on it; an owner reassignment is an **atomic remount** — a new mount epoch, never a mixture, the old world only as `previous`, which `require()` never returns; and a cross-host owner ring is caught before the resolver would subscribe its way around it forever, reported `invalid` with the ring's path named.
+
+The `$context` protocol is served at the dispatch level, and its authorization is the design: every `read` and `subscribe` passes `authorize()` with the node and every token id visible, there is no enumeration surface, and a value whose token declares `exposure: 'local'` is filtered from remote answers *silently* — a refusal would confirm the secret exists. `captureRpcContext` packages what a node currently sees for a payload: explicit-capture tokens only, local values never, the aggregate bounded before anything accepts it.
+
+### `@source-repo/queue` 0.2.0
+
+The `latest` queued-context mode is real: a consumer resolves the named tokens against the source host's `$context` when execution starts — the task runs under the world as it is, not as it was — and hands them to the handler as `context.resolvedContext`. An unresolvable `latest` fails the delivery through the ordinary retry-then-dead-letter path with the reason on the dead letter, never running the handler context-blind. The wire type gains an optional `node` on the `latest` variant (default `$host`). Requires a 4.3.0 server for the `$context` surface; against older servers, `latest` tasks dead-letter honestly.
+
 ## Source RPC 4.2.0
 
 The release that ships the adopted architecture: observable components, command authority, the federated topology core, capability discovery — and the first tool node, `@source-repo/queue`, published for the first time. Everything is additive over 4.0.0 with one event-payload change noted below.
