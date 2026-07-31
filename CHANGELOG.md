@@ -1,5 +1,9 @@
 # Changelog
 
+## Source RPC 4.3.1
+
+No code changes in any package. The documentation moved to **[source-repo.github.io/rpc](https://source-repo.github.io/rpc/)** — the full guide with an always-visible sidebar and search, including four chapters nothing had documented before: observable components, command authority, topology, and structural context. The READMEs npm shows are now the short form — the pitch, install, one example, and the feature list with links into the site — which is this release's reason to exist.
+
 ## Source RPC 4.3.0
 
 The final milestone of the adopted architecture: **structural context** — inherited, cached, versioned ambient data, resolved through exactly one declared topology axis. Everything is additive over 4.2.0.
