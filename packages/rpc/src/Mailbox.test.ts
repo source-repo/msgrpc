@@ -13,6 +13,14 @@ import { RpcClient, RpcServer, rpc, rpcNamespace } from './index.js'
 const run = randomUUID().slice(0, 8)
 const peer = (name: string) => `${name}-${run}`
 
+// TEMPORARY diagnostic for a CI-only failure to exit: every second after the tests finish, say
+// what still holds the event loop. Unref'd, so the reporter cannot be the thing it is reporting.
+test.after.always(() => {
+    const dump = () => console.error('still holding the loop:', process.getActiveResourcesInfo?.() ?? 'unavailable')
+    dump()
+    setInterval(dump, 1000).unref()
+})
+
 const waitFor = async (condition: () => boolean, timeout = 5000) => {
     const deadline = Date.now() + timeout
     while (!condition()) {
