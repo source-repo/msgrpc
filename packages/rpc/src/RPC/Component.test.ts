@@ -273,6 +273,10 @@ test('a server observes a component over its own dialled link, like a console pa
     // The observer is itself a server that dials out - the browser console's exact shape, which is
     // the peer this surface exists for: it serves chat and observes components over one link.
     const page = new RpcServer({ name: peer('page3870'), transports: [{ connect: 'http://localhost:3870' }] })
+    await page.ready()
+    // Presence arrives after the link does, and calling before it lands is a routing error by
+    // design - the TransportError says to await it. Windows CI is where the gap is real.
+    await waitFor(() => page.peers.get(peer('host3870')) !== undefined)
     const remote = await page.component<Oven>('oven', peer('host3870'))
 
     t.is(remote.props.unit, '°C')
