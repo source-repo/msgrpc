@@ -219,6 +219,44 @@ export const runPeers = (options: VerbOptions, io: Output = processOutput) =>
         return 0
     })
 
+/**
+ * Who on the network implements a qualified capability. Discovery proposes, never appoints: the
+ * answer is a claim read from contracts, and whether a peer may be *asked* to act on it stays a
+ * separate, granted question. A capability nobody implements - hallucinated or merely absent - is
+ * an empty answer, not an error: empty is what absent looks like.
+ */
+export const runFind = (capability: string, options: VerbOptions, io: Output = processOutput) =>
+    withNetwork(options, io, async (connected) => {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(options.wait, 1000)))
+        const matches: { peer: string; namespace: string; version?: string; capabilities: string[] }[] = []
+        await Promise.all(
+            [...connected.online].sort().map(async (peer) => {
+                let description: ServerDescription
+                try {
+                    description = await describePeer(connected, peer)
+                } catch {
+                    // A peer without introspection is not discoverable, which is the rule rather
+                    // than a failure: discoverable means having an extracted contract to serve.
+                    return
+                }
+                for (const namespace of description.namespaces)
+                    if (namespace.capabilities?.includes(capability))
+                        matches.push({ peer, namespace: namespace.name, ...(namespace.version ? { version: namespace.version } : {}), capabilities: namespace.capabilities })
+            })
+        )
+        matches.sort((a, b) => a.peer.localeCompare(b.peer) || a.namespace.localeCompare(b.namespace))
+        if (options.json) {
+            io.out(JSON.stringify({ capability, matches }, null, 2) + '\n')
+            return 0
+        }
+        if (!matches.length) {
+            io.err(`source-rpc: nobody implements ${capability}. A capability is a package-qualified name, e.g. '@scope/contracts/UiBuilder'.\n`)
+            return 0
+        }
+        for (const match of matches) io.out(`${match.peer}  ${match.namespace}${match.version ? `@${match.version}` : ''}  [${match.capabilities.join(', ')}]\n`)
+        return 0
+    })
+
 export const runDescribe = (peer: string, options: VerbOptions, io: Output = processOutput) =>
     withNetwork(options, io, async (connected) => {
         if (!(await awaitPeer(connected, peer, options.wait))) return missing(peer, options, io)

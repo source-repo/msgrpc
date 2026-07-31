@@ -6,7 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { rpc, rpcNamespace, RpcServer } from '@source-repo/rpc'
+import { rpc, rpcNamespace, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { failureText } from './mcp.js'
 
 /**
@@ -114,7 +114,7 @@ test('an MCP client can list, describe and call the peers on a Source RPC networ
     const tools = (listed.result as { tools: { name: string; inputSchema: unknown }[] }).tools
     t.deepEqual(
         tools.map((tool) => tool.name).sort(),
-        ['call_method', 'check_peer', 'describe_peer', 'diff_peers', 'list_fakes', 'list_peers', 'start_fake', 'stop_fake', 'watch_events', 'watch_traffic']
+        ['call_method', 'check_peer', 'describe_peer', 'diff_peers', 'find_capability', 'list_fakes', 'list_peers', 'start_fake', 'stop_fake', 'watch_events', 'watch_traffic']
     )
     // The contract tools are absent without a directory to write to: a server that cannot write
     // files must not advertise tools claiming it can.
@@ -338,4 +338,61 @@ test('a failure carrying a code is not made to repeat it', (t) => {
     t.is(failureText(Object.assign(new Error('not permitted to relay'), { code: 'Forbidden' })), 'Forbidden: not permitted to relay')
     t.is(failureText(new Error('no code at all')), 'no code at all')
     t.is(failureText('a string'), 'a string')
+})
+
+test('find_capability discovers by contract, and a wrong-shaped call fails before it travels', async (t) => {
+    const hub = new RpcServer({ name: peer('hub3993'), transports: [{ port: 3993 }] })
+    await hub.ready()
+    const capable: RpcSchema = {
+        schema: 1,
+        namespaces: {
+            boiler: {
+                methods: { setTemperature: { params: [{ kind: 'number', max: 120 }], paramNames: ['celsius'], returns: { kind: 'number' } } },
+                capabilities: ['@fixture/contracts/AdvancedRenderer', '@fixture/contracts/Renderer']
+            }
+        }
+    }
+    const plant = new RpcServer({ name: peer('capable3993'), transports: [{ connect: 'http://localhost:3993' }], schema: capable, exposeIntrospection: true })
+    plant.exposeClassInstance(new Boiler())
+    await plant.ready()
+
+    const client = mcpClient(3993)
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    client.notify('notifications/initialized')
+
+    try {
+        // Wait until discovery has seen the peer, then search for the parent interface: the
+        // extract-time closure means the child's implementor answers a search for the parent.
+        let found: { matches: { peer: string; namespace: string }[] } = { matches: [] }
+        for (let attempt = 0; attempt < 40 && !found.matches.length; attempt++) {
+            found = JSON.parse(toolText(await client.send('tools/call', { name: 'find_capability', arguments: { capability: '@fixture/contracts/Renderer' } })).text) as typeof found
+            if (!found.matches.length) await new Promise((resolve) => setTimeout(resolve, 250))
+        }
+        t.is(found.matches[0]?.peer, peer('capable3993'))
+        t.is(found.matches[0]?.namespace, 'boiler')
+
+        // A hallucinated capability is an empty list, not an error - empty is what absent looks like.
+        const nothing = toolText(await client.send('tools/call', { name: 'find_capability', arguments: { capability: '@imagined/contracts/Telepathy' } }))
+        t.false(nothing.isError)
+        t.deepEqual((JSON.parse(nothing.text) as { matches: unknown[] }).matches, [])
+
+        // The hallucinated wiring: a string into a number-typed parameter. The description was
+        // cached by the search above, so the refusal is local - InvalidParams before any hop.
+        const refused = toolText(
+            await client.send('tools/call', { name: 'call_method', arguments: { peer: peer('capable3993'), namespace: 'boiler', method: 'setTemperature', args: ['warm'] } })
+        )
+        t.true(refused.isError)
+        t.regex(refused.text, /InvalidParams, before sending/)
+
+        // And the right shape still travels and answers.
+        const answered = toolText(
+            await client.send('tools/call', { name: 'call_method', arguments: { peer: peer('capable3993'), namespace: 'boiler', method: 'setTemperature', args: [65] } })
+        )
+        t.false(answered.isError, answered.text)
+    } finally {
+        client.close()
+        await plant.close()
+        await hub.close()
+    }
 })

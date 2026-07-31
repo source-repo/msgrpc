@@ -21,7 +21,7 @@ import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
 import { startNode } from './node.js'
-import { processOutput, runCall, runDescribe, runPeers, runWatch } from './verbs.js'
+import { processOutput, runCall, runDescribe, runFind, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
 import { checkPeer, diffPeers } from './conform.js'
@@ -53,6 +53,7 @@ const usage = `source-rpc <command> [options]
   replay    send a recording's calls at a peer and compare the answers
 
   peers                             who is on the network right now
+  find      <capability>            who implements a qualified capability, e.g. '@scope/contracts/UiBuilder'
   describe  <peer>                  what one peer exposes
   call      <peer> <ns.method> [a…] call it, and exit 1 if it refuses
   watch     <peer> <ns.event>       stream its events as jsonl until Ctrl-C
@@ -489,6 +490,15 @@ const runVerb = async (command: string, argv: string[]) => {
     const [, peer, target] = positionals(argv)
 
     if (command === 'peers') return await runPeers(options)
+
+    // `peer` is the capability here: find takes a qualified name where the others take a peer.
+    if (command === 'find') {
+        if (!peer) {
+            process.stderr.write(`source-rpc find: which capability? A package-qualified name, e.g. '@scope/contracts/UiBuilder'.\n`)
+            return 1
+        }
+        return await runFind(peer, options)
+    }
 
     if (!peer) {
         process.stderr.write(`source-rpc ${command}: which peer? Run 'source-rpc peers' to see who is there.\n`)
@@ -1012,7 +1022,7 @@ const main = () => {
             .catch(fail)
         return
     }
-    if (command === 'peers' || command === 'describe' || command === 'call' || command === 'watch') {
+    if (command === 'peers' || command === 'find' || command === 'describe' || command === 'call' || command === 'watch') {
         // These end, and their exit code is the answer, so the process waits for one rather than
         // being kept alive by a listener the way console and broker are.
         void runVerb(command, argv)

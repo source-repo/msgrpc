@@ -2,7 +2,7 @@ import test from 'ava'
 import { randomUUID } from 'crypto'
 import { EventEmitter } from 'events'
 import { rpc, rpcNamespace, RpcSchema, RpcServer } from '@source-repo/rpc'
-import { coerceArgument, runCall, runDescribe, runPeers, runWatch, signatureOf, type VerbOptions } from './verbs.js'
+import { coerceArgument, runCall, runDescribe, runFind, runPeers, runWatch, signatureOf, type VerbOptions } from './verbs.js'
 
 /** Nothing here touches MQTT: a socket.io hub exercises the same verbs and runs everywhere. */
 
@@ -39,7 +39,9 @@ const schema: RpcSchema = {
                 },
                 fault: { params: [] }
             },
-            events: { changed: { params: [{ kind: 'number' }, { kind: 'string' }] } }
+            events: { changed: { params: [{ kind: 'number' }, { kind: 'string' }] } },
+            // As extract writes them: the subinterface implemented, its parent closed in.
+            capabilities: ['@fixture/contracts/AdvancedRenderer', '@fixture/contracts/Renderer']
         }
     }
 }
@@ -204,4 +206,22 @@ test('a signature reads the way the source declares it', (t) => {
     )
     // No schema at all is said plainly rather than guessed at.
     t.is(signatureOf({ name: 'say' }), 'say(…)')
+})
+
+test('find answers with who implements a capability, the parent via the closure, and empty honestly', async (t) => {
+    await withHub(async (options, device) => {
+        // The search is for the *parent* interface; the peer implements the child. The extract-time
+        // closure put both names in the schema, so the flat match finds it.
+        const io = collect()
+        t.is(await runFind('@fixture/contracts/Renderer', options(), io), 0)
+        const answer = JSON.parse(io.stdout()) as { matches: { peer: string; namespace: string; version?: string }[] }
+        t.is(answer.matches.length, 1)
+        t.like(answer.matches[0], { peer: device, namespace: 'boiler', version: '1' })
+
+        // A capability nobody implements - hallucinated or merely absent - is an empty answer,
+        // exit 0: absent looks like empty, and an error would teach a caller to retry.
+        const nothing = collect()
+        t.is(await runFind('@imagined/contracts/Telepathy', options(), nothing), 0)
+        t.deepEqual((JSON.parse(nothing.stdout()) as { matches: unknown[] }).matches, [])
+    })
 })

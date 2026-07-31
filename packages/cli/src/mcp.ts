@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { readableNameFor, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import { readableNameFor, validateValue, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { environmentFor } from './scripts.js'
@@ -127,10 +127,25 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
         }
     },
     {
+        name: 'find_capability',
+        description:
+            "List the peers implementing a package-qualified capability, e.g. '@scope/contracts/UiBuilder'. " +
+            'Capabilities come from extracted contracts, and a peer implementing a subinterface satisfies a search for its parent. ' +
+            'An empty list means nobody implements it - that is an answer, not an error. ' +
+            'Discovery proposes, never appoints: whether a peer may be asked to act stays an authorization question.',
+        inputSchema: {
+            type: 'object',
+            properties: { capability: { type: 'string', description: "The package-qualified name, e.g. '@scope/contracts/UiBuilder'. Bare names match nothing." } },
+            required: ['capability'],
+            additionalProperties: false
+        }
+    },
+    {
         name: 'call_method',
         description:
             'Call a method on a peer and return what it returns. Arguments are positional, in the order describe_peer reports them. ' +
-            'A call the peer refuses comes back as an error with its reason rather than as a failure of this tool.',
+            'A call the peer refuses comes back as an error with its reason rather than as a failure of this tool. ' +
+            'When the peer has been described, arguments are checked against its contract locally first, so a wrong shape fails before it travels.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -575,6 +590,22 @@ export const startMcp = async (options: McpOptions) => {
         return await proxy.describe()
     }
 
+    /**
+     * The discovery cache: find_capability fills it sweeping the network, call_method validates
+     * from it. Short-lived, because a contract can change with a redeploy and a stale cache would
+     * refuse arguments the peer now takes - thirty seconds keeps a conversation's worth of calls
+     * cheap without remembering last week's shape.
+     */
+    const described = new Map<string, { description: ServerDescription; at: number }>()
+    const DESCRIBE_CACHE_MS = 30_000
+    const describedOf = async (peer: string) => {
+        const held = described.get(peer)
+        if (held && Date.now() - held.at < DESCRIBE_CACHE_MS) return held.description
+        const description = await describe(peer)
+        described.set(peer, { description, at: Date.now() })
+        return description
+    }
+
     const callTool = async (name: string, args: { [key: string]: unknown }): Promise<{ text: string; isError?: boolean }> => {
         if (name === 'list_peers') return { text: JSON.stringify({ peers: [...online].sort() }, null, 2) }
 
@@ -590,12 +621,49 @@ export const startMcp = async (options: McpOptions) => {
             }
         }
 
+        if (name === 'find_capability') {
+            const capability = String(args.capability ?? '')
+            if (!capability) return { text: "find_capability needs a package-qualified capability name, e.g. '@scope/contracts/UiBuilder'.", isError: true }
+            const matches: { peer: string; namespace: string; version?: string; capabilities: string[] }[] = []
+            await Promise.all(
+                [...online].sort().map(async (who) => {
+                    let description: ServerDescription
+                    try {
+                        description = await describedOf(who)
+                    } catch {
+                        // Not discoverable without introspection, which is the rule, not a failure.
+                        return
+                    }
+                    for (const namespace of description.namespaces)
+                        if (namespace.capabilities?.includes(capability))
+                            matches.push({ peer: who, namespace: namespace.name, ...(namespace.version ? { version: namespace.version } : {}), capabilities: namespace.capabilities })
+                })
+            )
+            matches.sort((a, b) => a.peer.localeCompare(b.peer) || a.namespace.localeCompare(b.namespace))
+            return { text: JSON.stringify({ capability, matches }, null, 2) }
+        }
+
         if (name === 'call_method') {
             const peer = String(args.peer ?? '')
             const namespace = String(args.namespace ?? '')
             const method = String(args.method ?? '')
             const parameters = Array.isArray(args.args) ? args.args : []
             if (!peer || !namespace || !method) return { text: 'call_method needs peer, namespace and method.', isError: true }
+            // The contract fetched during discovery pays off here: a hallucinated wiring - the
+            // wrong shape into a method - fails locally as InvalidParams before spending a network
+            // hop. A peer that cannot be described cannot be pre-checked; the call itself answers.
+            try {
+                const description = await describedOf(peer)
+                const target = description.namespaces.find((held) => held.name === namespace)?.methods.find((held) => held.name === method)
+                if (target?.params) {
+                    for (let index = 0; index < parameters.length && index < target.params.length; index++) {
+                        const problem = validateValue(parameters[index], target.params[index], description.types, target.paramNames?.[index] ?? `argument ${index}`)
+                        if (problem) return { text: `InvalidParams, before sending: ${problem}`, isError: true }
+                    }
+                }
+            } catch {
+                // Undescribable: send it and let the peer answer.
+            }
             try {
                 const proxy = await network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(namespace, peer)
                 const result = await proxy[method](...parameters)
