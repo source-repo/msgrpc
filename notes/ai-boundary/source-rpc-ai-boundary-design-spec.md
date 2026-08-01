@@ -7,11 +7,13 @@
 
 ## 1. Executive decision
 
-Source RPC treats AI as a **principal, never as a threat category**, and gates what AI principals may do through **per-node capability grants** that are closed by default everywhere and opened explicitly, lease-shaped, on the node that bears the consequence. Issuing an AI credential at all is itself a permissioned act — **sponsorship** — chained to a human principal logged in to the Source layer. The model is enablement: the point is to allow AI exactly where it is useful, bounded in scope and in time, with the bounds visible at a glance.
+Source RPC represents AI as an **authenticated principal rather than inferring trust from its nature**, and gates what AI principals may do through **per-node capability grants** that are closed by default everywhere and opened explicitly, lease-shaped, on the node that bears the consequence. Issuing an AI credential at all is itself a permissioned act — **sponsorship** — chained to a human principal logged in to the Source layer. The model is enablement: the point is to allow AI exactly where it is useful, bounded in scope and in time, with the bounds visible at a glance. AI-specific threats — prompt injection, tool-output poisoning, rapid repetition, data egress — remain real threat-model categories; they are addressed by provenance, capability bounds, isolation and data policy (§9), not by the principal model alone.
 
 The commercial doctrine, in the project owner's canonical phrasing:
 
 > **RpcServer is always secure; good tools for managing that are not free.**
+
+That is the doctrine in its memorable form, and it means what it says about *pricing*: no security capability is ever withheld for payment. It is not a guarantee that every deployment is secure — Source RPC deliberately permits an unauthenticated bus on a trusted network, and warns about it. Where the sentence is used outside this document, the precise formulation is: **security is never a paid feature; managing it across a fleet is.**
 
 Mechanism — authentication, authorization, grants enforcement, credential derivation, default-closed postures — is open source entirely. Administration — the badge desk, directories, approval workflows, fleet posture, audit retention — is commercial entirely (§11). Staged environments (dev/test/verify/prod) are recommended practice, not mechanism (§8), and nothing here is functional safety (§10). Marketing AI into these environments carries a duty to say what changes, discharged in §9.
 
@@ -83,7 +85,7 @@ What survives as guidance, because it is still good practice: stage deployments 
 
 ## 9. What changes when AI joins the network
 
-Source Edge markets AI in industrial environments. That creates an obligation this specification treats as binding: **users must be told plainly what changes**, before they are encouraged to do it. The changes are not the ones most engineers would guess, and a product page that omits them invites people to carry an intact threat model into a situation where parts of it no longer hold. Everything below is written to be said out loud to customers, not filed away.
+Products built on this library market AI into industrial environments. That creates an obligation this specification treats as binding: **users must be told plainly what changes**, before they are encouraged to do it. The changes are not the ones most engineers would guess, and a product page that omits them invites people to carry an intact threat model into a situation where parts of it no longer hold. Everything below is written to be said out loud to customers, not filed away.
 
 ### 9.1 Effort was the control, and effort is gone
 
@@ -123,7 +125,7 @@ And the direction that gets forgotten in every discussion of AI risk that focuse
 
 Two obligations and five mechanisms, all of them consequences of the five changes above.
 
-The **duty to inform** comes first, because no mechanism substitutes for it. The documentation carries a chapter written for the engineer with the credential file — not for a security committee — saying what is different now, in the words above, with the worked scenarios intact. It is linked where people actually arrive, and the tools that enable AI point at it on startup the way they already announce every other consequential grant. The duty is not discharged by a paragraph in a licence.
+The **duty to inform** comes first, because no mechanism substitutes for it. The documentation carries a chapter written for the engineer with the credential file — not for a security committee — saying what is different now, in the words above, with the worked scenarios intact. **Published: `docs/ai-in-the-plant.md`, "What changes when AI joins your network".** It is linked where people actually arrive, and the tools that enable AI point at it on startup the way they already announce every other consequential grant. The duty is not discharged by a paragraph in a licence.
 
 The **duty to place the boundary correctly** is second: encouraging AI use obliges the vendor to say where AI must not be, not only where it may be.
 
@@ -139,7 +141,7 @@ None of this makes an unsafe machine safe, and §10 says why that sentence has t
 
 ## 10. Security, never safety
 
-Everything in this document is security and operational integrity. None of it is functional safety, and no product wording may drift there. Human safety belongs to the functional-safety tier — FSoE/TwinSAFE-class yellow hardware with its own CPU, its own program-change credentials, black-channel communication and SIL-rated logic — a tier this stack neither implements nor touches. The grants keep AI bounded as a matter of *operational policy*; they are explicitly not the mechanism a person's safety depends on, and the documentation says so wherever the boundary is described. The stance in one sentence: **no AI modelling with dangerous machines — and even that line is not what safety relies on.**
+Everything in this document is security and operational integrity. None of it is functional safety, and no product wording may drift there. Human safety belongs to the functional-safety tier — FSoE/TwinSAFE-class yellow hardware with its own CPU, its own program-change credentials, black-channel communication and SIL-rated logic — a tier this stack neither implements nor touches. The grants keep AI bounded as a matter of *operational policy*; they are explicitly not the mechanism a person's safety depends on, and the documentation says so wherever the boundary is described. The stance in one sentence: **no safety function depends on Source RPC or on AI, and AI-reachable systems have no route to safety-engineering interfaces.** An earlier draft said "no AI modelling with dangerous machines", which review correctly caught as both an overreach and a contradiction: modelling, simulating, diagnosing and drafting changes for human review are exactly what an assistant should do, and what an assessment product exists to do. What is forbidden is an assistant becoming the mechanism a person's safety rests on, or reaching the interfaces that program it.
 
 ## 11. The commercial knife
 

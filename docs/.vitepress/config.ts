@@ -55,6 +55,7 @@ export default defineConfig({
                 items: [
                     { text: 'Deploying a network', link: '/deploying-a-network' },
                     { text: 'Security model', link: '/security-model' },
+                    { text: 'AI in the plant', link: '/ai-in-the-plant' },
                     { text: 'Schema compatibility', link: '/schema-compatibility' },
                     { text: 'MQTT 5 frame spec', link: '/mqtt5-frame-spec' }
                 ]
