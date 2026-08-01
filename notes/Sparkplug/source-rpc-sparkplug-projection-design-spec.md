@@ -13,7 +13,7 @@ Source RPC gains a Sparkplug B **projection**: selected components appear to sta
 - **Projection over tunnelling.** Sparkplug outside, Source RPC inside. An opaque byte tunnel through Sparkplug is not part of this design and is deliberately not promised (§2.3).
 - **Open source.** The projection ships as a public ecosystem package, `@source-repo/sparkplug`, versioning independently like `@source-repo/queue` — the second external consumer of the schema compatibility policy, and the proof that the extension architecture reaches the industry's own standard. Commercial products build policy, integration and certification on top; none of that lives here.
 - **The security model lives in the companion document.** AI as a principal, the four per-node capability grants, sponsorship, the badge desk, environments as recommended practice, and the commercial knife (RpcServer is always secure; good tools for managing that are not free) are specified transport-independently in `notes/ai-boundary/source-rpc-ai-boundary-design-spec.md`. This projection consumes that model; it does not define it.
-- **Security, never safety.** Nothing here is a functional safety mechanism — human safety belongs to the FSoE/TwinSAFE-class tier this stack neither implements nor touches. The full statement, binding on this document too, is the companion's §9.
+- **Security, never safety.** Nothing here is a functional safety mechanism — human safety belongs to the FSoE/TwinSAFE-class tier this stack neither implements nor touches. The full statement, binding on this document too, is the companion's §10 — and the companion's §9 is the duty-to-inform chapter that must accompany any marketing of AI into these environments, this projection included.
 
 The central rule is:
 
@@ -113,13 +113,13 @@ Per interaction: state converges by snapshot, queries and idempotent commands re
 
 A related boundary case that does not need the relay: a dev-stage setup at a site whose policy allows only the Sparkplug namespace. A dev stage is not on the production broker, so granting a private topic on the dev broker is almost always available and always preferable. The tunnel stays rejected (§2.3).
 
-One architectural note for the reader who knows the functional-safety world: the black channel treats the entire fieldbus as untrusted transport and puts all responsibility at certified endpoints — the same shape as this relay's caller-owned retries over QoS 0. The industry's safety tier concluded long ago that you do not trust the middle. This design applies that shape one tier up, and — per the companion's §9 — never claims to be the tier below.
+One architectural note for the reader who knows the functional-safety world: the black channel treats the entire fieldbus as untrusted transport and puts all responsibility at certified endpoints — the same shape as this relay's caller-owned retries over QoS 0. The industry's safety tier concluded long ago that you do not trust the middle. This design applies that shape one tier up, and — per the companion's §10 — never claims to be the tier below.
 
 ## 9. Package and product boundary
 
 `@source-repo/sparkplug` is public and versions independently, depending only on the library's public API — the second package (after the queue) whose existence proves the compatibility policy. It contains the vendored proto and generated code, the session state machine, the projection engine, the projection-contract format, and its tests. The CLI may grow a verb to scaffold and validate projection contracts.
 
-The commercial knife — mechanism open entirely, administration commercial entirely, the litmus test, and the no-variant-classes rule — is doctrine of the companion document (§10 there), and this package sits wholly on the open side of it: everything named in this specification, including the projection's enforcement and its default-closed posture, is open source. Beyond this sentence, nothing in this repository references the commercial products.
+The commercial knife — mechanism open entirely, administration commercial entirely, the litmus test, and the no-variant-classes rule — is doctrine of the companion document (§11 there), and this package sits wholly on the open side of it: everything named in this specification, including the projection's enforcement and its default-closed posture, is open source. Beyond this sentence, nothing in this repository references the commercial products.
 
 ## 10. Milestones
 
@@ -133,4 +133,4 @@ The commercial knife — mechanism open entirely, administration commercial enti
 
 ## 11. Open questions
 
-Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; and whether a dev-stage Sparkplug crossing ever becomes a real request rather than a theoretical one. The AI boundary's open questions — grants format, generation depth, instance badging mechanics — live with their specification, in the companion document's §12.
+Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; and whether a dev-stage Sparkplug crossing ever becomes a real request rather than a theoretical one. The AI boundary's open questions — grants format, generation depth, instance badging mechanics — live with their specification, in the companion document's §13.
