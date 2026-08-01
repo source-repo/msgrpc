@@ -1,6 +1,6 @@
 {
     "name": "@source-repo/queue",
-    "version": "0.2.1",
+    "version": "0.2.2",
     "description": "A lease-based work queue for Source RPC networks: at-least-once, bounded, transport-neutral over socket.io and MQTT 5",
     "keywords": [
         "queue",

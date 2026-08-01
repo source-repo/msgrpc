@@ -1,8 +1,8 @@
 # Changelog
 
-## Unreleased
+## Source RPC 4.4.0
 
-The first fruits of the first field trial: an agent that had never seen the system used it for an afternoon (`notes/session-feedback-2026-08-01.md`), and what it stumbled on became issues. These are their fixes.
+The first fruits of the first field trial: an agent that had never seen the system used it for an afternoon (`notes/session-feedback-2026-08-01.md`), and what it stumbled on became issues. This release is their fixes — one behaviour change (the broker's bind, below), everything else additive.
 
 ### The invocation handle: who is actually calling
 
@@ -28,9 +28,13 @@ A server keeps an emission counter per `(namespace, event)` — from expose time
 
 stdio means exactly one client, and the field trial lived the consequence: a node attached to another session, and the second agent's fallback forked the scripts state the node was custodian of. `source-rpc mcp --port <n>` now serves streamable HTTP beside stdio — one POST, one JSON-RPC message, one JSON answer, no SDK — and every client shares one view of the scripts, fakes, watches and loss cursors, because there is only one of everything in the process. The bind is the console's instinct (`127.0.0.1`, `--host` to widen with the warning naming what that means), and access control was designed before the port opened: the bearer token comes from `SOURCE_RPC_MCP_TOKEN` or `--mcp-auth <file>` (never a flag value), a widened door without a token refuses to start, and a loopback door without one says plainly that any process on this machine can drive the node.
 
+### `@source-repo/queue` 0.2.2
+
+No behaviour change. `QueuePeer` is loosened to `Promise<unknown>` with casts at the queue's own boundary, so it stops chasing the library's per-release proxy type - which this release's `RemoteSurface` stripping would otherwise have forced on it.
+
 ### Small things
 
-`source-rpc --version` prints the version; there was previously no way to ask.
+`source-rpc --version` prints the version; there was previously no way to ask. The MCP server's `serverInfo.version` now comes from the manifest too - a hardcoded copy had sat at 3.0.0 for two majors.
 
 `mcp` and `node` print one line at start when the scripts directory's `@source-repo/rpc` major differs from the CLI's, naming both versions — the field trial ran an afternoon against a two-majors-old sandbox and nothing noticed. A statement, never a refusal: old scripts against their own pinned library are legitimate. What is installed outranks what is declared.
 

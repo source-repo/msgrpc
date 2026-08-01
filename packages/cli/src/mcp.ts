@@ -30,6 +30,15 @@ import type { TappedFrame } from './bus.js'
 /** What we answer initialize with when the client asks for something we do not recognise. */
 const FALLBACK_PROTOCOL_VERSION = '2025-06-18'
 
+/** This package's own version, for serverInfo. From the manifest, so it cannot go stale. */
+const ownVersion = () => {
+    try {
+        return (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version?: string }).version ?? '0.0.0'
+    } catch {
+        return '0.0.0'
+    }
+}
+
 export interface McpOptions extends NetworkOptions {
     /**
      * Where contracts may be written and read. Absent means the contract tools are not offered at
@@ -976,8 +985,11 @@ export const startMcp = async (options: McpOptions) => {
                     result: {
                         protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
                         capabilities: { tools: {} },
-                        // Bumped with the package. Clients show it when reporting which server said what.
-                        serverInfo: { name: 'source-rpc', version: '3.0.0' },
+                        // Read from the manifest rather than repeated here: a hardcoded copy sat
+                        // at 3.0.0 for two majors, and clients show this when reporting which
+                        // server said what - a wrong number here misdirects exactly the person
+                        // reading a bug report.
+                        serverInfo: { name: 'source-rpc', version: ownVersion() },
                         instructions:
                             'This is a live Source RPC network. Start with list_peers, then describe_peer to learn a peer' +
                             ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.' +
