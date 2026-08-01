@@ -121,3 +121,23 @@ test('a token holder cannot get itself listed under another peer"s name', async 
     await impostor.close()
     await bus.close()
 })
+
+test('host binds the interface asked for, and absent still means every interface', async (t) => {
+    // The CLI passes 127.0.0.1 unless told otherwise; this checks the option it passes actually
+    // reaches the socket. Asking the listener where it bound is the honest assertion - connecting
+    // from outside loopback needs a second interface the test machine may not have.
+    const address = (running: Awaited<ReturnType<typeof startBroker>>) =>
+        (running.server.transports[0] as unknown as { server: { address(): { address: string } } }).server.address()
+
+    const bare = await startBroker({ port: 8077, host: '127.0.0.1', name: peer('local') })
+    t.is(address(bare).address, '127.0.0.1')
+    // Loopback is still a working bus, not a decoration.
+    const client = new RpcClient('http://127.0.0.1:8077', { name: peer('neighbour'), callTimeout: 4000 })
+    await client.ready()
+    await client.close()
+    await bare.close()
+
+    const wide = await startBroker({ port: 8078, name: peer('wide') })
+    t.not(address(wide).address, '127.0.0.1')
+    await wide.close()
+})

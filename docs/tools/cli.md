@@ -422,11 +422,13 @@ source-rpc broker --port 7843
 A bus for networks that have no MQTT broker to share. It runs until Ctrl-C, relaying between the peers that connect to it and telling each of them who else is there — which is what MQTT gives you through retained presence and per-peer topics, over one WebSocket port instead.
 
 ```
-source-rpc broker plantBus on port 7843
+source-rpc broker plantBus on ws 127.0.0.1:7843
   + cellBus (:7843)
   + panel1 (:7843)
   + hmi (:7843)
 ```
+
+Started bare it serves this machine only: the default bind is `127.0.0.1`, the same instinct as the console's, and it says so on startup. `--host 0.0.0.0` is what puts the bus on the network — the broker then states what that means, and without `--auth` what it means is that anything able to reach the port can join. Before 4.4.0 the broker bound every interface silently, so a deployment that relied on that now passes `--host 0.0.0.0` and gets a sentence naming the consequence it had all along.
 
 Peers join it by dialling out, which is also the only thing a browser page can do:
 
@@ -442,8 +444,8 @@ There is no separate broker implementation and there should not be: this is an `
 `--upstream` dials another broker, and the two become one network. Each side's peers are advertised to the other, and a call crosses without either end knowing there was a hop:
 
 ```
-source-rpc broker --port 7843 --name plantBus
-source-rpc broker --port 8086 --name cellBus --upstream http://plant:7843
+source-rpc broker --port 7843 --name plantBus --host 0.0.0.0
+source-rpc broker --port 8086 --name cellBus --host 0.0.0.0 --upstream http://plant:7843
 ```
 
 A peer on `cellBus` is then callable from `plantBus` and the other way round. Repeat `--upstream` to join more than one. Loops are handled — a peer is never advertised back along the link it came from, and frames carry a hop count and are dropped after 8 relays — so brokers dialling each other in a ring settle rather than storm.
@@ -464,7 +466,7 @@ Without `--auth` the broker relays for anything that can reach the port, and eve
 
 ```
 source-rpc broker --auth /run/secrets/bus.json
-source-rpc broker plantBus on port 7843, authenticating
+source-rpc broker plantBus on ws 127.0.0.1:7843, authenticating
 ```
 
 `tokens` is what this broker accepts. `token` is what it presents when it dials an `--upstream`, so a broker joining another needs both: it is a bus to one side and a peer to the other. Every other command takes `--auth` too, and uses the `token` to join a hub that authenticates.
@@ -482,7 +484,8 @@ The broker is the piece of Source RPC that is infrastructure rather than a tool 
 ```
 docker run -d -p 7843:7843 \
     -e SOURCE_RPC_TOKENS='{"3f9a…":"plantServer"}' \
-    ghcr.io/source-repo/rpc-cli:3                                  # no command: the default is broker
+    ghcr.io/source-repo/rpc-cli:3           # no command: the default is the broker, bound wide -
+                                            # inside a container the -p mapping decides reachability
 
 docker run --rm -e SOURCE_RPC_TOKEN=3f9a… ghcr.io/source-repo/rpc-cli:3 \
     peers --hub http://bus:7843 --name plantServer        # any other command, same image
@@ -571,7 +574,7 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:7843`. One of `--broker`/`--hub` is required; both watches both |
 | `--prefix <topic>` | console, mcp, verbs | the transport's own | must match the network you are watching |
 | `--port <n>` | console | `7844`, or `8844` with `--cert` | |
-| `--host <address>` | console | `127.0.0.1` | see the warning it prints before widening this |
+| `--host <address>` | console, broker | `127.0.0.1` | see the warning each prints before widening this |
 | `--base-path <path>` | console | `/` | publish under a path, for a reverse proxy that forwards the prefix instead of stripping it. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |

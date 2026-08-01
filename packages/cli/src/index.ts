@@ -167,7 +167,10 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 refused
 
   broker
-    --port <n>                  default 7843, or 8843 with --cert; on every interface
+    --port <n>                  default 7843, or 8843 with --cert
+    --host <address>            default 127.0.0.1, so a bare broker serves this machine only;
+                                --host 0.0.0.0 is what puts the bus on the network, and it says
+                                what that means when it does
     --cert <file> --key <file>  serve WSS rather than WS; moves the default port to 8843
     --name <peer>               how the broker identifies itself, default broker-<three words>
     --upstream <url>            join another broker, repeatable; the two become one network
@@ -803,6 +806,10 @@ const runBench = async (argv: string[]) => {
 const runBroker = async (argv: string[]) => {
     const tls = readTls(argv, 'broker')
     const port = listeningPort(argv, !!tls, defaultWebSocketPort, defaultSecureWebSocketPort)
+    // The console's default, deliberately shared: a bus started bare serves this machine and says
+    // so, and serving the LAN is a decision someone states rather than a side effect of typing the
+    // shortest command. This changed in 4.4.0 - it bound every interface silently before.
+    const host = argument(argv, '--host', '127.0.0.1')
     const upstream = argumentList(argv, '--upstream')
     const quiet = argv.includes('--quiet')
     const name = argument(argv, '--name', readableNameFor('broker'))
@@ -819,6 +826,7 @@ const runBroker = async (argv: string[]) => {
 
     const running = await startBroker({
         port,
+        host,
         name,
         ...(tls ? { tls } : {}),
         ...(upstream.length ? { upstream } : {}),
@@ -831,13 +839,18 @@ const runBroker = async (argv: string[]) => {
         process.exit(1)
     })
     process.stdout.write(
-        `source-rpc broker ${name} on ${tls ? 'wss' : 'ws'} port ${port}${authenticate ? ', authenticating' : ''}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`
+        `source-rpc broker ${name} on ${tls ? 'wss' : 'ws'} ${host}:${port}${authenticate ? ', authenticating' : ''}${upstream.length ? `, joined to ${upstream.join(', ')}` : ''}\n`
     )
+    // Both states are stated, because both surprise someone: a bare broker that the machine on the
+    // next bench cannot reach, and a widened one that the whole segment can.
+    const local = host === '127.0.0.1' || host === 'localhost'
+    if (local) process.stderr.write('source-rpc broker: serving this machine only - a peer on another host cannot reach this bus. --host 0.0.0.0 widens it.\n')
+    else process.stderr.write(`source-rpc broker: bound to ${host}, so the bus is reachable from the network.${authenticate ? '' : ' Anything that can reach the port can join it.'}\n`)
     if (!authenticate) {
-        // It listens on every interface and forwards for whoever connects, without checking who they
-        // are. Worth saying plainly rather than leaving to be discovered.
-        process.stderr.write('source-rpc broker: relaying for any peer that connects, on every interface. Put it behind a network you trust, or give it --auth.\n')
-        // And now it will also show them everything it relays, if they ask. They could always have read
+        // It forwards for whoever connects, without checking who they are. Worth saying plainly
+        // rather than leaving to be discovered.
+        process.stderr.write('source-rpc broker: relaying for any peer that can reach it, and every name on it is an unchecked claim. --auth is what changes that.\n')
+        // And it will also show them everything it relays, if they ask. They could always have read
         // it by impersonating a peer; this is merely one call. Said out loud for the same reason.
         process.stderr.write('source-rpc broker: bus.tap() mirrors every frame crossing this broker to whoever calls it. --auth is what gates that.\n')
     }

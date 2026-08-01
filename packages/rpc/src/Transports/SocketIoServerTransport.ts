@@ -56,7 +56,13 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         tls?: TlsServerOptions,
         sources?: IGenericModule[],
         socketIoOptions: Partial<SocketIo.ServerOptions> = {},
-        public authenticate?: RpcAuthenticator
+        public authenticate?: RpcAuthenticator,
+        /**
+         * The interface to bind. Absent means every interface, which is what a service on a plant
+         * segment wants; '127.0.0.1' is what a tool run on a laptop wants. Ignored when `server`
+         * was handed in, because whoever opened that listener already chose.
+         */
+        host?: string
     ) {
         super(name, sources)
         this.ourServer = server === undefined
@@ -154,10 +160,12 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             })
             // Ready means listening. It used to be set here regardless, so ready() resolved before
             // the port was bound and a server could announce itself and then die of EADDRINUSE.
-            listener.listen(port, () => {
+            const bound = () => {
                 this.readyFlag = true
-                console.log(`Socket.io server listening on port ${port}`)
-            })
+                console.log(`Socket.io server listening on ${host ?? 'every interface'}:${port}`)
+            }
+            if (host) listener.listen(port, host, bound)
+            else listener.listen(port, bound)
         } else this.readyFlag = true
     }
 

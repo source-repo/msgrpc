@@ -34,7 +34,11 @@ services:
         image: ghcr.io/source-repo/rpc-cli:3
         container_name: source-rpc-bus
         restart: unless-stopped
-        command: ['broker', '--name', 'bus']
+        # --host 0.0.0.0 for the same reason the console below passes it: the command's default is
+        # loopback, which inside a container no published port can reach. Reachability is decided
+        # by the ports: mapping, and peers have to reach a bus - SOURCE_RPC_TOKENS is what makes
+        # that safe rather than the firewall.
+        command: ['broker', '--name', 'bus', '--host', '0.0.0.0']
         environment:
             # Which tokens this bus admits, and the one peer name each one may claim. Every peer
             # that joins needs a line here; without SOURCE_RPC_TOKENS the bus relays for anyone who

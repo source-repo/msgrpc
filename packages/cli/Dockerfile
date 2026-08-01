@@ -40,7 +40,10 @@ EXPOSE 7843 7844
 # rest: `docker run … console --hub http://bus:7843 --host 0.0.0.0`. broker is the default because
 # it is the one that is infrastructure rather than a tool someone is holding.
 ENTRYPOINT ["source-rpc"]
-CMD ["broker"]
+# --host 0.0.0.0 because the command's own default is loopback, which inside a container means
+# unreachable through any published port. Here the isolation is the container boundary: what the
+# bus serves is decided by `-p 7843:7843` versus `-p 127.0.0.1:7843:7843`, not by the bind.
+CMD ["broker", "--host", "0.0.0.0"]
 
 # ----------------------------------------------------------------------------------------------
 # The image for a development machine: the CLI plus what its development features need.

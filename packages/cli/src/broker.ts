@@ -31,8 +31,13 @@ import contract from './bus.types.json' with { type: 'json' }
  */
 
 export interface BrokerOptions {
-    /** Listens on every interface: the library's socket.io transport takes no bind address. */
     port: number
+    /**
+     * The interface to bind. Absent binds every interface, which is what an embedder deploying a
+     * bus means; the command line passes 127.0.0.1 unless told otherwise, because a bus started
+     * bare on a laptop should not be serving the coffee-shop network.
+     */
+    host?: string
     name: string
     /** Brokers to join. Peers here become reachable from there, and the other way round. */
     upstream?: string[]
@@ -62,7 +67,7 @@ export const startBroker = async (options: BrokerOptions) => {
     const server = new RpcServer({
         name: options.name,
         transports: [
-            { port: options.port, ...(options.tls ? { tls: options.tls } : {}) },
+            { port: options.port, ...(options.host ? { host: options.host } : {}), ...(options.tls ? { tls: options.tls } : {}) },
             ...upstream.map((url) => ({ connect: url, ...(options.upstreamCredentials ? { credentials: options.upstreamCredentials } : {}) }))
         ],
         ...(options.authenticate ? { authenticate: options.authenticate } : {}),

@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+The first fruits of the first field trial: an agent that had never seen the system used it for an afternoon (`notes/session-feedback-2026-08-01.md`), and what it stumbled on became issues. These are their fixes.
+
+### The invocation handle: who is actually calling
+
+A method that opts in with `@rpc({ injectInvocation: true })` receives a branded `RpcInvocationHandle` as its final parameter: the routed `source`, the transport-vouched `identity` when there is one, the request id, the caller's `ttl` and its idempotency key. The parameter never exists for callers — the proxy type strips it and `extract` omits it from the wire schema, diagnosing both half-declared states — and absent optional arguments cannot shift it out of its seat. The console's chat is the first consumer: a message now files under who actually called, and the field trial's spoof (`say('page-…', …)` from a CLI) lands under the CLI's own name, with `from` surviving only as display data. Explicit rather than ambient by design: no AsyncLocalStorage, so a browser page hosting services behaves exactly like Node.
+
+### The broker binds loopback until told otherwise
+
+**Behaviour change.** `source-rpc broker` now binds `127.0.0.1` by default, the same instinct as the console, and states on startup which of the two surprises applies: a bare broker that the next bench cannot reach, or a `--host 0.0.0.0` one the whole segment can. It bound every interface silently before; a deployment that relied on that passes `--host 0.0.0.0` now — the container image and `docker-compose/network.yml` already do, since inside a container the `-p` mapping is what decides reachability. The library's `HttpServerOptions` gains the `host` field that makes the bind expressible at all; absent, a service binds wide as it always has.
+
+### Small things
+
+`source-rpc --version` prints the version; there was previously no way to ask.
+
 ## Source RPC 4.3.1
 
 No code changes in any package. The documentation moved to **[source-repo.github.io/rpc](https://source-repo.github.io/rpc/)** — the full guide with an always-visible sidebar and search, including four chapters nothing had documented before: observable components, command authority, topology, and structural context. The READMEs npm shows are now the short form — the pitch, install, one example, and the feature list with links into the site — which is this release's reason to exist.

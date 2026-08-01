@@ -21,6 +21,13 @@ import { defaultWebSocketPort } from './RPC/Rpc.js'
 export interface HttpServerOptions extends ServerOptions {
     port: number
     /**
+     * The interface to bind, e.g. '127.0.0.1'. Absent binds every interface, which is the right
+     * default for a service - a plant peer that only its own machine could reach would be a
+     * mystery - and the wrong one for a tool, which is why the CLI's listening commands pass
+     * loopback here unless told to widen.
+     */
+    host?: string
+    /**
      * TLS material for this server. Present means HTTPS; absent means plain HTTP.
      *
      * ```ts
@@ -77,7 +84,16 @@ export class NodeRpcServer extends RpcServerBase {
                 throw new Error(
                     `RpcServer '${this.options.name}': { https: true } is refused because it opened a server with no certificate. Pass tls: { cert, key } instead.`
                 )
-            return new SocketIoServerTransport(this.options.name, undefined, httpOptions.port, httpOptions.tls, [], { path: httpOptions.path }, this.options.authenticate)
+            return new SocketIoServerTransport(
+                this.options.name,
+                undefined,
+                httpOptions.port,
+                httpOptions.tls,
+                [],
+                { path: httpOptions.path },
+                this.options.authenticate,
+                httpOptions.host
+            )
         }
         if ((serveroption as ExternalServerOptions).server) {
             const externalOptions = serveroption as ExternalServerOptions
