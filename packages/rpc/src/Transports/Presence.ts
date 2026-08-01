@@ -79,3 +79,26 @@ export interface RelayContext {
  * the same answer for everybody.
  */
 export type RelayRule = boolean | ((context: RelayContext) => boolean)
+
+/**
+ * Wait for every transport's first presence sweep, bounded.
+ *
+ * Probed by capability rather than declared on the transport interface, because most transports
+ * have no sweep to wait for: a listening socket.io server learns peers as they dial in, so there
+ * is nothing to settle and it resolves at once. The bound resolves rather than throws - a sweep
+ * that never lands leaves the caller with whatever arrived, which is more useful than an error
+ * and honest so long as the caller knows settled is best-effort. It is unref'd, so a process
+ * whose work finished during the wait is not held open by it.
+ */
+export const settledAfterSweeps = async (transports: unknown[], waitMs: number) => {
+    const sweeps = transports.map((transport) => (transport as { presenceSettled?: () => Promise<void> }).presenceSettled?.() ?? Promise.resolve())
+    let bound: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+        Promise.all(sweeps).then(() => undefined),
+        new Promise<void>((resolve) => {
+            bound = setTimeout(resolve, waitMs)
+            ;(bound as unknown as { unref?: () => void }).unref?.()
+        })
+    ])
+    if (bound !== undefined) clearTimeout(bound)
+}

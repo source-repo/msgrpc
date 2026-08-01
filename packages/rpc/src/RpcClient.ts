@@ -9,6 +9,7 @@ import { contextNamespace, type ContextWireSnapshot } from './RPC/Context.js'
 import type { RemoteSurface } from './RPC/Invocation.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
+import { settledAfterSweeps } from './Transports/Presence.js'
 import { codecFor } from './RPC/Codec.js'
 import { readableName } from './Utilities/ReadableName.js'
 
@@ -222,6 +223,25 @@ export class RpcClient extends EventEmitter {
         // alternative is returning something that is not a proxy at all.
         if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
         return this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget) as RpcProxy<T>
+    }
+
+    /**
+     * ready(), and then the first presence sweep: the retained presence read on MQTT, the
+     * announced list delivered on socket.io. ready() means the link is up, not that anyone has
+     * been heard from - asking who is there immediately finds an empty network on a bus that is
+     * plainly there, which is why every script used to carry the same poll-for-peers loop.
+     *
+     * Settled means exactly that the first sweep arrived, not that every peer that will ever
+     * exist has: a peer that joins a second from now still appears a second from now, and a
+     * network with nobody on it settles empty. `waitMs` bounds the wait and then resolves rather
+     * than throws - the names known at the bound are still worth more than an error.
+     *
+     * Returns the peer names known at that moment, this client's own excluded.
+     */
+    async peersSettled(waitMs = 2000): Promise<string[]> {
+        await this.ready()
+        await settledAfterSweeps([this.options.transport].filter(Boolean), waitMs)
+        return this.peers.names().filter((name) => name !== this.options.name)
     }
 
     /** Created on the first component() call; every channel this client holds lives in it. */

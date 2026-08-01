@@ -126,6 +126,14 @@ transport.on(TransportEvent.peerGone, (peer) => console.log(peer, 'is gone'))
 
 Over MQTT this is retained presence: subscribing to `<prefix>/presence/+` hands over everyone already online, and a last will covers a peer that dies rather than leaves. Over socket.io the server keeps the list and sends it to each peer that announces itself.
 
+**`ready()` means the link is up, not that anyone has been heard from.** Presence arrives a moment after the connection does, so asking who is there immediately finds an empty network on a bus that is plainly there — and every script that hit this grew the same poll-for-peers loop. `peersSettled()` is that loop, done once and honestly:
+
+```typescript
+const others = await peer.peersSettled()      // ready(), then the first presence sweep
+```
+
+It resolves when the first sweep has landed — the retained burst read on MQTT, the announced list delivered on socket.io — and returns the names known at that moment, its own excluded. Settled means exactly that: the first picture has arrived, not that every peer that will ever exist has. A peer that joins a second from now still appears a second from now, a network with nobody on it settles empty, and the default two-second bound resolves rather than throws, because on a slow broker the names known then are still worth more than an error. It exists on both `RpcClient` and `RpcServer`; when a *named* peer is what you are waiting for, `awaitPeer(name)` is the sharper question.
+
 **A name is an address, so two peers must not share one.** Both transports report a collision as `TransportEvent.peerDisplaced`, and warn once. The newcomer takes the address either way: a peer reconnecting after a blip announces itself while the old connection may still look live, and refusing it would lock a peer out of its own name. What the event is for is the other case — two peers genuinely running under one name send each other's replies into the wrong place, which reads as calls timing out for no reason and is close to undiagnosable if nothing says so.
 
 Which end finds out differs, because the two protocols enforce it in different places. Over socket.io the **server** sees a second connection announce a name it already holds. Over MQTT there is no server in the middle and nothing has to detect anything: the client id is derived from the peer name, so the broker hands the session over and tells the **displaced peer** why, with reason code `0x8E` — which needs MQTT 5, since 3.1.1 has no reason codes and the connection simply closes.

@@ -12,6 +12,10 @@ A method that opts in with `@rpc({ injectInvocation: true })` receives a branded
 
 **Behaviour change.** `source-rpc broker` now binds `127.0.0.1` by default, the same instinct as the console, and states on startup which of the two surprises applies: a bare broker that the next bench cannot reach, or a `--host 0.0.0.0` one the whole segment can. It bound every interface silently before; a deployment that relied on that passes `--host 0.0.0.0` now — the container image and `docker-compose/network.yml` already do, since inside a container the `-p` mapping is what decides reachability. The library's `HttpServerOptions` gains the `host` field that makes the bind expressible at all; absent, a service binds wide as it always has.
 
+### `peersSettled()`: presence-settled ready
+
+`ready()` means the link is up, not that presence has arrived, so asking who is there immediately found an empty network on a bus that was plainly there — and every script re-wrote the same poll-for-peers loop. `await peer.peersSettled()` on both `RpcClient` and `RpcServer` resolves when the first presence sweep has landed — the retained burst read on MQTT (ended by a quiet gap after the subscription is acknowledged, since MQTT has no "that was everyone" packet), the announced list delivered on socket.io — and returns the names known at that moment. Settled means the first picture arrived, not that every peer that will ever exist has; the bounded wait resolves rather than throws. `source-rpc peers` and `source-rpc find` now use it in place of a flat one-second sleep, so a settled network answers in tens of milliseconds.
+
 ### Small things
 
 `source-rpc --version` prints the version; there was previously no way to ask.

@@ -217,6 +217,46 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
      */
     private pendingReplies = new Map<string, { contentType?: string; topic?: string }>()
     private maxTrackedReplies = 1000
+    /** Resolves the sweep below; undefined once it has fired. The timer is the quiescence gap. */
+    private sweepLanded?: () => void
+    private readonly sweep = new Promise<void>((resolve) => (this.sweepLanded = resolve))
+    private sweepQuiet?: ReturnType<typeof setTimeout>
+
+    /**
+     * Resolved when the retained presence burst has been read: the broker sends everything
+     * retained under <prefix>/presence/+ immediately after the subscription is granted, so a short
+     * silence after the grant is the only end-marker MQTT has - there is no "that was everyone"
+     * packet. The gap restarts on each presence message and first arms when the subscribe is
+     * acknowledged, so an empty network settles after one quiet gap and a full one after its burst.
+     *
+     * Resolved once and stays resolved, and a transport that observes no presence at all settles
+     * immediately - nothing is coming. This is a heuristic with an honest name: a broker that takes
+     * longer than the gap to deliver a retained message loses the race, which is what the bounded
+     * wait in peersSettled() is for.
+     */
+    presenceSettled(): Promise<void> {
+        if (!this.presence) this.settleSweep()
+        return this.sweep
+    }
+
+    /** How long the presence topic must stay silent before the retained burst counts as delivered. */
+    private static readonly SWEEP_QUIET_MS = 250
+
+    private settleSweep() {
+        const landed = this.sweepLanded
+        this.sweepLanded = undefined
+        if (this.sweepQuiet) clearTimeout(this.sweepQuiet)
+        this.sweepQuiet = undefined
+        landed?.()
+    }
+
+    private armSweepQuiet() {
+        if (!this.sweepLanded) return
+        if (this.sweepQuiet) clearTimeout(this.sweepQuiet)
+        this.sweepQuiet = setTimeout(() => this.settleSweep(), MqttTransport.SWEEP_QUIET_MS)
+        // A process whose work is done must not be held open by a discovery timer.
+        this.sweepQuiet.unref?.()
+    }
 
     constructor(
         name: string,
@@ -414,8 +454,13 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 // Observed even by replicas, which still need to know when their own peers depart.
                 await this.client?.subscribeAsync(this.presenceTopic('+'), { qos: this.qos })
                 if (this.announcePresence) await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, { qos: this.qos, retain: true })
+                // The subscribe is acknowledged, so the retained burst is on its way - the quiet
+                // gap that ends it starts counting now, not at connect.
+                this.armSweepQuiet()
             }
         } catch (e) {
+            // Including a failed presence subscribe: no burst is coming, so nothing to wait for.
+            this.settleSweep()
             this.emit(TransportEvent.transportError, e)
         }
         // Only now is inbound traffic actually reachable. Announcing earlier would let a client
@@ -426,6 +471,10 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
 
     private async onBrokerMessage(topic: string, messageBuffer: Buffer, packet?: IPublishPacket) {
         if (this.presence && topic.startsWith(this.presenceRoot)) {
+            // Still mid-burst: push the quiet gap back. Every presence message counts, including
+            // this transport's own name and tombstones, because each one proves the broker is
+            // still delivering retained state.
+            this.armSweepQuiet()
             const peer = topic.slice(this.presenceRoot.length)
             // Retained presence means a late subscriber also learns about peers that already left.
             if (!peer || peer === this.name) return
@@ -915,6 +964,8 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
     }
 
     override async close() {
+        // A waiter on the sweep must not outlive the transport.
+        this.settleSweep()
         // GenericModule.close() is a no-op, so without this the broker connection stayed open and
         // kept reconnecting after the transport was discarded.
         const client = this.client

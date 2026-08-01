@@ -13,6 +13,25 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
     readonly knownPeers = new Set<string>()
     /** Peers reachable through whatever owns this transport, advertised to the far end. */
     private carrying: string[] = []
+    /** Resolves the sweep below. Undefined once it has fired - settled never unsettles. */
+    private sweepLanded?: () => void
+    private readonly sweep = new Promise<void>((resolve) => (this.sweepLanded = resolve))
+
+    /**
+     * Resolved when the server's answer to this transport's announcement - the full peers list -
+     * has arrived. That list is socket.io's stand-in for MQTT's retained presence, so this is the
+     * moment "who is here?" stops being answered from an empty registry that merely has not been
+     * filled yet. Resolved once and stays resolved: settled is about the first picture, not about
+     * every change since, and a reconnect's fresh snapshot does not re-open it.
+     *
+     * A transport that does not announce is settled immediately, because the server only sends the
+     * list in reply to an announcement - nothing is coming, and waiting for it would just spend
+     * the caller's bound.
+     */
+    presenceSettled(): Promise<void> {
+        if (!this.announcePresence) this.sweepLanded?.()
+        return this.sweep
+    }
 
     constructor(
         /**
@@ -53,6 +72,10 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
 
     override async close() {
         this.closing = true
+        // A waiter on the sweep must not outlive the transport - on a link that never came up,
+        // the answer to "has the first picture arrived" is that no picture is coming.
+        this.sweepLanded?.()
+        this.sweepLanded = undefined
         const socket = this.socket
         this.socket = undefined
         this.connected = false
@@ -208,6 +231,11 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
     /** The server's view of who else is connected, turned into the same events MQTT emits. */
     private onPresence(update: PresenceUpdate) {
         if (Array.isArray(update.peers)) {
+            // The snapshot is here, whoever asked for it. Resolved before the loop, not after:
+            // even an all-filtered list (every name unusable or already known) is still the sweep.
+            const landed = this.sweepLanded
+            this.sweepLanded = undefined
+            landed?.()
             for (const peer of update.peers) {
                 if (!isUsablePeerName(peer) || peer === this.name || this.knownPeers.has(peer)) continue
                 this.knownPeers.add(peer)

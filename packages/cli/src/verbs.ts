@@ -208,10 +208,10 @@ const missing = (peer: string, options: VerbOptions, io: Output) => {
 
 export const runPeers = (options: VerbOptions, io: Output = processOutput) =>
     withNetwork(options, io, async (connected) => {
-        // Presence is retained, so most of the list is already here - but it arrives just after the
-        // subscription does, and a command that read the set immediately would sometimes print
-        // nothing on a network that was plainly up.
-        await new Promise((resolve) => setTimeout(resolve, Math.min(options.wait, 1000)))
+        // Presence is retained, so the list is already on its way - this waits for the first
+        // sweep to land rather than sleeping a flat second at it, so a settled network prints in
+        // tens of milliseconds and a slow one still gets the full wait.
+        await connected.network.peersSettled(Math.min(options.wait, 1000))
         const peers = [...connected.online].sort()
         if (options.json) io.out(JSON.stringify({ peers }, null, 2) + '\n')
         else if (peers.length === 0) io.err('source-rpc: no peers announced themselves.\n')
@@ -227,7 +227,8 @@ export const runPeers = (options: VerbOptions, io: Output = processOutput) =>
  */
 export const runFind = (capability: string, options: VerbOptions, io: Output = processOutput) =>
     withNetwork(options, io, async (connected) => {
-        await new Promise((resolve) => setTimeout(resolve, Math.min(options.wait, 1000)))
+        // The same settled wait as runPeers: whoever the sweep carried is who gets asked.
+        await connected.network.peersSettled(Math.min(options.wait, 1000))
         const matches: { peer: string; namespace: string; version?: string; capabilities: string[] }[] = []
         await Promise.all(
             [...connected.online].sort().map(async (peer) => {

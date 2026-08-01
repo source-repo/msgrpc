@@ -12,7 +12,7 @@ import type { RpcIdempotencyStore } from './RPC/Idempotency.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
 import { RpcProxy } from './RpcClient.js'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
-import { RelayRule } from './Transports/Presence.js'
+import { RelayRule, settledAfterSweeps } from './Transports/Presence.js'
 import { codecFor } from './RPC/Codec.js'
 import { Switch } from './Utilities/Switch.js'
 import { IManageRpc } from './RPC/Rpc.js'
@@ -508,5 +508,25 @@ export class RpcServerBase implements IManageRpc {
             if (Date.now() >= deadline) return false
             await new Promise((resolve) => setTimeout(resolve, 20))
         }
+    }
+
+    /**
+     * awaitPeer's sibling for when no name is known: ready(), and then the first presence sweep
+     * on every transport that receives one - the retained presence read on MQTT, the announced
+     * list delivered on socket.io. A transport with no sweep to wait for, such as a listener that
+     * learns peers as they dial in, settles at once, so a freshly started hub honestly reports
+     * whoever has already dialled and nobody else.
+     *
+     * Settled means exactly that the first sweep arrived, not that every peer that will ever
+     * exist has: a peer that joins a second from now still appears a second from now, and a
+     * network with nobody on it settles empty. `waitMs` bounds the wait and then resolves rather
+     * than throws - the names known at the bound are still worth more than an error.
+     *
+     * Returns the peer names known at that moment, this server's own excluded.
+     */
+    async peersSettled(waitMs = 2000): Promise<string[]> {
+        await this.ready()
+        await settledAfterSweeps(this.transports, waitMs)
+        return this.peers.names().filter((name) => name !== this.options.name)
     }
 }
