@@ -65,3 +65,11 @@ test('the refusal is a line of text rather than a stack trace', async (t) => {
     t.false(stderr.includes('Error:'), stderr)
     t.is(stdout, '', 'nothing about a usage error belongs on stdout')
 })
+
+test('--version answers with both versions, before anything else is parsed', async (t) => {
+    for (const flag of ['--version', '-v', 'version']) {
+        const { code, stdout } = await attempt([flag])
+        t.is(code, 0)
+        t.regex(stdout, /^source-rpc \d+\.\d+\.\d+ \(@source-repo\/rpc \d+\.\d+\.\d+\)\n$/, `for ${flag}`)
+    }
+})

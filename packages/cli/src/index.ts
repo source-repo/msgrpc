@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
 import {
     createHmacSigner,
@@ -36,7 +37,7 @@ import { bench, benchArguments } from './bench.js'
  * next calls.
  */
 
-const usage = `source-rpc <command> [options]
+const usage = `source-rpc <command> [options]          --version prints the CLI and library versions
 
   extract   write the contract described by the source to a file
   check     compare the source against a written contract and fail on a breaking change
@@ -966,6 +967,18 @@ const main = () => {
 
     const argv = process.argv.slice(2)
     const command = argv[0]
+
+    // Answered before anything else is parsed: the one question every bug report starts with.
+    // Both versions, because the CLI and the library it wraps can genuinely differ - the
+    // versions-together rule keeps releases aligned, not installations.
+    if (command === '--version' || command === '-v' || command === 'version') {
+        const require = createRequire(import.meta.url)
+        const own = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version
+        const library = (require('@source-repo/rpc/package.json') as { version: string }).version
+        process.stdout.write(`source-rpc ${own} (@source-repo/rpc ${library})\n`)
+        return
+    }
+
     const project = resolve(argument(argv, '--project', 'tsconfig.json'))
 
     // Both are long-running and async, so their rejections were unhandled: the process died on the
