@@ -6,6 +6,7 @@ import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
 import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import { contextNamespace, type ContextWireSnapshot } from './RPC/Context.js'
+import type { RemoteSurface } from './RPC/Invocation.js'
 import type { IClientOptions } from 'mqtt'
 import { SocketIoClientTransport } from './Transports/SocketIoClientTransport.js'
 import { codecFor } from './RPC/Codec.js'
@@ -75,7 +76,7 @@ export interface RpcClientOptions {
  * of the inner proxy before this change too, but now it is the whole of the surface rather than a
  * detail one level down.
  */
-export type RpcProxy<T> = T & WithOptions<T>
+export type RpcProxy<T> = RemoteSurface<T> & WithOptions<RemoteSurface<T>>
 
 /**
  * Emits the TransportEvent lifecycle events - connected and disconnected for the link itself, and
@@ -220,7 +221,7 @@ export class RpcClient extends EventEmitter {
         // it does - so this cannot be missing here. Thrown rather than asserted away, because the
         // alternative is returning something that is not a proxy at all.
         if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
-        return this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget)
+        return this.rpcClient.proxy<T>(name, target ? target : this.options.defaultTarget) as RpcProxy<T>
     }
 
     /** Created on the first component() call; every channel this client holds lives in it. */

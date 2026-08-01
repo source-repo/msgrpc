@@ -200,3 +200,19 @@ test('capabilities are captured package-qualified, closed over extends, and loca
     )
     t.falsy(schema.namespaces.local_spinner.capabilities, 'the refused capability is absent, not degraded to a bare name')
 })
+
+test('an injected invocation handle never reaches the contract, and the half-declared states are named', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('capability-tsconfig.json'))
+
+    // Declared and present: the final parameter is the runtime's, so callers see the method without it.
+    const audit = schema.namespaces.renderer.methods.audit
+    t.is(audit.params.length, 1)
+    t.deepEqual(audit.paramNames, ['layout'])
+
+    // Present without the declaration: nothing will inject it, and silence would ship a handler
+    // reading undefined - so it is a diagnostic, in the extractor's usual loud tradition.
+    t.true(
+        diagnostics.some((diagnostic) => /nothing will ever inject it/.test(diagnostic.reason)),
+        `expected the orphaned-handle diagnostic, got: ${JSON.stringify(diagnostics)}`
+    )
+})

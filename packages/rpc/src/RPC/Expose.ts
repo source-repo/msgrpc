@@ -46,8 +46,10 @@ const semantics = new WeakMap<object, Map<string, RpcMethodSemantics>>()
 const conflated = new WeakMap<object, Set<string>>()
 /** Methods that require the caller to hold the component's authority, per constructor. */
 const authority = new WeakMap<object, Set<string>>()
+/** Methods that receive an injected RpcInvocation as their final parameter, per constructor. */
+const injected = new WeakMap<object, Set<string>>()
 
-const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean) => {
+const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean, injectInvocation?: boolean) => {
     let names = marked.get(constructor)
     if (!names) marked.set(constructor, (names = new Set()))
     names.add(method)
@@ -60,6 +62,11 @@ const markOn = (constructor: object, method: string, declared?: RpcMethodSemanti
         let guarded = authority.get(constructor)
         if (!guarded) authority.set(constructor, (guarded = new Set()))
         guarded.add(method)
+    }
+    if (injectInvocation) {
+        let handles = injected.get(constructor)
+        if (!handles) injected.set(constructor, (handles = new Set()))
+        handles.add(method)
     }
     if (!declared) return
     let declarations = semantics.get(constructor)
@@ -96,6 +103,13 @@ export interface RpcMethodOptions {
      * component, so anywhere else there is nothing to check against.
      */
     requiresAuthority?: boolean
+    /**
+     * Inject an RpcInvocation as this method's final parameter - who is actually calling, vouched
+     * or claimed, with the request's id, ttl and idempotency key. The parameter never exists for
+     * callers: the proxy type strips it and the extractor omits it from the wire schema. This is
+     * how a handler reads the authenticated caller instead of trusting a `from`-style argument.
+     */
+    injectInvocation?: boolean
 }
 
 type RpcMethodDecorator<This, Args extends unknown[], Return> = (
@@ -110,7 +124,7 @@ const mark = <This, Args extends unknown[], Return>(
     if (context.static) throw new Error('@rpc: static methods cannot be exposed')
     if (context.private) throw new Error('@rpc: private methods cannot be exposed')
     context.addInitializer(function (this: This) {
-        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority)
+        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation)
     })
 }
 
@@ -239,6 +253,15 @@ export const declaredAuthority = (instance: object): Set<string> => {
     const methods = new Set<string>()
     for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
         for (const method of authority.get(ctor) ?? []) methods.add(method)
+    }
+    return methods
+}
+
+/** The methods an instance declares as invocation-injected, walking the chain like the others. */
+export const declaredInjection = (instance: object): Set<string> => {
+    const methods = new Set<string>()
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        for (const method of injected.get(ctor) ?? []) methods.add(method)
     }
     return methods
 }

@@ -382,7 +382,7 @@ export class RpcServerBase implements IManageRpc {
      */
     async proxy<T>(name: string, target?: string): Promise<RpcProxy<T>> {
         await this.ready()
-        return this.caller.proxy<T>(name, target ?? '*')
+        return this.caller.proxy<T>(name, target ?? '*') as RpcProxy<T>
     }
 
     /**

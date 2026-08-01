@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { v4 as uuidv4 } from 'uuid'
-import type { RpcComponentLike, RpcComponentProxy, RpcComponentStore } from '@source-repo/rpc'
+import type { RpcComponentStore } from '@source-repo/rpc'
 import { rpcComponent } from '@source-repo/rpc'
 import type { AcquireResult, EnqueueOptions, EnqueueReceipt, WorkLease, WorkQueueCapacity, WorkQueueProtocol, WorkQueueSnapshot } from './Contract.js'
 import type { WorkQueueProps, WorkQueueState } from './Service.js'
@@ -67,10 +67,14 @@ export interface WorkQueue<TTask> {
     metrics(): Promise<RpcComponentStore<WorkQueueProps, WorkQueueState>>
 }
 
-/** What connectWorkQueue needs from a peer: RpcClient and RpcServer both have exactly this. */
+/**
+ * What connectWorkQueue needs from a peer: RpcClient and RpcServer both satisfy it. Deliberately
+ * loose - the library's proxy return type is refined per release (the invocation handle stripped
+ * the latest layer off it), and the queue casts at its own boundary rather than chasing it.
+ */
 export interface QueuePeer {
-    proxy<T>(name: string, target?: string): Promise<T>
-    component<T extends RpcComponentLike>(name: string, target?: string): Promise<RpcComponentProxy<T>>
+    proxy(name: string, target?: string): Promise<unknown>
+    component(name: string, target?: string): Promise<unknown>
 }
 
 type MaybeOptioned<T> = T & { $with?(options: { timeoutMs?: number }): T }
@@ -287,17 +291,17 @@ export const workQueueOver = <TTask>(
 
 /** Connect to a queue served elsewhere on the network, under this peer's own name and link. */
 export const connectWorkQueue = async <TTask>(peer: QueuePeer, name: string, target?: string): Promise<WorkQueue<TTask>> => {
-    const protocol = await peer.proxy<MaybeOptioned<WorkQueueProtocol<TTask>>>(name, target)
+    const protocol = (await peer.proxy(name, target)) as MaybeOptioned<WorkQueueProtocol<TTask>>
     return workQueueOver(
         protocol,
         name,
         async () => {
-            const remote = await peer.component<{ props: WorkQueueProps; state: WorkQueueState }>(name, target)
-            return remote[rpcComponent] as RpcComponentStore<WorkQueueProps, WorkQueueState>
+            const remote = (await peer.component(name, target)) as { [rpcComponent]: RpcComponentStore<WorkQueueProps, WorkQueueState> }
+            return remote[rpcComponent]
         },
         // The `latest` resolver: the source host's $context, asked over this peer's own link.
         async (source, node, tokenIds) => {
-            const context = await peer.proxy<{ read(node: string, tokenIds: string[]): Promise<unknown> }>('$context', source)
+            const context = (await peer.proxy('$context', source)) as { read(node: string, tokenIds: string[]): Promise<unknown> }
             return await context.read(node, tokenIds)
         }
     )

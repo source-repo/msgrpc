@@ -17,7 +17,8 @@ import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
 import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredAuthority, declaredConflation, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { declaredAuthority, declaredConflation, declaredInjection, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { rpcInvocationBrand, type RpcInvocationHandle } from './Invocation.js'
 import { contextNamespace, type HostContext } from './Context.js'
 import {
     acquireComponentAuthority,
@@ -630,6 +631,23 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         }
 
         const params = [...payload.params]
+        if (this.manageRpc.exposedInjection[payload.path]?.has(payload.method)) {
+            // Padded to the handler's declared arity first, so a caller sending fewer optional
+            // arguments cannot shift the handle into an argument's seat - the injected parameter
+            // is positional only in source, never on the wire.
+            while (params.length < handler.length - 1) params.push(undefined)
+            const handle: RpcInvocationHandle = Object.freeze({
+                [rpcInvocationBrand]: true as const,
+                context: Object.freeze({
+                    requestId: payload.id,
+                    source,
+                    ...(this.resolveIdentity?.(source) ? { identity: this.resolveIdentity(source) } : {}),
+                    ...(payload.ttl !== undefined ? { ttl: payload.ttl } : {}),
+                    ...(payload.idempotencyKey ? { idempotencyKey: payload.idempotencyKey } : {})
+                })
+            })
+            params.push(handle)
+        }
         let result
         try {
             result = await handler(...params)
@@ -835,6 +853,8 @@ export class ManageRpc implements IManageRpc {
     exposedConflation: { [nameSpace: string]: Set<string> } = {}
     /** Which of each namespace's methods only the authority holder may call. */
     exposedAuthority: { [nameSpace: string]: Set<string> } = {}
+    /** Which of each namespace's methods receive an injected RpcInvocation as their final parameter. */
+    exposedInjection: { [nameSpace: string]: Set<string> } = {}
     /** Each namespace's mailbox bound, where one was declared. Absent means the default. */
     exposedMailbox: { [nameSpace: string]: number } = {}
     /**
@@ -916,6 +936,8 @@ export class ManageRpc implements IManageRpc {
                 throw new Error(`exposeClassInstance: ${namespace}.${[...guarded][0]} declares requiresAuthority, but ${instance.constructor.name} is not an RpcComponent - there is no authority to check against`)
             this.exposedAuthority[namespace] = guarded
         }
+        const handles = declaredInjection(instance)
+        if (handles.size) this.exposedInjection[namespace] = handles
         const mailbox = settings.mailbox ?? declared?.mailbox
         if (mailbox !== undefined) {
             if (!Number.isInteger(mailbox) || mailbox < 1) throw new Error(`exposeClassInstance: ${namespace} declares a mailbox of ${mailbox}; the bound is a positive count of waiting calls`)

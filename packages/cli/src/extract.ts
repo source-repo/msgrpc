@@ -208,11 +208,35 @@ const namespaceDeclaration = (declaration: ClassDeclaration, diagnostics: Diagno
     return { name, version }
 }
 
+/** Whether `@rpc({ injectInvocation: true })` is declared - a boolean, so literalOption cannot read it. */
+const declaresInjection = (method: MethodDeclaration) => {
+    const decorator = method.getDecorators().find((candidate) => candidate.getName() === 'rpc')
+    const argument = decorator?.getArguments()[0]
+    if (!Node.isObjectLiteralExpression(argument)) return false
+    const property = argument.getProperty('injectInvocation')
+    return Node.isPropertyAssignment(property) && property.getInitializer()?.getKind() === ts.SyntaxKind.TrueKeyword
+}
+
 const methodToSchema = (method: MethodDeclaration, context: Context): MethodSchema => {
     const params: TypeNode[] = []
     const paramNames: string[] = []
     let rest: TypeNode | undefined
-    for (const parameter of method.getParameters()) {
+
+    // The injected handle is positional only in source: it never exists for callers, so it never
+    // reaches the contract. Declared without the matching parameter - or the parameter without
+    // the declaration - is diagnosed, because each half alone is a handler reading undefined.
+    let parameters = method.getParameters()
+    const last = parameters[parameters.length - 1]
+    const lastIsHandle = last?.getType().getSymbol()?.getName() === 'RpcInvocationHandle'
+    const injecting = declaresInjection(method)
+    if (injecting && lastIsHandle) parameters = parameters.slice(0, -1)
+    else if (injecting) fail({ ...context, node: method }, 'declares injectInvocation, but its final parameter is not an RpcInvocationHandle - the handle arrives last, or not at all')
+    else if (lastIsHandle) {
+        fail({ ...context, node: method }, 'takes an RpcInvocationHandle without declaring injectInvocation, so nothing will ever inject it')
+        parameters = parameters.slice(0, -1)
+    }
+
+    for (const parameter of parameters) {
         const at = { ...context, where: `${context.where} argument ${params.length}`, node: parameter }
         if (parameter.isRestParameter()) {
             const element = parameter.getType().getArrayElementType()

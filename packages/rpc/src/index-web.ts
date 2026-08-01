@@ -17,6 +17,7 @@ export * from './RPC/ComponentClient.js'
 export * from './RPC/Topology.js'
 export * from './RPC/Context.js'
 export * from './RPC/ContextResolver.js'
+export * from './RPC/Invocation.js'
 
 export * from './RPC/Rpc.js'
 export * from './RPC/Auth.js'

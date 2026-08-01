@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
-import { readableNameFor, validateValue, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import { readableNameFor, validateValue, type RemoteSurface, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { environmentFor } from './scripts.js'
@@ -540,7 +540,7 @@ export const startMcp = async (options: McpOptions) => {
      * are talking to, because there is nothing to know - the method names are the same either way,
      * which is the point of having made it a namespace rather than a set of tool handlers.
      */
-    const scriptingOn = async (node: unknown): Promise<ScriptingService> => {
+    const scriptingOn = async (node: unknown): Promise<RemoteSurface<ScriptingService>> => {
         const target = typeof node === 'string' && node.trim() ? node.trim() : undefined
         if (!target || target === options.name) {
             if (!scripting) throw new Error('scripting is not enabled here - start this server with --scripts <dir>')
@@ -678,8 +678,8 @@ export const startMcp = async (options: McpOptions) => {
             // One shape for every one of these: find the node, call the method, report what came
             // back. A refusal from the far end arrives as Forbidden, and saying what that means is
             // worth more than the code - a key is exchanged out of band, never over this bus.
-            const on = async (act: (target: ScriptingService) => Promise<{ text: string; isError?: boolean }>) => {
-                let target: ScriptingService
+            const on = async (act: (target: RemoteSurface<ScriptingService>) => Promise<{ text: string; isError?: boolean }>) => {
+                let target: RemoteSurface<ScriptingService>
                 try {
                     target = await scriptingOn(args.node)
                 } catch (e) {
