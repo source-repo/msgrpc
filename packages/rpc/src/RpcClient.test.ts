@@ -202,7 +202,10 @@ testWithContext.serial('repeating a subscription does not stack server-side list
 
     for (let i = 0; i < 5; i++) await proxy.on('ping', () => {})
 
-    t.is(eventing.listenerCount('ping'), 1, 'each on() stacked another server-side listener')
+    // Two: the subscription's listener and the event cursor's emission counter, which attaches
+    // at first subscription and stays for the life of the server. A stacked subscription would
+    // make this three, which is what the assertion is protecting against.
+    t.is(eventing.listenerCount('ping'), 2, 'each on() stacked another server-side listener')
     t.is(server.rpc.eventProxies.size, 1)
     await dispose()
 })
@@ -227,7 +230,8 @@ testWithContext.serial('events resume after the link drops and comes back', asyn
     await waitFor(() => received.length === 2)
 
     t.deepEqual(received, ['before', 'after'])
-    t.is(eventing.listenerCount('ping'), 1, 'the replayed subscription stacked a duplicate listener')
+    // Subscription plus the cursor counter, as above.
+    t.is(eventing.listenerCount('ping'), 2, 'the replayed subscription stacked a duplicate listener')
     await dispose()
 })
 
@@ -240,7 +244,8 @@ testWithContext.serial('a departing client releases its subscriptions', async (t
     await client.close()
 
     await waitFor(() => server.rpc.eventProxies.size === 0)
-    t.is(eventing.listenerCount('ping'), 0, 'the exposed instance kept a listener for a client that is gone')
+    // The cursor counter deliberately outlives every subscriber; the subscription must not.
+    t.is(eventing.listenerCount('ping'), 1, 'the exposed instance kept a listener for a client that is gone')
     await dispose()
 })
 

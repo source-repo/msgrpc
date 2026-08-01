@@ -248,7 +248,9 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
         name: 'watch_events',
         description:
             "Subscribe to one of a peer's events for a few seconds and return what it emitted. The subscription is dropped again afterwards, " +
-            'so looking does not leave a listener behind on the device.',
+            'so looking does not leave a listener behind on the device. The answer also says whether anything was missed since your previous ' +
+            'watch of the same stream: "saw nothing" and "saw nothing and missed nothing" are different answers, and `loss` states which one ' +
+            'this was - or that the server restarted between watches, which makes the question unanswerable, or that the peer is too old to say.',
         inputSchema: {
             type: 'object',
             properties: {
@@ -610,6 +612,14 @@ export const startMcp = async (options: McpOptions) => {
      */
     const described = new Map<string, { description: ServerDescription; at: number; shape?: string }>()
     const DESCRIBE_CACHE_MS = 30_000
+
+    /**
+     * Where each watched event stream stood when its last watch window closed, so the next window
+     * can say whether anything fell between them. Held here for the life of this server - the
+     * windows are the model's, but the memory of them is one process's, which is exactly the
+     * lifetime the answer is honest for: a restarted MCP server starts over at "first watch".
+     */
+    const watchCursors = new Map<string, { epoch: string; seq: number }>()
     const describedOf = async (peer: string) => {
         const held = described.get(peer)
         const announced = network.peers.shapeOf(peer)
@@ -867,15 +877,59 @@ export const startMcp = async (options: McpOptions) => {
             const event = String(args.event ?? '')
             if (!peer || !namespace || !event) return { text: 'watch_events needs peer, namespace and event.', isError: true }
             const seconds = Math.min(Math.max(Number(args.seconds ?? 5), 1), MAX_WATCH_SECONDS)
-            const heard: unknown[] = []
-            const handler = (...emitted: unknown[]) => void heard.push({ at: Date.now(), args: emitted })
+            const heard: { at: number; args: unknown[]; seq?: number }[] = []
+            const caller = network.caller
+            const handler = (...emitted: unknown[]) => {
+                // Read on the handler's first line, which is the one moment the stamp is this
+                // delivery's - see lastDeliveredStamp. Absent means the server does not track it.
+                const stamp = caller?.lastDeliveredStamp
+                heard.push({ at: Date.now(), args: emitted, ...(stamp && stamp.event === event ? { seq: stamp.seq } : {}) })
+            }
+            // The counter's stand at the emitting server, this incarnation. Undefined for a peer
+            // that predates cursors or serves no introspection - the loss answer says so rather
+            // than pretending. Asking also starts the counter for an ad-hoc event, so even when
+            // this watch cannot say, the next one can.
+            const cursorOf = async () => {
+                try {
+                    const msgrpc = await network.proxy<{ eventCursor(ns: string, ev: string): Promise<{ epoch: string; seq: number | null; since?: number }> }>('msgrpc', peer)
+                    return await msgrpc.eventCursor(namespace, event)
+                } catch {
+                    return undefined
+                }
+            }
             try {
                 const proxy = await network.proxy<Subscribable>(namespace, peer)
                 await proxy.on(event, handler)
                 await new Promise((resolve) => setTimeout(resolve, seconds * 1000))
                 // Dropped again, so a look does not leave a subscription behind on the device.
                 await proxy.off(event, handler).catch(() => undefined)
-                return { text: JSON.stringify({ watchedFor: seconds, event: `${peer}.${namespace}.${event}`, heard }, null, 2) }
+                const streamKey = `${peer}\u0000${namespace}\u0000${event}`
+                const previous = watchCursors.get(streamKey)
+                const cursor = await cursorOf()
+                let loss: string
+                if (!cursor || cursor.seq === null) loss = 'unknown - the peer reports no cursor for this event, so nothing can be said about what fell between watches'
+                else {
+                    watchCursors.set(streamKey, { epoch: cursor.epoch, seq: cursor.seq })
+                    if (!previous) loss = 'first watch of this stream here - the next one can say whether anything fell between them'
+                    else if (previous.epoch !== cursor.epoch) loss = 'unknowable - the server restarted between watches, and a fresh incarnation cannot say what happened before it'
+                    else {
+                        // Everything that fired since the last watch ended, minus what this one
+                        // heard, is what fell between them - or was lost mid-watch, which the
+                        // per-event seq stamps in `heard` distinguish.
+                        const missed = cursor.seq - previous.seq - heard.length
+                        loss =
+                            missed <= 0
+                                ? `gapless - nothing fired between this watch and the previous one that was not heard (${cursor.seq - previous.seq} fired, ${heard.length} heard)`
+                                : `missed ${missed} - ${cursor.seq - previous.seq} fired since the previous watch and only ${heard.length} were heard here`
+                    }
+                }
+                return {
+                    text: JSON.stringify(
+                        { watchedFor: seconds, event: `${peer}.${namespace}.${event}`, heard, loss, ...(cursor && cursor.seq !== null ? { cursor } : {}) },
+                        null,
+                        2
+                    )
+                }
             } catch (e) {
                 return { text: `cannot watch ${peer}.${namespace}.${event}: ${failureText(e)}`, isError: true }
             }

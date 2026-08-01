@@ -143,7 +143,20 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * Routes an event to the handlers registered for that peer and that instance, rather than to
      * everything listening for the name.
      */
+    /**
+     * The seq/epoch stamp of the delivery currently in a handler's hands, when the emitting server
+     * tracks the event. Set before the handlers run and meaningful only *during* one, read
+     * synchronously - deliveries do not interleave within one client, so a handler that reads it
+     * on its first line reads its own stamp. The alternative was widening every handler signature,
+     * which would have broken each of them for the benefit of the one watcher that wants this.
+     */
+    lastDeliveredStamp?: { peer: string; namespace?: string; event: string; seq: number; epoch: string }
+
     private deliverEvent(payload: RpcEventPayload, source?: string) {
+        this.lastDeliveredStamp =
+            payload.seq !== undefined && payload.epoch
+                ? { peer: source ?? '', ...(payload.path ? { namespace: payload.path } : {}), event: payload.event, seq: payload.seq, epoch: payload.epoch }
+                : undefined
         // Held in a local so the narrowing survives into the delivery callbacks below.
         const emitter = this.eventEmitter
         if (emitter instanceof EventEmitter) {

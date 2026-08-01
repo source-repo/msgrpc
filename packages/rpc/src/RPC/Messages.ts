@@ -165,4 +165,12 @@ export interface RpcEventPayload extends RpcMessage {
     params: unknown[]
     /** Instance the event came from. Lets a wire format name the emitter, as MQTT 5 does. */
     path?: string
+    /**
+     * This emission's position in the server's per-(namespace, event) count, when the server
+     * tracks it - see RpcServerHandler.trackEvent. With `epoch`, what lets a watcher say "gapless"
+     * rather than "saw nothing": consecutive stamps prove nothing fell between them.
+     */
+    seq?: number
+    /** The emitting server's incarnation. A sequence only orders within one epoch. */
+    epoch?: string
 }

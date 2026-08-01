@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import EventEmitter from 'node:events'
 import { rpc, rpcNamespace, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { failureText } from './mcp.js'
 
@@ -20,6 +21,17 @@ const here = dirname(fileURLToPath(import.meta.url))
 const cli = resolve(here, 'index.js')
 const run = randomUUID().slice(0, 8)
 const peer = (name: string) => `${name}-${run}`
+
+/** An emitter for the watch tests: wail() fires whether or not anyone is listening. */
+class Siren extends EventEmitter {
+    @rpc({ semantics: 'query' })
+    async ping() {
+        return 'ok'
+    }
+    wail(level: number) {
+        this.emit('wail', level)
+    }
+}
 
 @rpcNamespace('boiler')
 class Boiler {
@@ -395,4 +407,80 @@ test('find_capability discovers by contract, and a wrong-shaped call fails befor
         await plant.close()
         await hub.close()
     }
+})
+
+test('watch_events says whether anything was missed between windows, and when it cannot know', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-watch'), transports: [{ port: 3992, host: '127.0.0.1' }] })
+    await hub.ready()
+
+    const sirenSchema = {
+        schema: 1,
+        namespaces: { siren: { version: '1.0.0', methods: { ping: { params: [], paramNames: [] } }, events: { wail: { params: [{ kind: 'number' }] } } } }
+    } as unknown as RpcSchema
+
+    const sirenPeer = () => {
+        const siren = new Siren()
+        const server = new RpcServer({
+            name: peer('siren'),
+            transports: [{ connect: 'http://localhost:3992' }],
+            exposeIntrospection: true,
+            schema: sirenSchema
+        })
+        server.exposeClassInstance(siren, 'siren')
+        return { siren, server }
+    }
+    let running = sirenPeer()
+    await running.server.ready()
+
+    const client = mcpClient(3992)
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    client.notify('notifications/initialized')
+
+    const awaitPeerListed = async () => {
+        const deadline = Date.now() + 10000
+        for (;;) {
+            const listed = await client.send('tools/call', { name: 'list_peers', arguments: {} })
+            if ((JSON.parse(toolText(listed).text) as { peers: string[] }).peers.includes(peer('siren'))) return
+            if (Date.now() > deadline) throw new Error('siren never appeared on the hub')
+            await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+    }
+    await awaitPeerListed()
+
+    const watch = async () => {
+        const answer = await client.send('tools/call', { name: 'watch_events', arguments: { peer: peer('siren'), namespace: 'siren', event: 'wail', seconds: 1 } })
+        return JSON.parse(toolText(answer).text) as { heard: unknown[]; loss: string; cursor?: { epoch: string; seq: number } }
+    }
+
+    // The first window has nothing to compare against, and says so.
+    const first = await watch()
+    t.regex(first.loss, /first watch/)
+
+    // A quiet stream, watched twice: this is the sentence the issue exists for.
+    const quiet = await watch()
+    t.regex(quiet.loss, /gapless/, `saw nothing must mean missed nothing here, got: ${quiet.loss}`)
+    t.is(quiet.heard.length, 0)
+
+    // An event between windows: the next watch hears nothing and reports the miss, not silence.
+    running.siren.wail(1)
+    const missed = await watch()
+    t.is(missed.heard.length, 0, 'the event fired while nobody watched')
+    t.regex(missed.loss, /missed 1/, `a fallen event must be reported as a gap, got: ${missed.loss}`)
+
+    // A restart between windows: a fresh incarnation cannot say what an old one dropped.
+    await running.server.close()
+    running = sirenPeer()
+    await running.server.ready()
+    await awaitPeerListed()
+    const unknowable = await watch()
+    t.regex(unknowable.loss, /unknowable|restarted/, `a restart must be reported as unanswerable, got: ${unknowable.loss}`)
+
+    // And the epoch has turned over, so the very next quiet window is gapless again.
+    const recovered = await watch()
+    t.regex(recovered.loss, /gapless/)
+
+    await client.close()
+    await running.server.close()
+    await hub.close()
 })

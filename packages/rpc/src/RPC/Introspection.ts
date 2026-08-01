@@ -231,6 +231,30 @@ export class Introspection {
         return instance === HOST_ROOT ? held.updateHost(patch, mutation) : held.update(instance, patch, mutation)
     }
 
+    /**
+     * Where one event's emission counter stands, so a watcher polling in windows can tell "saw
+     * nothing and missed nothing" from "saw nothing but three fired" - which are different
+     * answers, and only the first was ever available before.
+     *
+     * The vocabulary is the component channel's: `epoch` names this server incarnation and `seq`
+     * only orders within it, so a cursor held across a restart compares epochs, finds them
+     * different, and reports "cannot know" rather than a guess. `since` is when counting began -
+     * for an event the schema declares that is expose time, and for an ad-hoc one it is the first
+     * subscription or the first of these calls, whichever came sooner; asking here starts the
+     * counter, so the *next* window has ground to stand on either way. An event nothing can track
+     * - no such namespace, or an instance that cannot emit - answers seq: null, plainly.
+     *
+     * Rides the same opt-in and the same authorize() gate as describe(), because how often a
+     * device fires an alarm is process information of exactly the same order as what it serves.
+     */
+    @rpc({ semantics: 'query' })
+    async eventCursor(namespace: string, event: string): Promise<{ epoch: string; seq: number | null; since?: number }> {
+        const known = this.handler.eventSequenceOf(namespace, event)
+        if (known === undefined) this.handler.trackEvent(namespace, event)
+        const seq = this.handler.eventSequenceOf(namespace, event)
+        return { epoch: this.handler.epoch, seq: seq ?? null, ...(seq !== undefined ? { since: this.handler.eventTrackedSince(namespace, event) } : {}) }
+    }
+
     @rpc
     async describe(): Promise<ServerDescription> {
         const manage = this.handler.manageRpc

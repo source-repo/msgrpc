@@ -305,6 +305,10 @@ export class RpcServerBase implements IManageRpc {
      */
     private announceShape() {
         if (!this.rpc) return
+        // A changed surface owes the network two things: the new hash in presence, and counters
+        // on whatever events the schema now declares - counted from expose, not from the first
+        // subscriber, or "nothing fired while nobody watched" could never be said honestly.
+        this.rpc.trackDeclaredEvents()
         const shape = surfaceShape(this.rpc)
         for (const transport of this.transports) (transport as unknown as { announceShape?: (shape: string) => void }).announceShape?.(shape)
     }

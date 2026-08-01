@@ -141,6 +141,73 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     manageRpc = new ManageRpc()
     eventProxies = new Map<string, EventProxy>()
 
+    /**
+     * One id per server incarnation, riding every stamped event and the eventCursor answer. The
+     * component channel's epoch discipline, applied server-wide: a sequence number only orders
+     * within one life, and comparing counts across a restart is exactly the mistake this makes
+     * impossible to make silently - a changed epoch says "cannot know", plainly.
+     */
+    readonly epoch: string = typeof globalThis.crypto?.randomUUID === 'function' ? globalThis.crypto.randomUUID().slice(0, 8) : uuidv4().slice(0, 8)
+
+    /**
+     * How many times each tracked (namespace, event) has been emitted this incarnation - whether
+     * or not anyone was subscribed, which is the whole point: a watcher that polls in windows can
+     * ask the counter whether anything fired between them, and "saw nothing" becomes "saw nothing
+     * and missed nothing" or "saw nothing but three fired", which are different answers.
+     */
+    private readonly eventSequences = new Map<string, number>()
+    /** The counting listeners, so tracking one event twice attaches one counter, not two. */
+    private readonly eventCounters = new Map<string, () => void>()
+    /** When each counter started, so a cursor can say what its count is a count *since*. */
+    private readonly eventTracked = new Map<string, number>()
+
+    private eventSequenceKey(instanceName: string, event: string) {
+        // NUL, escaped: it cannot occur in a namespace, so the key cannot be forged by a clever
+        // event name - and never the byte itself, which turns this file binary for every tool.
+        return `${instanceName}\u0000${event}`
+    }
+
+    /**
+     * Start counting emissions of one event, if the instance can emit at all. Idempotent. Called
+     * at expose time for every event the schema declares, and lazily for an event first seen at
+     * subscribe or cursor time - whose count then honestly starts at the moment tracking did, not
+     * at the dawn of the process. Attached before any subscriber's EventProxy, so by the time a
+     * delivery is stamped the counter has already moved.
+     *
+     * The component snapshot channel is excluded: it carries its own epoch and revision, and a
+     * second numbering beside those would be the third ordering vocabulary this deliberately is not.
+     */
+    trackEvent(instanceName: string, event: string) {
+        if (event === componentSnapshotEvent) return
+        const key = this.eventSequenceKey(instanceName, event)
+        if (this.eventCounters.has(key)) return
+        const instance = this.manageRpc.exposedNameSpaceInstances[instanceName]
+        if (!(instance instanceof EventEmitter)) return
+        const counter = () => this.eventSequences.set(key, (this.eventSequences.get(key) ?? 0) + 1)
+        this.eventCounters.set(key, counter)
+        this.eventSequences.set(key, this.eventSequences.get(key) ?? 0)
+        this.eventTracked.set(key, Date.now())
+        instance.on(event, counter)
+    }
+
+    /** When counting began for one event, or undefined for one nothing tracks. */
+    eventTrackedSince(instanceName: string, event: string) {
+        return this.eventTracked.get(this.eventSequenceKey(instanceName, event))
+    }
+
+    /** Every event the schema declares for every exposed emitter. Cheap to repeat; expose calls it. */
+    trackDeclaredEvents() {
+        for (const [name, described] of Object.entries(this.schema?.namespaces ?? {})) {
+            if (!this.manageRpc.exposedNameSpaceInstances[name]) continue
+            for (const event of Object.keys(described.events ?? {})) this.trackEvent(name, event)
+        }
+    }
+
+    /** The counter's current stand for one event, or undefined for one nothing tracks. */
+    eventSequenceOf(instanceName: string, event: string) {
+        return this.eventSequences.get(this.eventSequenceKey(instanceName, event))
+    }
+
     /** Decides whether a call may proceed. When unset, every call that resolves is allowed. */
     authorize?: RpcAuthorizer
     /** Supplied by RpcServer; asks the transports which identity a peer name is bound to. */
@@ -382,6 +449,11 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                     let eventProxy = this.eventProxies.get(eventKey)
                     let result = 'ok - already exists'
                     if (!eventProxy) {
+                        // Tracking first, so the counter's listener lands before the proxy's and
+                        // a delivery is stamped with a sequence that already counted it. For an
+                        // event the schema declares this is a no-op - expose tracked it - and for
+                        // an ad-hoc one the count honestly starts here.
+                        this.trackEvent(instanceName, event)
                         eventProxy = new EventProxy(this, inst, event, source, instanceName)
                         this.eventProxies.set(eventKey, eventProxy)
                         eventProxy.attach()
@@ -829,7 +901,16 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     }
 
     async sendEvent(target: string, event: string, params: unknown[], path?: string) {
-        return await this.sendPayload({ type: RpcMessageType.event, event, params, path } as RpcEventPayload, MessageType.EventMessage, this.name, target)
+        // The counter listener attached before any subscriber's proxy, so by the time a delivery
+        // is built here the sequence has already counted this emission. An untracked event is
+        // sent unstamped, exactly as it always was.
+        const seq = path ? this.eventSequenceOf(path, event) : undefined
+        return await this.sendPayload(
+            { type: RpcMessageType.event, event, params, path, ...(seq !== undefined ? { seq, epoch: this.epoch } : {}) } as RpcEventPayload,
+            MessageType.EventMessage,
+            this.name,
+            target
+        )
     }
 }
 

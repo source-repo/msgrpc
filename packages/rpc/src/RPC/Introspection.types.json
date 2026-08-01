@@ -2082,6 +2082,51 @@
           },
           "semantics": "idempotent-command"
         },
+        "eventCursor": {
+          "params": [
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "string"
+            }
+          ],
+          "paramNames": [
+            "namespace",
+            "event"
+          ],
+          "returns": {
+            "kind": "object",
+            "fields": {
+              "epoch": {
+                "type": {
+                  "kind": "string"
+                }
+              },
+              "seq": {
+                "type": {
+                  "kind": "union",
+                  "options": [
+                    {
+                      "kind": "null"
+                    },
+                    {
+                      "kind": "number"
+                    }
+                  ]
+                },
+                "optional": true
+              },
+              "since": {
+                "type": {
+                  "kind": "number"
+                },
+                "optional": true
+              }
+            }
+          },
+          "semantics": "query"
+        },
         "describe": {
           "params": [],
           "returns": {

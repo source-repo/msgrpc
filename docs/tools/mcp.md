@@ -17,7 +17,7 @@ Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdi
 | `check_peer` | compare a live peer with a contract and report what would break |
 | `diff_peers` | what two live peers expose differently |
 | `watch_traffic` | what other peers are saying to each other, for a few seconds |
-| `watch_events` | what one peer emitted, for a few seconds |
+| `watch_events` | what one peer emitted, for a few seconds — and whether anything was missed since the last watch |
 | `save_contract` / `list_contracts` | only with `--contracts <dir>` |
 
 ### Standing something up
@@ -35,6 +35,10 @@ From there the ordinary verbs reach it, and it **refuses what the contract refus
 **A fake will not take a name a peer already answers to.** Standing one up under a live device's name would displace it, and calls meant for the plant would reach a stand-in that agrees with everything. That is refused, not resolved.
 
 Fakes run inside the MCP server rather than as spawned processes, so they stop when it does and none are left behind.
+
+### Watching without wondering
+
+`watch_events` subscribes for a few seconds and drops the subscription again, so a look leaves no listener behind on the device. That shape has a blind spot: an agent waiting for something rare polls windows, and an event can fall *between* them. So the answer carries a `loss` verdict, computed from an emission counter the server keeps per event whether or not anyone is subscribed — "gapless" means nothing fired between this watch and the previous one that was not heard; "missed N" means N fell in the gap; a server restart between watches is reported as **unknowable**, because a fresh incarnation cannot say what an old one dropped — the counter's vocabulary is the component channel's epoch discipline, and a sequence only orders within one epoch. A peer running an older library, or serving no introspection, is reported as unable to say, which is different from either. Each heard event also carries its `seq`, so a gap inside a window is visible in the data itself.
 
 ### Where contracts go
 

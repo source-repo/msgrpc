@@ -371,7 +371,10 @@ test.serial('a socket.io peer discovers and calls a peer that only exists on the
     // presence of its own, so the bridge publishes it - without that the listener leaked forever.
     await browser.close()
     await waitFor(() => plant.rpc.eventProxies.size === 0, 8000)
-    t.is(boiler.listenerCount('changed'), 0, 'the exposed instance kept a listener for a peer that left')
+    // One listener remains by design: the event cursor's emission counter, attached at first
+    // subscription and counting for the life of the server so a windowed watcher can ask what
+    // fired while nobody watched. The subscription's own listener is what must be gone.
+    t.is(boiler.listenerCount('changed'), 1, 'the exposed instance kept a listener for a peer that left')
 
     await bridge.close()
     await plant.close()
