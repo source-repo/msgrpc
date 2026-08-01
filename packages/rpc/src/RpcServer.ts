@@ -6,7 +6,7 @@ import { contextEvent, contextNamespace, HostContext, type RpcCapturedContext, t
 import { ContextResolver, type RpcContextStore } from './RPC/ContextResolver.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
-import { Introspection, withIntrospection } from './RPC/Introspection.js'
+import { Introspection, surfaceShape, withIntrospection } from './RPC/Introspection.js'
 import { ExposeOptions, RpcServerHandler } from './RPC/RpcServerHandler.js'
 import type { RpcIdempotencyStore } from './RPC/Idempotency.js'
 import { defaultCallTimeout, RpcClientHandler } from './RPC/RpcClientHandler.js'
@@ -297,9 +297,22 @@ export class RpcServerBase implements IManageRpc {
         }
     }
 
+    /**
+     * Tell the transports what this server's surface currently hashes to, so presence carries it.
+     * Called wherever the surface changes; before any transport exists it is a no-op, and the
+     * attach() below hands a late-built transport the current hash so nothing depends on ordering
+     * between exposing and connecting.
+     */
+    private announceShape() {
+        if (!this.rpc) return
+        const shape = surfaceShape(this.rpc)
+        for (const transport of this.transports) (transport as unknown as { announceShape?: (shape: string) => void }).announceShape?.(shape)
+    }
+
     /** Put one transport into the graph: piped into both handlers, routable from the switch. */
     private attach(transport: Transport) {
         this.transports.push(transport)
+        ;(transport as unknown as { announceShape?: (shape: string) => void }).announceShape?.(surfaceShape(this.rpc))
         transport.usePeerRegistry(this.peers)
         transport.pipe(this.rpc)
         transport.pipe(this.caller)
@@ -443,18 +456,24 @@ export class RpcServerBase implements IManageRpc {
     }
     exposeClassInstance(instance: object, name?: string, options?: number | ExposeOptions): void {
         this.rpc.manageRpc.exposeClassInstance(instance, name, options)
+        this.announceShape()
     }
     exposeClass<T>(constructor: new (...args: unknown[]) => T, aliasName?: string): void {
         this.rpc.manageRpc.exposeClass(constructor, aliasName)
+        this.announceShape()
     }
     exposeObject(obj: object, name: string): void {
         this.rpc.manageRpc.exposeObject(obj, name)
+        this.announceShape()
     }
     expose(methodName: string, method: () => void): void {
         this.rpc.manageRpc.expose(methodName, method)
+        this.announceShape()
     }
-    createRpcInstance(className: string, instanceName?: string, ...args: unknown[]): Promise<string | undefined> {
-        return this.rpc.manageRpc.createRpcInstance(className, instanceName, ...args)
+    async createRpcInstance(className: string, instanceName?: string, ...args: unknown[]): Promise<string | undefined> {
+        const created = await this.rpc.manageRpc.createRpcInstance(className, instanceName, ...args)
+        this.announceShape()
+        return created
     }
     addTarget(target: string, transport: GenericModule) {
         this.switch?.setTarget(transport)

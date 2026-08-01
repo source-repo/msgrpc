@@ -234,6 +234,21 @@ export class ConsoleService extends EventEmitter {
     private readonly roles = new Map<string, PeerRole>()
     private readonly structure = new Map<string, PeerStructure>()
 
+    /**
+     * A peer announced a different description hash: whatever a describe taught about it is no
+     * longer worth holding. Nothing is re-described here - the bargain that peers describe
+     * themselves as the network is used, never on sight, stands - the caches are simply emptied so
+     * the next use asks again. The page is told through the ordinary peer event with a state of
+     * its own, and only when this console had actually cached something: a peer nobody described
+     * has no stale picture anywhere.
+     */
+    noteReshape(peer: string) {
+        const cached = this.roles.delete(peer)
+        this.structure.delete(peer)
+        this.knownBuses.delete(peer)
+        if (cached) this.emit('peer', { peer, state: 'reshaped', at: Date.now() } satisfies PeerChange)
+    }
+
     notePresence(change: PeerChange) {
         this.comings.unshift(change)
         if (this.comings.length > PROBLEM_HISTORY) this.comings.length = PROBLEM_HISTORY
@@ -720,6 +735,10 @@ export const startConsole = async (options: ConsoleOptions) => {
             online.add(peer)
             service.notePresence({ peer, state: 'online', at: Date.now(), link })
         })
+        // The invalidation signal presence carries: a restart that changed the surface, or an
+        // expose after ready(). Without this the console showed the old shape until the peer was
+        // reselected, which is folklore nobody should have to know.
+        transport.on(TransportEvent.peerShape, (peer: string) => service.noteReshape(peer))
         transport.on(TransportEvent.peerGone, (peer: string) => {
             // Asked again if it returns: a broker restarted with a tap is a different answer.
             service.forgetBus(peer)

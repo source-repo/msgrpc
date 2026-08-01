@@ -12,6 +12,8 @@ Opens a console at `http://127.0.0.1:7844` listing every peer that is up, what e
 
 With both, one list covers both networks and each peer is called over the link it was found on — which is the useful shape when a plant runs on a broker and the HMIs are browser pages. A peer hosted *in* a browser shows up like any other, since a page that dials a hub can serve as well as call.
 
+**Descriptions stay honest without being fetched on sight.** The console describes a peer when someone selects it, and caches what that taught — but presence carries a short hash of each peer's served description, so a peer that restarts with a different surface, or exposes something new after it started, is noticed the moment it announces. The console drops what it cached and re-describes on next use; an open panel refreshes itself rather than waiting to be reselected, and an unchanged peer costs no extra describes.
+
 A peer only appears in detail if its server was started with `exposeIntrospection`; otherwise the console says so rather than guessing.
 
 **One port.** The page, `console.json` and the RPC link all arrive on 7844: socket.io answers `/socket.io` on the same listener the static app is served from. There is no second port to open and no CORS to configure, because the page and its server share an origin.

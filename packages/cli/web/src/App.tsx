@@ -248,6 +248,14 @@ export const App = () => {
             setStream((current) => [event, ...current].slice(0, 500))
         }
         peerChange.current = (peer, state, change) => {
+            if (state === 'reshaped') {
+                // The peer is still here - its surface changed and the console has dropped what it
+                // cached. Not a coming or a going, so the presence history is left alone; what
+                // matters is that an open panel stops showing the old shape without a reselection.
+                void refreshPeers()
+                if (service && peer === selected) void service.describe(peer).then(setDescribed).catch(() => undefined)
+                return
+            }
             setOffline((current) => {
                 const next = new Set(current)
                 if (state === 'offline') next.add(peer)
@@ -257,7 +265,7 @@ export const App = () => {
             setComings((current) => [change, ...current].slice(0, 200))
             void refreshPeers()
         }
-    }, [service, refreshPeers, events, peerChange, eventsPaused])
+    }, [service, refreshPeers, events, peerChange, eventsPaused, selected])
 
     useEffect(() => {
         // Pausing stops the buffer filling rather than only the list rendering, so a paused tab on a

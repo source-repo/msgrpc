@@ -197,8 +197,9 @@ export class RpcClient extends EventEmitter {
         })
         // Forwarded so a consumer aimed at one named peer can tell "the link is up but that peer is
         // gone" from "the whole link is down" - connected/disconnected alone cannot say which, and
-        // the difference is what separates a stale view of a device from a dead network.
-        for (const event of [TransportEvent.peerOnline, TransportEvent.peerGone, TransportEvent.peerDisplaced])
+        // the difference is what separates a stale view of a device from a dead network. peerShape
+        // rides along for the caches: a peer that changed surface is worth re-describing on next use.
+        for (const event of [TransportEvent.peerOnline, TransportEvent.peerGone, TransportEvent.peerDisplaced, TransportEvent.peerShape])
             transport.on(event, (...args: unknown[]) => this.emit(event, ...args))
     }
 

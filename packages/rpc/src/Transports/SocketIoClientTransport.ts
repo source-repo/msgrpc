@@ -2,7 +2,7 @@ import { io, ManagerOptions, Socket, SocketOptions } from 'socket.io-client'
 import { GenericModule, IGenericModule, Message, TransportEvent } from '../RPC/Core.js'
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { refuseDelivery } from '../RPC/Undeliverable.js'
-import { isUsablePeerName, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate } from './Presence.js'
+import { isUsablePeerName, isUsableShape, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate } from './Presence.js'
 
 export class SocketIoClientTransport extends GenericModule<Message, unknown, Message, unknown> {
     socket?: Socket
@@ -214,7 +214,22 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
     private announce() {
         const announcement: PresenceAnnouncement = { name: this.name }
         if (this.carrying.length) announcement.carrying = this.carrying
+        if (this.shape) announcement.shape = this.shape
         this.socket?.emit(PRESENCE_EVENT, announcement)
+    }
+
+    /** The description hash this peer announces. See PresenceAnnouncement.shape. */
+    private shape?: string
+
+    /**
+     * Set what this peer's surface hashes to, re-announcing if the change happens on a live link -
+     * which it does whenever something is exposed after ready(), the way the introspection
+     * namespace itself is.
+     */
+    announceShape(shape: string) {
+        if (this.shape === shape) return
+        this.shape = shape
+        if (this.connected && this.announcePresence) this.announce()
     }
 
     /**
@@ -229,6 +244,12 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
     }
 
     /** The server's view of who else is connected, turned into the same events MQTT emits. */
+    /** Checked and deduplicated before anyone hears about it - see TransportEvent.peerShape. */
+    private noteShape(peer: string, shape: unknown) {
+        if (!isUsableShape(shape)) return
+        if (this.peerRegistry.noteShape(peer, shape)) this.emit(TransportEvent.peerShape, peer, shape)
+    }
+
     private onPresence(update: PresenceUpdate) {
         if (Array.isArray(update.peers)) {
             // The snapshot is here, whoever asked for it. Resolved before the loop, not after:
@@ -237,7 +258,11 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             this.sweepLanded = undefined
             landed?.()
             for (const peer of update.peers) {
-                if (!isUsablePeerName(peer) || peer === this.name || this.knownPeers.has(peer)) continue
+                if (!isUsablePeerName(peer) || peer === this.name) continue
+                // Before the known-peers gate: a reconnect's fresh snapshot repeats known names,
+                // and a repeated name carrying a new hash is the restart this exists to catch.
+                if (update.shapes && Object.prototype.hasOwnProperty.call(update.shapes, peer)) this.noteShape(peer, update.shapes[peer])
+                if (this.knownPeers.has(peer)) continue
                 this.knownPeers.add(peer)
                 this.registerIfUnrouted(peer)
                 this.emit(TransportEvent.peerOnline, peer)
@@ -249,6 +274,9 @@ export class SocketIoClientTransport extends GenericModule<Message, unknown, Mes
             if (!this.knownPeers.delete(update.peer)) return
             this.emit(TransportEvent.peerGone, update.peer)
         } else {
+            // Same reasoning as the snapshot: a re-announcement of a known peer with a new hash is
+            // a change of surface, not a change of presence, and must not be gated out with it.
+            if (update.shape !== undefined) this.noteShape(update.peer, update.shape)
             if (this.knownPeers.has(update.peer)) return
             this.knownPeers.add(update.peer)
             this.registerIfUnrouted(update.peer)

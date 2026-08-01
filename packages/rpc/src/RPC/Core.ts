@@ -78,6 +78,14 @@ export const TransportEvent = {
     peerOnline: 'peerOnline',
     peerGone: 'peerGone',
     peerDisplaced: 'peerDisplaced',
+    /**
+     * (peer, shape): a peer's served surface is not what it was - it announced a different
+     * description hash. Emitted only on change, never on a repeat of the same hash, so a cache can
+     * subscribe without being drowned by ordinary presence traffic. What to do about it is the
+     * cache's business: the bargain that nothing is described on sight stands, and the honest
+     * reaction is to re-describe *when next asked*.
+     */
+    peerShape: 'peerShape',
     rejected: 'rejected',
     unroutable: 'unroutable',
     transportError: 'transportError',
@@ -137,10 +145,38 @@ export class PeerRegistry {
         return this.peers.get(source)
     }
     delete(source: string) {
+        this.shapes.delete(source)
         return this.peers.delete(source)
     }
     clear() {
         this.peers.clear()
+        this.shapes.clear()
+    }
+
+    /**
+     * Description hashes carried in presence, so a cache can ask "is the description I hold still
+     * the one being served?" without a describe. Kept beside the routes rather than in each
+     * transport, because a peer's shape is a fact about the peer, not about the link it was
+     * learned on. Bounded like the routes, since both keys and values come off the wire.
+     */
+    private shapes = new Map<string, string>()
+
+    /** Records a shape and says whether it changed - the caller emits peerShape only when true. */
+    noteShape(source: string, shape: string) {
+        if (this.shapes.get(source) === shape) return false
+        this.shapes.delete(source)
+        this.shapes.set(source, shape)
+        while (this.shapes.size > this.maxPeers) {
+            const oldest = this.shapes.keys().next()
+            if (oldest.done) break
+            this.shapes.delete(oldest.value)
+        }
+        return true
+    }
+
+    /** The hash last announced for a peer, or undefined for one that never announced any. */
+    shapeOf(source: string) {
+        return this.shapes.get(source)
     }
     get size() {
         return this.peers.size

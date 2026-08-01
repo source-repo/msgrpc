@@ -13,9 +13,16 @@ import { RpcIdentity } from '../RPC/Auth.js'
  * still works as before.
  */
 
-/** Sent by a connecting peer to say who it is, and repeated whenever either field changes. */
+/** Sent by a connecting peer to say who it is, and repeated whenever any field changes. */
 export interface PresenceAnnouncement {
     name: string
+    /**
+     * A short hash of the description this peer serves, so a cache holding a describe() answer can
+     * tell a restart that changed the surface from one that did not - without anything describing
+     * on sight. Additive: a peer that sends none is simply a peer whose caches expire on their own
+     * terms, which is every peer from before this field existed.
+     */
+    shape?: string
     /**
      * Peers reachable *through* the announcer. This is what makes a network deeper than a star
      * work: a cell controller serving its own panels and joining a plant bus advertises the panels,
@@ -35,7 +42,21 @@ export interface PresenceUpdate {
     peers?: string[]
     peer?: string
     state?: 'online' | 'offline'
+    /** With `peer`: that peer's description hash, when it announced one or changed it. */
+    shape?: string
+    /** With `peers`: the hashes known for them, keyed by name. Absent names announced none. */
+    shapes?: { [peer: string]: string }
 }
+
+/**
+ * A shape rides presence, so it arrives from the network and is checked like a peer name before
+ * anything stores it. The bound is generous - the library's own hashes are 16 hex characters -
+ * because the field is compared for equality and nothing else, so all that matters is that a
+ * remote peer cannot grow anyone's tables.
+ */
+export const MAX_SHAPE_LENGTH = 64
+
+export const isUsableShape = (shape: unknown): shape is string => typeof shape === 'string' && shape.length > 0 && shape.length <= MAX_SHAPE_LENGTH
 
 export const PRESENCE_EVENT = 'presence'
 

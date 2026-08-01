@@ -602,15 +602,23 @@ export const startMcp = async (options: McpOptions) => {
      * The discovery cache: find_capability fills it sweeping the network, call_method validates
      * from it. Short-lived, because a contract can change with a redeploy and a stale cache would
      * refuse arguments the peer now takes - thirty seconds keeps a conversation's worth of calls
-     * cheap without remembering last week's shape.
+     * cheap without remembering last week's shape. The description hash presence carries cuts the
+     * other way too: a peer announcing a hash other than the one this entry was described under is
+     * refetched at once rather than trusted out the rest of its thirty seconds, and an unchanged
+     * peer costs nothing extra. A peer announcing no hash - anything from before the field
+     * existed - keeps the age-based bargain it always had.
      */
-    const described = new Map<string, { description: ServerDescription; at: number }>()
+    const described = new Map<string, { description: ServerDescription; at: number; shape?: string }>()
     const DESCRIBE_CACHE_MS = 30_000
     const describedOf = async (peer: string) => {
         const held = described.get(peer)
-        if (held && Date.now() - held.at < DESCRIBE_CACHE_MS) return held.description
+        const announced = network.peers.shapeOf(peer)
+        if (held && Date.now() - held.at < DESCRIBE_CACHE_MS && (announced === undefined || held.shape === announced)) return held.description
+        // Read before the describe, not after: a shape that changes mid-flight then differs from
+        // the stored one, and the next lookup refetches rather than trusting a torn pair.
+        const shape = announced
         const description = await describe(peer)
-        described.set(peer, { description, at: Date.now() })
+        described.set(peer, { description, at: Date.now(), ...(shape !== undefined ? { shape } : {}) })
         return description
     }
 

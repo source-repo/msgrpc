@@ -5,7 +5,7 @@ import { GenericModule, IGenericModule, Message, TransportEvent, type RelayedFra
 import { FrameCodec, msgPackCodec } from '../RPC/Codec.js'
 import { RpcAuthenticator, RpcIdentity } from '../RPC/Auth.js'
 import { refuseDelivery } from '../RPC/Undeliverable.js'
-import { isUsablePeerName, MAX_CARRIED_PEERS, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
+import { isUsablePeerName, isUsableShape, MAX_CARRIED_PEERS, MAX_RELAY_HOPS, PRESENCE_EVENT, PresenceAnnouncement, PresenceUpdate, RelayContext, RelayRule } from './Presence.js'
 
 type Servers = HttpServer | HttpsServer | SocketIo.Server
 
@@ -368,7 +368,8 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         // this is the point the name stops being a claim - see setKnownSource above.
         super.setKnownSource(name)
         this.emit(TransportEvent.peerOnline, name)
-        this.broadcastPresence({ peer: name, state: 'online' })
+        const shape = this.peerRegistry.shapeOf(name)
+        this.broadcastPresence({ peer: name, state: 'online', ...(shape ? { shape } : {}) })
     }
 
     /** A peer is gone from here unless another link still offers it. */
@@ -408,6 +409,13 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
             }
             this.peerIdentities.set(name, identity)
         }
+        // Before learnPeer, whose broadcast should carry the newly announced hash rather than the
+        // one from before the restart. When the peer is already connected and only its surface
+        // changed, learnPeer sees nothing to do - so the change is broadcast from here instead,
+        // which is how everyone else's caches hear about an expose made after ready().
+        const alreadyHere = this.peerSockets.get(name) === socket
+        if (announcement.shape !== undefined && this.noteShape(name, announcement.shape) && alreadyHere)
+            this.broadcastPresence({ peer: name, state: 'online', shape: announcement.shape })
         this.learnPeer(name, socket)
         this.updateCarried(socket, name, announcement.carrying)
         // This peer's own name goes first: a newcomer has to know what to call the thing it just
@@ -417,9 +425,38 @@ export class SocketIoServerTransport extends GenericModule<Message, unknown, Mes
         // Split horizon applies to the rest. Handing a link back the peers it just told this one
         // about makes it believe they are reachable the way it came, so it stops advertising them,
         // and they disappear from everyone a hop further out.
-        socket.emit(PRESENCE_EVENT, {
-            peers: [this.name, ...this.reachablePeers().filter((peer) => peer !== name && this.peerSockets.get(peer) !== socket)]
-        } as PresenceUpdate)
+        const peers = [this.name, ...this.reachablePeers().filter((peer) => peer !== name && this.peerSockets.get(peer) !== socket)]
+        // The hashes known for those peers ride the same snapshot - the registry's, not this
+        // transport's own records, so a bridging server passes on shapes it learned on its other
+        // links the same way it advertises the peers themselves.
+        const shapes: { [peer: string]: string } = {}
+        if (this.shape) shapes[this.name] = this.shape
+        for (const peer of peers) {
+            const shape = this.peerRegistry.shapeOf(peer)
+            if (shape) shapes[peer] = shape
+        }
+        socket.emit(PRESENCE_EVENT, { peers, ...(Object.keys(shapes).length ? { shapes } : {}) } as PresenceUpdate)
+    }
+
+    /** The description hash this server announces for itself. See PresenceAnnouncement.shape. */
+    private shape?: string
+
+    /** Checked and deduplicated before anyone hears about it - see TransportEvent.peerShape. */
+    private noteShape(peer: string, shape: unknown) {
+        if (!isUsableShape(shape)) return false
+        const changed = this.peerRegistry.noteShape(peer, shape)
+        if (changed) this.emit(TransportEvent.peerShape, peer, shape)
+        return changed
+    }
+
+    /**
+     * Set what this server's surface hashes to. A change on a live listener is told to every
+     * connected peer as an ordinary presence update about this server's own name.
+     */
+    announceShape(shape: string) {
+        if (this.shape === shape) return
+        this.shape = shape
+        this.broadcastPresence({ peer: this.name, state: 'online', shape })
     }
 
     /**

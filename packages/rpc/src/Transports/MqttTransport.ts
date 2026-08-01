@@ -19,6 +19,7 @@ import {
     SUPPORTED_FRAME_VERSIONS,
     toOutboundFrame
 } from './Mqtt5Frame.js'
+import { isUsableShape } from './Presence.js'
 
 /** v1 is the $-header layout; v2 is the MQTT 5 property layout, so the two never share a topic. */
 export const defaultTopicPrefix = { 4: 'msgrpc/v1', 5: 'msgrpc/v2' } as const
@@ -258,6 +259,41 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
         this.sweepQuiet.unref?.()
     }
 
+    /** The description hash this peer announces. See PresenceAnnouncement.shape. */
+    private shape?: string
+
+    /**
+     * The retained 'online', with the shape riding as an MQTT 5 user property rather than in the
+     * payload. The payload has to stay the exact string every deployed peer compares against -
+     * changing it would make this peer invisible to them - and properties are what MQTT 5 has for
+     * exactly this: data beside the message that old readers never look at. MQTT 3.1.1 has no
+     * properties, so there the shape simply does not travel and caches age out as they do today.
+     */
+    private async publishPresence() {
+        await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, {
+            qos: this.qos,
+            retain: true,
+            ...(this.protocol === 5 && this.shape ? { properties: { userProperties: { shape: this.shape } } } : {})
+        })
+    }
+
+    /**
+     * Set what this peer's surface hashes to, republishing the retained announcement if the change
+     * happens on a live connection - retained, so even a peer that subscribes next week learns the
+     * current hash with the presence itself.
+     */
+    announceShape(shape: string) {
+        if (this.shape === shape) return
+        this.shape = shape
+        if (this.connected && this.announcePresence) void this.publishPresence().catch((e) => this.emit(TransportEvent.transportError, e))
+    }
+
+    /** Checked and deduplicated before anyone hears about it - see TransportEvent.peerShape. */
+    private noteShape(peer: string, shape: unknown) {
+        if (!isUsableShape(shape)) return
+        if (this.peerRegistry.noteShape(peer, shape)) this.emit(TransportEvent.peerShape, peer, shape)
+    }
+
     constructor(
         name: string,
         public url: string,
@@ -453,7 +489,7 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
             if (this.presence) {
                 // Observed even by replicas, which still need to know when their own peers depart.
                 await this.client?.subscribeAsync(this.presenceTopic('+'), { qos: this.qos })
-                if (this.announcePresence) await this.client?.publishAsync(this.presenceTopic(this.name), PRESENCE_ONLINE, { qos: this.qos, retain: true })
+                if (this.announcePresence) await this.publishPresence()
                 // The subscribe is acknowledged, so the retained burst is on its way - the quiet
                 // gap that ends it starts counting now, not at connect.
                 this.armSweepQuiet()
@@ -487,6 +523,11 @@ export class MqttTransport extends GenericModule<Message, unknown, Message, unkn
                 this.peerIdentities.delete(peer)
                 this.emit(TransportEvent.peerGone, peer)
             } else if (state === PRESENCE_ONLINE) {
+                // The shape rides beside the payload as a user property - see publishPresence.
+                // Noted before peerOnline, so a listener reacting to the arrival already finds the
+                // hash in the registry when it looks.
+                const announced = packet?.properties?.userProperties?.shape
+                if (announced !== undefined) this.noteShape(peer, Array.isArray(announced) ? announced[0] : announced)
                 // Retained, so a subscriber learns about every peer already online the moment it
                 // subscribes. That is the whole of peer discovery.
                 // Registered as well as announced: presence is how this transport knows a peer

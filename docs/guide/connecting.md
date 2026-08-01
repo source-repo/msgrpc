@@ -126,6 +126,8 @@ transport.on(TransportEvent.peerGone, (peer) => console.log(peer, 'is gone'))
 
 Over MQTT this is retained presence: subscribing to `<prefix>/presence/+` hands over everyone already online, and a last will covers a peer that dies rather than leaves. Over socket.io the server keeps the list and sends it to each peer that announces itself.
 
+Presence also carries a short **hash of each server's described surface**, so anything caching a `describe()` answer can tell a restart that changed the surface from one that did not — without anything describing on sight. The hash covers what a cached description answers questions about (namespaces, methods, signatures, semantics, declared events, versions, capabilities) and deliberately not what moves on its own (subscriber counts, topology epochs). A change arrives as `TransportEvent.peerShape`, emitted only on an actual change, and the latest hash is readable from the peer registry as `peers.shapeOf(name)`. Over socket.io it rides announcements and the hub's snapshots; over MQTT 5 it is a user property beside the retained `online` payload, which older peers never look at — on MQTT 3.1.1 it simply does not travel. The console and the MCP server use it to drop their describe caches the moment a peer reshapes, and to pay nothing for one that did not.
+
 **`ready()` means the link is up, not that anyone has been heard from.** Presence arrives a moment after the connection does, so asking who is there immediately finds an empty network on a bus that is plainly there — and every script that hit this grew the same poll-for-peers loop. `peersSettled()` is that loop, done once and honestly:
 
 ```typescript

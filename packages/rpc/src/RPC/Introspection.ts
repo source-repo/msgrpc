@@ -325,3 +325,59 @@ export class Introspection {
         }
     }
 }
+
+/**
+ * FNV-1a over the text, 64 bits as 16 hex characters. Not cryptographic and deliberately so: the
+ * hash is compared for equality by caches deciding whether to re-describe, nothing is keyed or
+ * signed by it, and this runs in a browser page hosting services, where node:crypto is not there
+ * to lean on. A collision costs one cache a missed invalidation, the same cost the cache paid for
+ * every change before the hash existed.
+ */
+const fnv1a64 = (text: string) => {
+    let hash = 0xcbf29ce484222325n
+    for (let index = 0; index < text.length; index++) {
+        hash ^= BigInt(text.charCodeAt(index))
+        hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn
+    }
+    return hash.toString(16).padStart(16, '0')
+}
+
+/**
+ * What a server's exposed surface hashes to - the invalidation signal presence carries so caches
+ * notice a peer changed shape (see PresenceAnnouncement.shape).
+ *
+ * Deliberately a projection of describe(), not describe() itself: subscriber counts and topology
+ * epochs move while the surface stands still, and a hash over them would invalidate every cache
+ * on every subscribe. What goes in is what a cached description answers questions about -
+ * namespaces, methods with their signatures and semantics, declared events, versions,
+ * capabilities, component structure. Sorted where the source is a map, so exposure order does not
+ * masquerade as change.
+ */
+export const surfaceShape = (handler: RpcServerHandler): string => {
+    const manage = handler.manageRpc
+    const schema = handler.schema
+    const namespaces = Object.keys(manage.exposedNameSpaceInstances)
+        .sort()
+        .map((name) => {
+            const described = schema?.namespaces[name]
+            const methods = [...(manage.findNameSpaceMethodMap(name)?.keys() ?? [])].sort().map((method) => {
+                const semantics = handler.semanticsOf({ path: name, method })
+                return {
+                    name: method,
+                    ...(described?.methods[method] ? { signature: described.methods[method] } : {}),
+                    ...(semantics ? { semantics } : {}),
+                    ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
+                }
+            })
+            return {
+                name,
+                ...(described?.version ? { version: described.version } : {}),
+                className: manage.exposedNameSpaceInstances[name]?.constructor?.name,
+                methods,
+                events: Object.keys(described?.events ?? {}).sort(),
+                ...(described?.capabilities ? { capabilities: [...described.capabilities].sort() } : {}),
+                ...(described?.component ? { component: described.component } : {})
+            }
+        })
+    return fnv1a64(JSON.stringify(namespaces))
+}
