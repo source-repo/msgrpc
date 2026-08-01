@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## Source RPC 4.5.0
+
+One thing, both halves: code that cannot use decorators can now say everything the decorators say.
 
 ### Decorator-free marking that can say everything, and a CLI that strips
 
