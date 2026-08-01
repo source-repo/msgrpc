@@ -4,6 +4,7 @@ import { readableNameFor, validateValue, type RemoteSurface, type RpcSchema, typ
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { environmentFor } from './scripts.js'
+import { versionSkewLine } from './packages.js'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 import { checkPeerOn, diffPeersOn } from './conform.js'
 import { openTap } from './tapping.js'
@@ -494,6 +495,13 @@ export const startMcp = async (options: McpOptions) => {
         process.stderr.write(
             `source-rpc mcp: --scripts is on, so this server will write and run programs in ${options.scripts} with your privileges, and may install packages there. Development machines only.\n`
         )
+    if (options.scripts) {
+        // A statement, not a refusal: an old script against its own pinned library is legitimate.
+        // What the line prevents is new code quietly written against the API the directory happens
+        // to hold, which is what the first field trial did for an afternoon without noticing.
+        const skew = versionSkewLine(options.scripts, 'mcp')
+        if (skew) process.stderr.write(skew)
+    }
     // Louder than the rest, because this is the one that puts it on the network rather than under
     // the person at the keyboard.
     if (options.scriptableBy?.length)

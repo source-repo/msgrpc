@@ -1,8 +1,9 @@
 import test from 'ava'
 import { mkdirSync, mkdtempSync, readFileSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { addPackage, ensureManifest, listPackages, npmEntryPoint, removePackage } from './packages.js'
+import { addPackage, ensureManifest, listPackages, npmEntryPoint, removePackage, versionSkewLine } from './packages.js'
 import { saveScript } from './scripts.js'
 
 /**
@@ -166,4 +167,38 @@ test('a script can import what was installed for it', async (t) => {
     // node resolves the dependency from the node_modules sitting next to the script.
     t.true(runner.status('uses-it')!.output.includes('odd? true'), runner.status('uses-it')!.output.join('\n'))
     await runner.stopAll()
+})
+
+test('versionSkewLine names both majors, prefers what is installed, and stays quiet on a match', (t) => {
+    const scripts = directory()
+
+    // Nothing there yet: nothing to compare, nothing to say.
+    t.is(versionSkewLine(scripts, 'mcp'), undefined)
+
+    // Declared old, nothing installed: the declaration is the only evidence, and it is enough.
+    writeFileSync(join(scripts, 'package.json'), JSON.stringify({ private: true, dependencies: { '@source-repo/rpc': '^3.4.1' } }))
+    const declared = versionSkewLine(scripts, 'mcp')
+    t.truthy(declared)
+    t.regex(declared!, /\^3\.4\.1/)
+    t.regex(declared!, /3\.x API/)
+    t.regex(declared!, /^source-rpc mcp:/)
+
+    // Installed outranks declared: the manifest still says ^3, but what the scripts actually import
+    // is the current major, so there is nothing to warn about. Read the same source the helper
+    // compares against - the library's manifest, not the CLI's - so this holds even if the
+    // versions-together rule ever bends.
+    const ours = (createRequire(import.meta.url)('@source-repo/rpc/package.json') as { version: string }).version
+    mkdirSync(join(scripts, 'node_modules', '@source-repo', 'rpc'), { recursive: true })
+    writeFileSync(join(scripts, 'node_modules', '@source-repo', 'rpc', 'package.json'), JSON.stringify({ name: '@source-repo/rpc', version: ours }))
+    t.is(versionSkewLine(scripts, 'mcp'), undefined)
+
+    // And the other way round: an old install under a freshly edited manifest still skews.
+    writeFileSync(join(scripts, 'node_modules', '@source-repo', 'rpc', 'package.json'), JSON.stringify({ name: '@source-repo/rpc', version: '3.4.1' }))
+    writeFileSync(join(scripts, 'package.json'), JSON.stringify({ private: true, dependencies: { '@source-repo/rpc': `^${ours}` } }))
+    const installed = versionSkewLine(scripts, 'node')
+    t.truthy(installed)
+    t.regex(installed!, /3\.4\.1/)
+    t.regex(installed!, /^source-rpc node:/)
+
+    rmSync(scripts, { recursive: true, force: true })
 })

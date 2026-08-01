@@ -22,6 +22,7 @@ import { startConsole } from './console.js'
 import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
 import { startNode } from './node.js'
+import { versionSkewLine } from './packages.js'
 import { processOutput, runCall, runDescribe, runFind, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
@@ -916,6 +917,12 @@ const runNode = async (argv: string[]) => {
     process.stdout.write(
         `source-rpc node ${network.name} on ${[network.broker, network.hub].filter(Boolean).join(' and ')}, scriptable by ${scriptableBy.join(' and ')}${signing ? ', signing frames' : ''}\n`
     )
+    {
+        // A statement, not a refusal - see versionSkewLine. mcp prints the same line for the same
+        // directory, because whichever door the scripts are reached through, the skew is the same.
+        const skew = versionSkewLine(resolve(scriptsDir), 'node')
+        if (skew) process.stderr.write(skew)
+    }
     if (!signing && network.broker)
         // Without signatures an MQTT peer has no identity, so the guard refuses everyone and this
         // node is unreachable for the thing it exists to do. Said now rather than discovered as a

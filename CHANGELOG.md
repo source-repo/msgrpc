@@ -16,6 +16,8 @@ A method that opts in with `@rpc({ injectInvocation: true })` receives a branded
 
 `source-rpc --version` prints the version; there was previously no way to ask.
 
+`mcp` and `node` print one line at start when the scripts directory's `@source-repo/rpc` major differs from the CLI's, naming both versions — the field trial ran an afternoon against a two-majors-old sandbox and nothing noticed. A statement, never a refusal: old scripts against their own pinned library are legitimate. What is installed outranks what is declared.
+
 ## Source RPC 4.3.1
 
 No code changes in any package. The documentation moved to **[source-repo.github.io/rpc](https://source-repo.github.io/rpc/)** — the full guide with an always-visible sidebar and search, including four chapters nothing had documented before: observable components, command authority, topology, and structural context. The READMEs npm shows are now the short form — the pitch, install, one example, and the feature list with links into the site — which is this release's reason to exist.

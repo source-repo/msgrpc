@@ -67,6 +67,8 @@ source-rpc mcp --hub http://bus:7843 --scripts ./scripts
 
 **The network is handed over, not hardcoded.** A script is started with `SOURCE_RPC_HUB`, `SOURCE_RPC_BROKER`, `SOURCE_RPC_PREFIX` and `SOURCE_RPC_TOKEN` set from the flags this server was given, so it reads its broker url rather than carrying one that is right on your machine and wrong on the next. Its working directory is the scripts directory, so relative imports mean what their author meant and `@source-repo/rpc` resolves from the project that directory sits in.
 
+That resolution is also where a sandbox quietly ages: a directory that pinned the library a major ago keeps working — old scripts against their own pinned dependency are legitimate — but new code written there is written against the old API, and nothing fails to say so. So `mcp` and `node` print one line at start when the directory's `@source-repo/rpc` major differs from the CLI's, naming both versions. A statement, never a refusal; matching majors print nothing.
+
 ```typescript
 // scripts/pump-sim.ts — started with start_script, or `node scripts/pump-sim.ts`
 import { RpcServer } from '@source-repo/rpc'

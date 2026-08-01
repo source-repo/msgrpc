@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve } from 'node:path'
 
 /**
@@ -127,4 +128,37 @@ export const addPackage = async (directory: string, spec: string, allowInstallSc
 export const removePackage = async (directory: string, name: string) => {
     if (!SAFE_SPEC.test(name)) throw new Error(`'${name}' is not a package name.`)
     return await npm(directory, ['uninstall', '--save', name])
+}
+
+/**
+ * One line when the scripts directory runs a different major of the library than this CLI wraps.
+ *
+ * The first field trial hit this exactly: the directory pinned a two-majors-old library, everything
+ * worked, and nothing noticed - so the visiting agent wrote *new* code against the old API, because
+ * the old library was what the sandbox offered. An old script running against its own pinned
+ * dependency is legitimate, which is why this is a statement and never a refusal.
+ *
+ * What is actually installed outranks what is declared: `^3.4.1` may have been superseded by
+ * whatever an install later resolved, and the installed package is what the scripts import.
+ */
+export const versionSkewLine = (directory: string, command: string): string | undefined => {
+    const major = (version: string) => {
+        const digits = /\d+/.exec(version)
+        return digits ? Number(digits[0]) : undefined
+    }
+    let theirs: string | undefined
+    try {
+        theirs = (JSON.parse(readFileSync(join(resolve(directory), 'node_modules', '@source-repo', 'rpc', 'package.json'), 'utf8')) as { version?: string }).version
+    } catch {
+        theirs = manifest(directory).dependencies?.['@source-repo/rpc']
+    }
+    if (!theirs) return undefined
+    let ours: string | undefined
+    try {
+        ours = (createRequire(import.meta.url)('@source-repo/rpc/package.json') as { version?: string }).version
+    } catch {
+        return undefined
+    }
+    if (!ours || major(theirs) === undefined || major(theirs) === major(ours)) return undefined
+    return `source-rpc ${command}: the scripts directory runs @source-repo/rpc ${theirs} and this CLI wraps ${ours} - different majors. Existing scripts are fine against what they pinned; new code written there will be written against the ${major(theirs)}.x API unless the directory is updated.\n`
 }
