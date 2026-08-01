@@ -507,10 +507,10 @@ The broker is the piece of Source RPC that is infrastructure rather than a tool 
 ```
 docker run -d -p 7843:7843 \
     -e SOURCE_RPC_TOKENS='{"3f9a…":"plantServer"}' \
-    ghcr.io/source-repo/rpc-cli:3           # no command: the default is the broker, bound wide -
+    ghcr.io/source-repo/rpc-cli:4           # no command: the default is the broker, bound wide -
                                             # inside a container the -p mapping decides reachability
 
-docker run --rm -e SOURCE_RPC_TOKEN=3f9a… ghcr.io/source-repo/rpc-cli:3 \
+docker run --rm -e SOURCE_RPC_TOKEN=3f9a… ghcr.io/source-repo/rpc-cli:4 \
     peers --hub http://bus:7843 --name plantServer        # any other command, same image
 ```
 
