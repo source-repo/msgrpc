@@ -51,9 +51,10 @@ class Boiler {
 }
 
 /** A client for the server under test: writes a request, waits for the reply with that id. */
-const mcpClient = (port: number, extra: string[] = []) => {
+const mcpClient = (port: number, extra: string[] = [], env: { [name: string]: string } = {}) => {
     const child = spawn(process.execPath, [cli, 'mcp', '--hub', `http://localhost:${port}`, '--name', peer(`mcp${port}`), '--timeout', '5000', ...extra], {
-        stdio: ['pipe', 'pipe', 'pipe']
+        stdio: ['pipe', 'pipe', 'pipe'],
+        env: { ...process.env, ...env }
     })
     const pending = new Map<number, (value: Record<string, unknown>) => void>()
     const stray: string[] = []
@@ -482,5 +483,75 @@ test('watch_events says whether anything was missed between windows, and when it
 
     await client.close()
     await running.server.close()
+    await hub.close()
+})
+
+/** Speak the streamable HTTP door the way a second client would: one POST, one JSON answer. */
+const doorPost = async (port: number, message: Record<string, unknown>, token?: string) =>
+    fetch(`http://127.0.0.1:${port}/mcp`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ jsonrpc: '2.0', ...message })
+    })
+
+test('the HTTP door shares one node: what stdio stood up, a second client sees', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-door'), transports: [{ port: 3975, host: '127.0.0.1' }] })
+    await hub.ready()
+
+    const client = mcpClient(3975, ['--port', '8675'])
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'stdio-side', version: '1' } })
+    client.notify('notifications/initialized')
+
+    // The first door stands a fake up...
+    const contract = { schema: 1, namespaces: { plant: { version: '1.0.0', methods: { read: { params: [], paramNames: [] } } } } }
+    const started = await client.send('tools/call', {
+        name: 'start_fake',
+        arguments: { name: peer('doorFake'), schema: contract, script: { returns: { 'plant.read': { celsius: 84 } } } }
+    })
+    t.false(toolText(started).isError, toolText(started).text)
+
+    // ...and the second door, a plain HTTP client, initializes and finds it: one process, one set
+    // of fakes, which is the whole reason the door exists.
+    const initialized = await doorPost(8675, { id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'http-side', version: '1' } } })
+    t.is(initialized.status, 200)
+    const initBody = (await initialized.json()) as { result: { protocolVersion: string; serverInfo: { name: string } } }
+    t.is(initBody.result.serverInfo.name, 'source-rpc')
+
+    const noted = await doorPost(8675, { method: 'notifications/initialized' })
+    t.is(noted.status, 202, 'a notification is taken and not answered, which over HTTP is 202')
+
+    const listed = await doorPost(8675, { id: 2, method: 'tools/call', params: { name: 'list_fakes', arguments: {} } })
+    const listBody = (await listed.json()) as { result: { content: { text: string }[] } }
+    t.true(listBody.result.content[0].text.includes(peer('doorFake')), `the stdio side's fake must be visible here, got: ${listBody.result.content[0].text}`)
+
+    // GET has nothing to offer - this server initiates no messages - and says so with 405.
+    const got = await fetch('http://127.0.0.1:8675/mcp')
+    t.is(got.status, 405)
+
+    client.close()
+    await hub.close()
+})
+
+test('the door with a token refuses bare requests, and a wide bind without one refuses to start', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-door2'), transports: [{ port: 3976, host: '127.0.0.1' }] })
+    await hub.ready()
+
+    const client = mcpClient(3976, ['--port', '8676'], { SOURCE_RPC_MCP_TOKEN: 'door-secret' })
+    await client.ready
+
+    const bare = await doorPost(8676, { id: 1, method: 'tools/list' })
+    t.is(bare.status, 401, 'no token, no entry')
+    const keyed = await doorPost(8676, { id: 2, method: 'tools/list' }, 'door-secret')
+    t.is(keyed.status, 200)
+    const tools = (await keyed.json()) as { result: { tools: { name: string }[] } }
+    t.true(tools.result.tools.some((tool) => tool.name === 'list_peers'))
+    client.close()
+
+    // Fail closed before the port opens: a wide door with no lock is refused, not warned about.
+    const wide = mcpClient(3976, ['--port', '8677', '--host', '0.0.0.0'])
+    const exit = await new Promise<number | null>((resolveExit) => wide.child.on('exit', (code) => resolveExit(code)))
+    t.is(exit, 1, 'a wide bind without a token must not start')
+
     await hub.close()
 })

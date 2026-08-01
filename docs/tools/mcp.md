@@ -5,7 +5,7 @@ source-rpc mcp --broker mqtt://localhost:1883
 source-rpc mcp --hub http://hub:7843
 ```
 
-Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can look at a plant the way a person looks at the console. It takes the same network flags as `console`, including `--sign`.
+Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can look at a plant the way a person looks at the console. It takes the same network flags as `console`, including `--sign`. `--port` opens [a second door](#a-second-door-streamable-http) over streamable HTTP, so a second client can attach to the same node.
 
 | tool | what it does |
 | --- | --- |
@@ -35,6 +35,18 @@ From there the ordinary verbs reach it, and it **refuses what the contract refus
 **A fake will not take a name a peer already answers to.** Standing one up under a live device's name would displace it, and calls meant for the plant would reach a stand-in that agrees with everything. That is refused, not resolved.
 
 Fakes run inside the MCP server rather than as spawned processes, so they stop when it does and none are left behind.
+
+### A second door: streamable HTTP
+
+stdio means exactly one client, and that shape has a failure the first field trial lived rather than theorized: an MCP node already attached to one session, a second agent unable to use it, and the fallback — driving the CLI by hand — meant the node nominally custodian of the scripts directory never knew about the script running from it. `stop_script` and `script_output` were dark, and the scripts state forked.
+
+```
+source-rpc mcp --hub http://bus:7843 --scripts ./scripts --port 8590
+```
+
+`--port` serves streamable HTTP beside stdio: a POST carrying one JSON-RPC message, a JSON answer. Every client — stdio and however many attach over HTTP — shares one view of the scripts, the fakes, the watches and their loss cursors, because there is only one of everything in the process; that is the reason the door exists, and why it deliberately assigns no session ids. There is no server-initiated stream (GET answers 405) and no batching.
+
+The bind follows the console's instinct: `127.0.0.1` unless `--host` widens it, and access control was designed before the port opened, because an HTTP door is a new surface where stdio's authorization was implicit in process ownership. The token comes from `SOURCE_RPC_MCP_TOKEN` or `--mcp-auth <file>` — never a flag value, since `ps` is readable by everyone on the box — and the rules are stated at startup and fail closed where it matters: a door widened past loopback **without a token refuses to start**, and a loopback door without one says plainly that any process on this machine can drive the node.
 
 ### Watching without wondering
 

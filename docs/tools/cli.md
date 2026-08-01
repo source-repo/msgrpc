@@ -573,8 +573,8 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883` |
 | `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:7843`. One of `--broker`/`--hub` is required; both watches both |
 | `--prefix <topic>` | console, mcp, verbs | the transport's own | must match the network you are watching |
-| `--port <n>` | console | `7844`, or `8844` with `--cert` | |
-| `--host <address>` | console, broker | `127.0.0.1` | see the warning each prints before widening this |
+| `--port <n>` | console, mcp | console: `7844`, or `8844` with `--cert` | mcp has no default: the HTTP door only exists when a port is given |
+| `--host <address>` | console, broker, mcp | `127.0.0.1` | see the warning each prints before widening this |
 | `--base-path <path>` | console | `/` | publish under a path, for a reverse proxy that forwards the prefix instead of stripping it. See [Behind a reverse proxy](#behind-a-reverse-proxy) |
 | `--timeout <ms>` | console, mcp, verbs | `10000` | call timeout |
 | `--name <peer>` | console | `console-<three words>` | how the console identifies itself to the network |

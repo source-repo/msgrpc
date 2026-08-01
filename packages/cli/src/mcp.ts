@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { join, resolve, sep } from 'node:path'
 import { readableNameFor, validateValue, type RemoteSurface, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
@@ -64,6 +65,24 @@ export interface McpOptions extends NetworkOptions {
      * it out of band. A bus able to hand over that key is a bus able to script the node.
      */
     scriptableBy?: string[]
+    /**
+     * Serve streamable HTTP on this port as a second door beside stdio. Absent means stdio only,
+     * which is where this server has always lived. The door exists because stdio means exactly one
+     * client: the field trial found a node already attached to another session, and the second
+     * agent's fallback - driving the CLI by hand - forked the scripts state the node was custodian
+     * of. Over the door, every client shares one view: one scripts directory, one set of fakes, one
+     * memory of watch cursors, because there is only one of everything here.
+     */
+    port?: number
+    /** The interface for the door. Default 127.0.0.1; see the warnings startMcp prints. */
+    host?: string
+    /**
+     * Bearer token the door requires. An HTTP door is a new surface where stdio's authorization was
+     * implicit in process ownership, so the rule is fail-closed where it matters: a door widened
+     * past loopback without a token refuses to start, and a loopback door without one says plainly
+     * that any process on this machine can drive the node.
+     */
+    doorToken?: string
 }
 
 /**
@@ -938,12 +957,13 @@ export const startMcp = async (options: McpOptions) => {
         return { text: `Unknown tool '${name}'.`, isError: true }
     }
 
-    const write = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n')
-    const respond = (id: JsonRpcRequest['id'], result: unknown) => write({ jsonrpc: '2.0', id, result })
-    const fail = (id: JsonRpcRequest['id'], code: number, message: string) => write({ jsonrpc: '2.0', id, error: { code, message } })
-
-    const handle = async (request: JsonRpcRequest) => {
-        // A notification has no id and must not be answered at all, not even with an error.
+    /**
+     * One answer for one JSON-RPC message, whichever door it arrived through - the same dispatch
+     * serves stdio and the streamable HTTP door, which is precisely what makes two clients share
+     * one view of the scripts, fakes, watches and cursors: there is only one of everything here.
+     * Returns undefined for a notification, which must not be answered at all.
+     */
+    const answerTo = async (request: JsonRpcRequest): Promise<{ result: unknown } | { error: { code: number; message: string } } | undefined> => {
         const isNotification = request.id === undefined || request.id === null
 
         switch (request.method) {
@@ -952,43 +972,46 @@ export const startMcp = async (options: McpOptions) => {
                 // any revision that still calls tools the same way, and refusing a version we have
                 // simply never heard of would be worse than answering it.
                 const asked = request.params?.protocolVersion
-                respond(request.id, {
-                    protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
-                    capabilities: { tools: {} },
-                    // Bumped with the package. Clients show it when reporting which server said what.
-                    serverInfo: { name: 'source-rpc', version: '3.0.0' },
-                    instructions:
-                        'This is a live Source RPC network. Start with list_peers, then describe_peer to learn a peer' +
-                        ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.' +
-                        ' start_fake puts a peer of your own on the same network, built from a contract you supply - use it to try something' +
-                        ' against a device that does not exist yet, rather than against one that does. watch_traffic shows what other peers' +
-                        ' are saying to each other, which is most of what is happening.'
-                })
-                return
+                return {
+                    result: {
+                        protocolVersion: typeof asked === 'string' && asked ? asked : FALLBACK_PROTOCOL_VERSION,
+                        capabilities: { tools: {} },
+                        // Bumped with the package. Clients show it when reporting which server said what.
+                        serverInfo: { name: 'source-rpc', version: '3.0.0' },
+                        instructions:
+                            'This is a live Source RPC network. Start with list_peers, then describe_peer to learn a peer' +
+                            ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.' +
+                            ' start_fake puts a peer of your own on the same network, built from a contract you supply - use it to try something' +
+                            ' against a device that does not exist yet, rather than against one that does. watch_traffic shows what other peers' +
+                            ' are saying to each other, which is most of what is happening.'
+                    }
+                }
             }
             case 'notifications/initialized':
             case 'notifications/cancelled':
-                return
+                return undefined
             case 'ping':
-                if (!isNotification) respond(request.id, {})
-                return
+                return isNotification ? undefined : { result: {} }
             case 'tools/list':
-                respond(request.id, { tools: toolsFor(options.contracts, options.allowExec, options.scripts) })
-                return
+                return { result: { tools: toolsFor(options.contracts, options.allowExec, options.scripts) } }
             case 'tools/call': {
                 const name = String(request.params?.name ?? '')
                 const args = (request.params?.arguments ?? {}) as { [key: string]: unknown }
-                if (!name) {
-                    fail(request.id, INVALID_PARAMS, 'tools/call needs a tool name')
-                    return
-                }
+                if (!name) return { error: { code: INVALID_PARAMS, message: 'tools/call needs a tool name' } }
                 const { text, isError } = await callTool(name, args)
-                respond(request.id, { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) })
-                return
+                return { result: { content: [{ type: 'text', text }], ...(isError ? { isError: true } : {}) } }
             }
             default:
-                if (!isNotification) fail(request.id, METHOD_NOT_FOUND, `unknown method '${request.method}'`)
+                return isNotification ? undefined : { error: { code: METHOD_NOT_FOUND, message: `unknown method '${request.method}'` } }
         }
+    }
+
+    const write = (message: unknown) => process.stdout.write(JSON.stringify(message) + '\n')
+    const fail = (id: JsonRpcRequest['id'], code: number, message: string) => write({ jsonrpc: '2.0', id, error: { code, message } })
+
+    const handle = async (request: JsonRpcRequest) => {
+        const answer = await answerTo(request)
+        if (answer) write({ jsonrpc: '2.0', id: request.id, ...answer })
     }
 
     let buffered = ''
@@ -1019,8 +1042,76 @@ export const startMcp = async (options: McpOptions) => {
         }
     })
 
+    /**
+     * The second door: streamable HTTP, spoken directly for the same reason stdio is - the
+     * protocol is a POST carrying one JSON-RPC message and a JSON answer, which is little enough
+     * that an SDK would be the bigger dependency. Two deliberate simplifications the spec allows:
+     * no session ids are assigned, because the door exists to *share* one process-wide state and
+     * a session would only pretend otherwise; and GET's server-initiated stream is declined with
+     * 405, because this server has no server-initiated messages to send.
+     */
+    let door: ReturnType<typeof createHttpServer> | undefined
+    if (options.port) {
+        const doorHost = options.host ?? '127.0.0.1'
+        const local = doorHost === '127.0.0.1' || doorHost === 'localhost'
+        // Fail closed before the port opens: a wide door with no lock is not started, warned about
+        // and left open - it is refused, and the sentence says what would make it acceptable.
+        if (!local && !options.doorToken)
+            throw new Error(`mcp: refusing to serve HTTP on ${doorHost} without a token - the network could drive this node. Set SOURCE_RPC_MCP_TOKEN, or bind 127.0.0.1.`)
+        const MAX_BODY = 4 * 1024 * 1024
+        door = createHttpServer((request, response) => {
+            if (request.method !== 'POST') {
+                response.writeHead(405, { Allow: 'POST' }).end()
+                return
+            }
+            if (options.doorToken && request.headers.authorization !== `Bearer ${options.doorToken}`) {
+                response.writeHead(401, { 'WWW-Authenticate': 'Bearer' }).end()
+                return
+            }
+            let body = ''
+            request.setEncoding('utf8')
+            request.on('data', (chunk: string) => {
+                body += chunk
+                if (body.length > MAX_BODY) request.destroy()
+            })
+            request.on('end', () => {
+                let message: JsonRpcRequest
+                try {
+                    message = JSON.parse(body) as JsonRpcRequest
+                } catch {
+                    response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: INVALID_PARAMS, message: 'the body is not a JSON-RPC message' } }))
+                    return
+                }
+                if (Array.isArray(message)) {
+                    response.writeHead(400, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: INVALID_PARAMS, message: 'batches are not accepted here - send one message per POST' } }))
+                    return
+                }
+                // A notification is taken and not answered, which over HTTP is 202.
+                if (message.id === undefined || message.id === null) {
+                    void answerTo(message).catch((e) => process.stderr.write(`source-rpc mcp: ${failureText(e)}\n`))
+                    response.writeHead(202).end()
+                    return
+                }
+                void answerTo(message)
+                    .then((answer) => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: message.id, ...answer })))
+                    .catch((e) => response.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ jsonrpc: '2.0', id: message.id, error: { code: INTERNAL_ERROR, message: failureText(e) } })))
+            })
+        })
+        await new Promise<void>((resolvePromise, rejectPromise) => {
+            door!.on('error', rejectPromise)
+            door!.listen(options.port, doorHost, () => resolvePromise())
+        })
+        process.stderr.write(`source-rpc mcp: streamable HTTP on ${doorHost}:${options.port} - a second client can attach here and sees the same scripts, fakes and watches as stdio.\n`)
+        if (local && !options.doorToken)
+            process.stderr.write('source-rpc mcp: the HTTP door has no token, so any process on this machine can drive this node. SOURCE_RPC_MCP_TOKEN is what gates it.\n')
+        if (!local)
+            // The console's warning, for the same widening.
+            process.stderr.write(`source-rpc mcp: bound to ${doorHost}, so these tools are reachable from the network. Anyone with the token can call, script and fake through this node.\n`)
+    }
+
     const close = async () => {
         process.stdin.removeAllListeners('data')
+        if (door) await new Promise<void>((resolvePromise) => door!.close(() => resolvePromise()))
         // Before the network goes: a fake left running would hold a link this is about to drop.
         for (const fake of fakes.values()) await fake.close().catch(() => undefined)
         fakes.clear()

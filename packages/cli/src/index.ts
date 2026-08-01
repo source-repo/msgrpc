@@ -46,7 +46,8 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   node      make this machine scriptable from another one, and nothing else, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
-            stdio carries the protocol, so it is not for interactive use
+            stdio carries the protocol, so it is not for interactive use; --port opens a second
+            door over streamable HTTP, so two clients can share one node
 
   bench     call one method over and over and report what it cost
   diff      compare what two live peers expose, when one of them behaves differently
@@ -134,6 +135,14 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 nothing can script it. The peer must authenticate as that name,
                                 so the key it presents reaches it out of band - deliberately not
                                 something this bus can hand over
+    --port <n>                  serve streamable HTTP here as a second door beside stdio, so a
+                                second client shares this node's scripts, fakes and watches
+                                rather than forking them. No default: absent means stdio only
+    --host <address>            default 127.0.0.1 for the door; widening it requires the token
+                                below, or the server refuses to start
+    SOURCE_RPC_MCP_TOKEN        bearer token the door requires; or --mcp-auth <file> naming a
+                                file that holds it. Never a flag value: ps is readable by
+                                everyone on the box
 
   serve
     --contract <file>           the contract to serve; every namespace in it is exposed
@@ -461,7 +470,8 @@ const VALUE_FLAGS = new Set([
     '--idempotency-key',
     '--cert',
     '--key',
-    '--scriptable-by'
+    '--scriptable-by',
+    '--mcp-auth'
 ])
 
 const positionals = (argv: string[]) => {
@@ -884,9 +894,28 @@ const runMcp = async (argv: string[]) => {
         process.stderr.write('source-rpc mcp: --scriptable-by needs --scripts, since there is nothing to offer without a directory to keep it in\n')
         process.exit(1)
     }
+    // The door: streamable HTTP beside stdio. The token comes from the environment or a file,
+    // never a flag value, since ps is readable by everyone on the box.
+    const doorPort = Number(argument(argv, '--port', '0')) || undefined
+    const doorHost = argument(argv, '--host', '127.0.0.1')
+    const tokenFile = argument(argv, '--mcp-auth', '')
+    let doorToken = process.env.SOURCE_RPC_MCP_TOKEN || undefined
+    if (!doorToken && tokenFile) {
+        try {
+            doorToken = readFileSync(tokenFile, 'utf8').trim() || undefined
+        } catch (e) {
+            process.stderr.write(`source-rpc mcp: cannot read --mcp-auth ${tokenFile}: ${(e as Error).message}\n`)
+            process.exit(1)
+        }
+    }
     const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
         ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}),
-        ...(scriptableBy.length ? { scriptableBy } : {}) })
+        ...(scriptableBy.length ? { scriptableBy } : {}),
+        ...(doorPort ? { port: doorPort, host: doorHost, ...(doorToken ? { doorToken } : {}) } : {}) }).catch((e: Error) => {
+        // The refusal a wide bind without a token earns arrives here, with its sentence intact.
+        process.stderr.write(`source-rpc ${e.message}\n`)
+        process.exit(1)
+    })
     // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
     const stop = () =>
         void running

@@ -24,6 +24,10 @@ The console caches what a describe taught until the peer is reselected, and the 
 
 A server keeps an emission counter per `(namespace, event)` — from expose time for declared events, whether or not anyone is subscribed — and each delivery is stamped with its `seq` and the server's `epoch` (the component channel's discipline applied server-wide: a sequence only orders within one incarnation). `msgrpc.eventCursor(namespace, event)` reads the counter, behind the same introspection opt-in and `authorize()` gate as `describe()`. The MCP's `watch_events` uses it to report `loss` per watched stream: gapless, missed N, **unknowable** when the server restarted between watches (a fresh incarnation cannot say what an old one dropped, and does not guess), or unable-to-say for a peer that predates cursors. Additive on the event payload and the introspection contract; peers that never ask notice nothing.
 
+### MCP: a second door — streamable HTTP on localhost
+
+stdio means exactly one client, and the field trial lived the consequence: a node attached to another session, and the second agent's fallback forked the scripts state the node was custodian of. `source-rpc mcp --port <n>` now serves streamable HTTP beside stdio — one POST, one JSON-RPC message, one JSON answer, no SDK — and every client shares one view of the scripts, fakes, watches and loss cursors, because there is only one of everything in the process. The bind is the console's instinct (`127.0.0.1`, `--host` to widen with the warning naming what that means), and access control was designed before the port opened: the bearer token comes from `SOURCE_RPC_MCP_TOKEN` or `--mcp-auth <file>` (never a flag value), a widened door without a token refuses to start, and a loopback door without one says plainly that any process on this machine can drive the node.
+
 ### Small things
 
 `source-rpc --version` prints the version; there was previously no way to ask.
