@@ -1,6 +1,7 @@
-# Source RPC Sparkplug B Projection, Environments, and the Plant Boundary
+# Source RPC Sparkplug B Projection and the Plant Boundary
 
 **Status:** Proposed design specification
+**Companion:** `notes/ai-boundary/source-rpc-ai-boundary-design-spec.md` — the transport-independent AI boundary and security administration model, split out of this document because it governs Source RPC as such; this projection is its first large consumer
 **Target:** Source RPC after 4.5.0, as a new ecosystem package
 **Primary reference:** Sparkplug B 3.0.0 (Eclipse), MQTT 5, and the Source RPC 4.5 component/topology/context architecture
 **Audience:** Source RPC maintainers, reviewers, integrators pointing SCADA/MES/historians at a Source RPC network, and whoever builds the first deployment
@@ -9,10 +10,10 @@
 
 Source RPC gains a Sparkplug B **projection**: selected components appear to standard plant systems as Sparkplug Edge Nodes and Devices, with their state as metrics, their lifecycle as BIRTH/DEATH, and a deliberately small allowlist of idempotent commands as writable metrics. Source RPC itself remains the internal fabric — typed calls, events, components, topology, context, queues — and is never reduced to what Sparkplug can carry.
 
-- **Projection over tunnelling.** Sparkplug outside, Source RPC inside. An opaque byte tunnel through Sparkplug is not part of this design and is deliberately not promised (§10).
+- **Projection over tunnelling.** Sparkplug outside, Source RPC inside. An opaque byte tunnel through Sparkplug is not part of this design and is deliberately not promised (§2.3).
 - **Open source.** The projection ships as a public ecosystem package, `@source-repo/sparkplug`, versioning independently like `@source-repo/queue` — the second external consumer of the schema compatibility policy, and the proof that the extension architecture reaches the industry's own standard. Commercial products build policy, integration and certification on top; none of that lives here.
-- **Per-node AI capability grants are the security model.** Four grants — AI-at-a-tool writing, AI-at-a-tool programming, AI-authored-program writing, AI-authored-program programming — closed by default on every node and opened explicitly, lease-shaped, on the node that bears the consequence, with the posture rendered and operated hierarchically in the console. Framed as enablement: the point is to allow AI exactly where it is useful, bounded in scope and time. Staged environments (dev/test/verify/prod) are recommended practice, not mechanism — ambient claims about places rot, grants travel with the machine (§8).
-- **Security, never safety.** Nothing in this design — the projection, the environment line, authorization, signing — is a functional safety mechanism, and no document may imply otherwise. Human safety belongs to the functional-safety tier: FSoE/TwinSAFE-class hardware with its own CPU, its own credentials and SIL-rated logic. The stance in one sentence: **no AI modelling with dangerous machines — and even that line is not what safety relies on** (§8.7).
+- **The security model lives in the companion document.** AI as a principal, the four per-node capability grants, sponsorship, the badge desk, environments as recommended practice, and the commercial knife (RpcServer is always secure; good tools for managing that are not free) are specified transport-independently in `notes/ai-boundary/source-rpc-ai-boundary-design-spec.md`. This projection consumes that model; it does not define it.
+- **Security, never safety.** Nothing here is a functional safety mechanism — human safety belongs to the FSoE/TwinSAFE-class tier this stack neither implements nor touches. The full statement, binding on this document too, is the companion's §9.
 
 The central rule is:
 
@@ -31,7 +32,7 @@ This specification incorporates the exploration recorded in `OpenAI chat about M
 5. **Two MQTT sessions.** One connection carries one Will; Sparkplug demands NDEATH as the Will while Source RPC presence uses a retained offline message. Two logical clients on the same broker, cleanly, rather than one compromised session.
 6. **A frozen per-session projection schema with controlled rebirth** when the exported surface changes.
 7. **Commands are an explicit allowlist of idempotent, bounded, state-confirmed methods** — never generated from every public method.
-8. **The relay for Sparkplug-only sites** (§9) keeps the caller owning the request: stable request id, retransmit until result or deadline, the relay itself a plain relay-only `RpcServer` with virtual per-peer transports over one MQTT client. Deferred until a paying deployment needs it.
+8. **The relay for Sparkplug-only sites** (§8) keeps the caller owning the request: stable request id, retransmit until result or deadline, the relay itself a plain relay-only `RpcServer` with virtual per-peer transports over one MQTT client. Deferred until a paying deployment needs it.
 9. **No silent route fallback.** Whether a call may go local, direct or relayed is deployment policy, validated at deployment time; a motion command is never quietly rerouted through a slower relay.
 10. **QoS 0 honesty.** Sparkplug data and command traffic is at-most-once; the projection and any relay must say `UnknownOutcome` where the outcome is genuinely unknown, and must never let a retry restart a deadline.
 
@@ -88,7 +89,7 @@ Non-repeatable commands, parameterized queries, long-running workflows, typed er
 
 **Read-only mode is a first-class deployment option**, not an afterthought: a projection with an empty allowlist is the recommended starting posture for every new site.
 
-**Open question, recorded:** whether a DCMD-mediated command should be able to ride command authority (EME-348) — the gateway holding `$acquire` on behalf of the SCADA that is, in plant terms, the operator in control. Deferred; the answer shapes nothing in M1–M2.
+**Open question, recorded:** whether a DCMD-mediated command should be able to ride command authority (DEV-348) — the gateway holding `$acquire` on behalf of the SCADA that is, in plant terms, the operator in control. Deferred; the answer shapes nothing in M1–M2.
 
 ## 6. Protocol substrate
 
@@ -100,83 +101,9 @@ Non-repeatable commands, parameterized queries, long-running workflows, typed er
 
 ## 7. What already exists and is reused
 
-Recorded so the implementation does not rebuild it: the component channel (snapshots, epoch/revision, status with age) is the projection's entire data source; the shape hash (4.4.0) is the rebirth trigger; the event cursors (4.4.0) are the ordering vocabulary for anything Sparkplug-carried; `peersSettled` is the gateway's startup discipline; the idempotency store and `UnknownOutcome` carry the QoS 0 story end to end; fakes, `serve --contract`, `record`/`replay` are the machine-free dev stage's machine park (§8.6); declared method semantics are the mechanical write boundary and command authority's lease pattern is the shape of a time-bounded grant (§8); and the schema compatibility policy governs the projection contract file the way it governs `*.types.json`.
+Recorded so the implementation does not rebuild it: the component channel (snapshots, epoch/revision, status with age) is the projection's entire data source; the shape hash (4.4.0) is the rebirth trigger; the event cursors (4.4.0) are the ordering vocabulary for anything Sparkplug-carried; `peersSettled` is the gateway's startup discipline; the idempotency store and `UnknownOutcome` carry the QoS 0 story end to end; fakes, `serve --contract`, `record`/`replay` are the machine-free dev stage's machine park (companion, §8); declared method semantics and the command-authority lease pattern are the AI boundary's enforcement primitives (companion, §3 and §6); and the schema compatibility policy governs the projection contract file the way it governs `*.types.json`.
 
-## 8. The AI boundary: per-node capability grants
-
-The purpose of this section is enablement, and that is not a softening — it is the design driver. The point is not to keep AI out of plant networks; it is to make AI **useful and safe at the same time**: to allow it exactly where it earns its keep, bounded in scope and in time, with the bounds visible at a glance. A boundary nobody can afford to open is a boundary people route around; a boundary that opens precisely is one people actually use.
-
-The model is **AI as a principal, never as a threat category**. A new AI instance has the standing of a person who has not badged in at the entrance: none — and that is a statement about its authorization, not a judgment of its competence. The distinction is load-bearing. A default argued from error rates erodes on the schedule of model improvement — every generation that hallucinates less becomes an argument for weakening it — while a default argued from authorization does not erode at all: **an unbadged principal has no permissions, and that does not change even if AI becomes incapable of error.** A stranger who happens to be brilliant and infallible is still a stranger at the gate. Symmetrically, what can change is the badge: an AI instance can be authorized the way an employee is today, and an authorized principal does what its permissions say — in both directions, the system is honest about status rather than opinionated about nature.
-
-### 8.1 The four grants
-
-AI capability is gated per node — on each `RpcServer`, independent of everything else — along two axes: **who originates** (AI at a tool, or an AI-authored program) times **what power** (writing to the plant, or programming the network).
-
-| grant | what it permits |
-| --- | --- |
-| `ai.tool.write` | AI at a tool (MCP) calling state-changing methods on this node |
-| `ai.tool.program` | AI at a tool creating, changing, starting or removing programs on this node |
-| `ai.program.write` | An AI-authored program calling state-changing methods on this node |
-| `ai.program.program` | An AI-authored program managing programs on this node |
-
-All four are **closed by default on every node, everywhere** — not denied by a zone, not implied by an environment, simply absent until a person opens them on the node that bears the consequence. The full ladder reads like a visit to a plant. **No badge, nothing**: a principal with no issued credential does not get onto a secured bus at all, which is already true today. **Badged, observation**: a credentialed AI principal may make `query`-semantics calls wherever ordinary authorization allows — diagnosis is where AI earns its place, and a bounded intelligence that can see everything and touch nothing is immediately useful and immediately safe; `authorize` still vetoes per node where even reading is sensitive. **Granted, the rungs above**: writes and programming, each opened by name.
-
-The write boundary is mechanical, not curated: a method's declared semantics already split `query` from the two command kinds, so "AI may observe but not write" is enforced by the dispatch layer reading a declaration that exists today.
-
-`ai.program.program` is named now precisely because it is speculative. Unnamed powers get bundled into broader grants; naming this one lets it stay closed while `ai.program.write` opens. It is also where the future arrives — a node with resident AI maintaining its own toolkit is a plausible endpoint of the technology — and it is the replication link: a program that programs programs is a chain, which is why provenance carries generation (§8.2) and grants can bound the depth they permit.
-
-And symmetrically, with no permanent ceiling: a fully badged AI principal holding `ai.program.program` at unbounded depth — uploading programs that reprogram other things on the fly — is a legitimate, deliberate configuration, not a forbidden one. The vocabulary bounds *defaults*, never *possibility*. The grants exist so that the ceiling is chosen, on the node that bears the consequence, not so that there is always a ceiling.
-
-### 8.2 Provenance
-
-A node can only enforce these grants if it can tell AI from everything else, and the claim must be vouched, never self-declared. Provenance therefore rides the existing rail: the identity's `roles`, issued with the credential by whoever operates the bus — `ai-tool` on the MCP server's token, `ai-program` on a script's, with a generation count distinguishing a program written at the tool from a program written by a program. The roles say what *kind* of principal a credential names; the credential itself says *which one* — the badge model needs both, because "every new instance is a stranger" means authorization attaches to a named principal, never to AI as a class. `authorize` and the invocation handle already carry identity to every dispatch, so every target sees honest provenance with no new plumbing.
-
-One prerequisite is a real gap today, filed as **DEV-361**: scripts are handed the node's own `SOURCE_RPC_TOKEN`, so on an authenticating bus an AI-authored program either cannot connect under its own name or dissolves into the node's identity. Derived per-script credentials — the script's own peer name, `ai-program` in its roles, revoked with the parent — are what make the `ai.program.*` grants enforceable at all. They are also the first instance of the general mechanism the next section requires: credentials derived from an authorized principal, carrying the derivation in the identity.
-
-### 8.3 Sponsorship: the issuance side
-
-There is no badge desk an AI can walk up to. A person proves who they are with a passport or BankID; an AI instance has no intrinsic identity to verify, and never will. So an AI badge can only ever be **derivative**: it exists because an already-authorized principal vouched for it, or it does not exist. That is not a workaround for the missing passport — it is the correct model, and it makes the whole design **two-sided**. The four grants of §8.1 are the *target side*: what a badged AI may do to this node, decided by the node that bears the consequence. Sponsorship is the *issuance side*: who may bring an AI onto the premises at all. Real plants separate exactly these controls — the guards at reception and the local escort rules are different authorities — and so does this design.
-
-The rules, each of them a factory rule first:
-
-- **Sponsoring is itself a permission, and it is tiered like the grants.** Not everyone with a laptop in the dev corner may receive visitors. Showing an AI around at observation tier is a lesser right than bringing in one that writes; a human with neither sponsors nothing, whatever is installed on their machine.
-- **Nobody sponsors beyond their own right.** An engineer without write access to a node cannot conjure an AI that has it: an AI's grantable ceiling is bounded by its sponsor's. This is the classic delegation rule, and it is what keeps the chain honest end to end.
-- **The visitor leaves when the escort does.** An AI credential is bound by default to its sponsor's session and dies with it. Standing sponsorship is the deliberate exception — a contractor badge, with an end date and a named responsible employee — visible in the console like every other lease.
-- **The chain is the audit.** The sponsor is recorded in the credential, so the invocation handle already answers the incident-review question at every dispatch: which model, badged by whom, under whose authority, in one lookup.
-
-This requires something Source RPC deliberately does not have today: **human principals**. The library knows machines — tokens and keys name peers — and an operating-system login proves nothing here; the person has logged on to a computer, and that is all anyone knows. Sponsoring therefore requires logging in to the Source layer itself, with an identity whose permissions include sponsorship. The split follows the package boundary (§10): the **library** carries the mechanism — identities that hold sponsor claims, credential derivation, chain and grant enforcement, of which DEV-361 is the first concrete piece — while the **badge desk** is a product: directory and SSO integration, BankID where that is how people prove themselves, approval workflows, the HR-shaped machinery no library should contain. The MCP session then binds to a logged-in sponsor, which is the direction the instance-versus-node question resolves toward (§12): the node is the terminal, and the badge derives from whoever is signed in at it.
-
-One power gets named now, by this specification's own rule that unnamed powers hide inside bundles: **`ai.sponsor`** — an AI principal authorized to sponsor further AI principals. A resident-AI node onboarding its own helper agents is the plausible future; issuance-side, generation-counted, closed by default, and named so it stays closed while everything else opens.
-
-And one limit, stated so nobody oversells: this governs AI **on the bus**. It cannot govern what a person pastes into a chat window on their own laptop — that is document-handling policy, a different control in a different tier. The defense against routing around the badge desk is not enforcement this system cannot have; it is that the sponsored path must be the more useful one — the MCP gives a badged AI eyes and hands, and that is worth logging in for.
-
-### 8.4 Enforcement and the shape of a grant
-
-Grants are **declarative data, not authorizer code**. A small per-node document states which of the four capabilities is open and to whom; the library enforces it before `authorize` ever runs, so the default is refusal even on a node whose author wrote no authorizer at all, and `authorize` remains the fine-grained veto on top. Declarative matters twice: it is what the console can render (§8.5), and it is what a reviewer can diff — the same argument as the committed projection contract.
-
-Write-class grants should default to being **lease-shaped**. "Bounded" means bounded in time as well as scope, and the machinery exists: command authority's acquire/TTL/renewal pattern, applied to permission. The ergonomic default for `ai.tool.write` on a commissioning afternoon is a lease somebody renews on purpose and everybody watches expire; standing grants remain possible and visible for the installations that want them. Grants that linger as configuration archaeology are the failure mode this prevents.
-
-### 8.5 The console is the switch
-
-The console gains a security panel under the existing peer tree: per node — authenticated, signing, authority, `--scriptable-by`, and the four AI grants with their scopes, grantees and remaining lease time. Its verb is not only *audit* but *open*: "open this, here, until then", with what is currently open always one glance away. That panel is simultaneously the auditor's screen and the reason default-closed never pressures anyone into blanket-opening — granting precisely must be cheaper than granting broadly.
-
-The flow has a name a plant manager understands on sight: **onboarding an AI principal**. Issue the badge, set the permissions, watch the lease. Not "configure ACLs" — the employment analogy is the interface, because it is the mental model the industry already runs its human access on.
-
-### 8.6 Environments as recommended practice
-
-An earlier draft of this specification made staged environments — dev, test, verify, prod — an enforced mechanism, with tools refusing buses declared as higher zones. That is demoted, deliberately, to **recommended practice**, and the reason deserves recording: a zone is an ambient claim about a *place*, and ambient claims about places rot. Floor space runs out, a prototype of something genuinely dangerous gets parked in the corner that has always been "just developers", and the declaration nobody re-reads now radiates confidence the reality no longer deserves. An enforced-but-wrong zone is negative security. Per-node grants do not have that failure mode: **the grant travels with the machine; the zone stays behind when the machine moves.** The dangerous newcomer arrives with its writes closed no matter whose corner it is parked in.
-
-What survives as guidance, because it is still good practice: stage deployments dev → test → verify → prod; keep the dev stage machine-free, its machine park built from fakes, committed contracts and replayed recordings; promote artifacts between stages — contracts upward with code, recordings downward as replay material, CI as the vehicle — and never span stages with a live connection. The documentation should present this as the recommended deployment shape, in the zones-and-conduits vocabulary plant security auditors already recognize, and the console may display an informational environment label where a deployment declares one. Nothing refuses on it.
-
-For a dev setup at a site whose policy allows only the Sparkplug namespace: a dev stage is not on the production broker, so granting a private topic on the dev broker is almost always available and always preferable. The tunnel stays rejected (§2.3).
-
-### 8.7 Security, never safety
-
-Everything in this document is security and operational integrity. None of it is functional safety, and no product wording may drift there. Human safety belongs to the functional-safety tier — FSoE/TwinSAFE-class yellow hardware with its own CPU, its own program-change credentials, black-channel communication and SIL-rated logic — a tier this stack neither implements nor touches. The grants keep AI bounded as a matter of *operational policy*; they are explicitly not the mechanism a person's safety depends on, and the documentation says so wherever the boundary is described.
-
-One architectural note for the reader who knows both worlds: the black channel treats the entire fieldbus as untrusted transport and puts all responsibility at certified endpoints — the same shape as this design's caller-owned retries over QoS 0. The industry's safety tier concluded long ago that you do not trust the middle. This design applies that shape one tier up, and never claims to be the tier below.
-
-## 9. The Sparkplug-only relay profile (deferred)
+## 8. The Sparkplug-only relay profile (deferred)
 
 For sites where only `spBv1.0/...` may cross a boundary and components on both sides must still call each other: the profile is designed, recorded here, and not built until a paying deployment states the need.
 
@@ -184,37 +111,26 @@ Shape: a Host-side relay that is a plain relay-only `RpcServer`; one MQTT client
 
 Per interaction: state converges by snapshot, queries and idempotent commands retry freely, non-repeatable commands retry only against a durable idempotency store and otherwise end in `UnknownOutcome` stated plainly, ordinary events stay best-effort, audit-grade facts belong to the queue.
 
-## 10. Package and product boundary
+A related boundary case that does not need the relay: a dev-stage setup at a site whose policy allows only the Sparkplug namespace. A dev stage is not on the production broker, so granting a private topic on the dev broker is almost always available and always preferable. The tunnel stays rejected (§2.3).
+
+One architectural note for the reader who knows the functional-safety world: the black channel treats the entire fieldbus as untrusted transport and puts all responsibility at certified endpoints — the same shape as this relay's caller-owned retries over QoS 0. The industry's safety tier concluded long ago that you do not trust the middle. This design applies that shape one tier up, and — per the companion's §9 — never claims to be the tier below.
+
+## 9. Package and product boundary
 
 `@source-repo/sparkplug` is public and versions independently, depending only on the library's public API — the second package (after the queue) whose existence proves the compatibility policy. It contains the vendored proto and generated code, the session state machine, the projection engine, the projection-contract format, and its tests. The CLI may grow a verb to scaffold and validate projection contracts.
 
-### 10.1 Where the commercial knife goes
+The commercial knife — mechanism open entirely, administration commercial entirely, the litmus test, and the no-variant-classes rule — is doctrine of the companion document (§10 there), and this package sits wholly on the open side of it: everything named in this specification, including the projection's enforcement and its default-closed posture, is open source. Beyond this sentence, nothing in this repository references the commercial products.
 
-The question was put directly during review: keeping this level of security is expensive, so can there be an open package with less security and commercial variants of `RpcServer` — the cake both had and eaten — and does that make a code mess? The answer this specification commits to: **yes to the cake, but the knife goes between mechanism and administration, never between less security and more.**
-
-- **Mechanism is open, entirely.** Authentication, authorization, signing, the grants enforcement, the principal and sponsorship machinery, credential derivation, default-closed postures — all of it, with honest baseline implementations (token files, per-node grant documents) that let one engineer secure one bus without paying anyone. An open package with *nil* security under this project's name must not exist: its failures would carry the name, "security as a paid feature" is the one pitch plant security teams punish on sight, and — decisive on its own — enforcement hooks are the cheap part. What is expensive to build and keep is not the if-statement that refuses; it is everything around it.
-- **Administration is commercial, entirely.** The badge desk (§8.3): human login, directory and SSO integration, BankID where that is how people prove themselves, approval workflows, fleet-scale posture management across sites, audit retention and reporting, certified deployment profiles, support, accountability. This is what customers actually pay for — not the lock, the key management — and it is exactly the part whose maintenance cost the revenue is supposed to carry, so cost and income sit on the same side of the knife.
-
-The litmus test, for every future feature that claims to be commercial: **does its absence make an honest deployment insecurable, or merely laborious?** Insecurable → it belongs in the open mechanism. Laborious → it may be product. The test is written down because the pressure to move it will be constant and always politely argued.
-
-### 10.2 No variant classes
-
-To the code-mess worry: there are **no commercial variants of `RpcServer`**, ever. Forked classes drift, double every test, and break on every upstream change — that is the mess, and it is avoided by the pattern the library already lives by: **hooks, not forks**. `authenticate`, `authorize`, the idempotency and topology stores, and now the grants provider and credential deriver are open interfaces with open baseline implementations; the commercial tier ships *richer implementations of the same interfaces* — an authenticator that speaks the directory and returns identities with sponsor claims, a grants provider backed by the badge desk, an audit sink with retention. One `RpcServer`, one test suite, zero forks. A competitor can implement the same interfaces; that is not a leak, it is the ecosystem existing — the moat is the badge desk's depth, not the interface's secrecy.
-
-There is also a selling argument hiding in the split, worth handing to marketing intact: plant security teams do not buy security they cannot read. An open, auditable enforcement model with a commercial administration on top is a *stronger* pitch than a closed one — what is given away is the reason to trust the platform, and what is sold is the reason it runs at scale.
-
-Beyond this section, nothing in this repository references the commercial products.
-
-## 11. Milestones
+## 10. Milestones
 
 - **M1 — substrate.** Vendored proto, committed codegen, the Edge Node session machine (bdSeq, seq wrap, rebirth requests, STATE observation) tested against a real broker with an in-repo host-side validator. No projection yet: an Edge Node that is born, publishes one metric honestly, and dies correctly is the milestone.
 - **M2 — read-only projection.** The projection contract file; component channel → snapshot-atomic DDATA; Quality on stale; DDEATH on closed; shape-hash rebirth; stable Device IDs under owner churn. This is the first customer-visible artifact.
-- **M3 — the AI boundary** (parallel track, core library + CLI + console, independent of Sparkplug): provenance roles and sponsor claims on issued credentials, the general credential-derivation mechanism with derived per-script credentials as its first instance (DEV-361), the per-node grants document with library-side default-refusal enforcement, lease-shaped write grants with session-bound sponsorship, the console security panel with the onboarding flow, and the environments-as-recommended-practice chapter in the docs. The badge desk itself — human login, directory, approvals — is product, not milestone (§10.1).
+- **M3 — the AI boundary**: specified and milestoned in the companion document. A parallel track, core library + CLI + console, independent of everything Sparkplug; listed here only so the numbering in earlier discussions stays valid.
 - **M4 — allowlisted commands.** Writable metrics, idempotent-only, gateway-side bounds validation, confirmation-by-state, the full command-and-confirm flow tested rather than merely the DCMD arriving.
 - **M5 — Templates** from component profiles, for repeated units.
-- **M6 — relay profile**, only against a named paying need (§9).
+- **M6 — relay profile**, only against a named paying need (§8).
 - **TCK and certification** when the wording needs to change from "integration" to "compatible"; until then the safe words are the safe words.
 
-## 12. Open questions
+## 11. Open questions
 
-Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; the grants document's exact format and where it lives (per-node file, bus-provisioned, or both — settled in M3's design review), and whether grantees are named peers, roles, or either; the right generation-depth default for `ai.program.program` beyond zero; **instance badging mechanics** — the direction is resolved by sponsorship (§8.3): the node is the terminal, and an AI instance's badge derives from the human signed in at it, so the MCP session binds to its sponsor; what remains open is the mechanics — how the door credential carries the derived identity into calls, and how much of the person-at-the-terminal survives across the gateway hops where identity otherwise flattens (§2.2.6); and whether a dev-stage Sparkplug crossing ever becomes a real request rather than a theoretical one.
+Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; and whether a dev-stage Sparkplug crossing ever becomes a real request rather than a theoretical one. The AI boundary's open questions — grants format, generation depth, instance badging mechanics — live with their specification, in the companion document's §12.
