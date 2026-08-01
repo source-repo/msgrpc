@@ -15,7 +15,19 @@ class Plant {
 server.exposeClassInstance(new Plant())      // name taken from @rpcNamespace
 ```
 
-Standard ECMAScript decorators, so no `experimentalDecorators` is needed. Marks are inherited, so a subclass keeps its parent's. Without decorators, `exposeMethods(Plant, ['writeSetpoint'])` does the same and rejects names that are not methods.
+Standard ECMAScript decorators, so no `experimentalDecorators` is needed. Marks are inherited, so a subclass keeps its parent's.
+
+Without decorators — and code run under Node's type stripping has no choice, since V8 does not ship decorators — the runtime forms say everything the decorators say, through the same records:
+
+```typescript
+declareRpcNamespace(Plant, 'plant', { version: '3' })          // = @rpcNamespace('plant', { version: '3' })
+exposeMethods(Plant, {
+    writeSetpoint: { semantics: 'idempotent-command' },        // = @rpc({ semantics: 'idempotent-command' })
+    readSetpoint: {},                                          // = bare @rpc
+})
+```
+
+`exposeMethods(Plant, ['writeSetpoint'])` remains the shorthand when nothing is declared, and both forms reject names that are not methods. For source already written with decorators, [`source-rpc strip`](../tools/cli#strip) writes the decorator-free twin mechanically.
 
 A class that marks nothing publishes every method on its prototype chain, which is what makes the plain style above work. Set `requireExplicitExposure` on `RpcServer` to refuse such a class instead, which makes the discipline enforceable across a project.
 

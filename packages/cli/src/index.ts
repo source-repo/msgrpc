@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { readFileSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import {
     createHmacSigner,
     createHmacVerifier,
@@ -23,6 +23,7 @@ import { startBroker } from './broker.js'
 import { startMcp } from './mcp.js'
 import { startNode } from './node.js'
 import { versionSkewLine } from './packages.js'
+import { stripSource } from './strip.js'
 import { processOutput, runCall, runDescribe, runFind, runPeers, runWatch } from './verbs.js'
 import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
@@ -42,6 +43,8 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
 
   extract   write the contract described by the source to a file
   check     compare the source against a written contract and fail on a breaking change
+  strip     write a decorator-free twin of a source file that Node can run directly - the same
+            @rpc marks the contract came from, re-said as runtime calls
   console   browse a live network in a browser: peers, what they expose, calls and events
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   node      make this machine scriptable from another one, and nothing else, until Ctrl-C
@@ -175,6 +178,12 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 on a broker, --sign at both ends is what makes the grant work:
                                 without it nothing can prove who a caller is and every call is
                                 refused
+
+  strip <file…>
+    --out <dir>                 where each decorator-free twin lands, under the same file name.
+                                Required, and refused when it would overwrite the input: the
+                                decorated source stays the one you edit. Line numbers are
+                                preserved, so a stack trace from the twin reads against the source
 
   broker
     --port <n>                  default 7843, or 8843 with --cert
@@ -1036,6 +1045,37 @@ const main = () => {
         process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
         process.exit(1)
     }
+    if (command === 'strip') {
+        const files = positionals(argv)
+        const out = argument(argv, '--out', '')
+        if (!files.length || !out) {
+            process.stderr.write('source-rpc strip: give it one or more .ts files and --out <dir>, e.g. strip scripts/hello.ts --out scripts/stripped\n')
+            process.exit(1)
+        }
+        mkdirSync(resolve(out), { recursive: true })
+        for (const file of files) {
+            const source = resolve(file)
+            const target = resolve(out, basename(file))
+            // Refused rather than clobbered: the decorated source is the one to keep editing.
+            if (target === source) {
+                process.stderr.write(`source-rpc strip: ${file} would overwrite itself - --out has to be a different directory\n`)
+                process.exit(1)
+            }
+            const outcome = stripSource(readFileSync(source, 'utf8'), basename(file))
+            if (outcome.problems.length) {
+                for (const problem of outcome.problems) process.stderr.write(`source-rpc strip: ${file}: ${problem.where}: ${problem.reason}\n`)
+                process.exit(1)
+            }
+            writeFileSync(target, outcome.output)
+            process.stdout.write(
+                outcome.stripped
+                    ? `source-rpc: stripped ${outcome.stripped} decorator${outcome.stripped === 1 ? '' : 's'} from ${file} -> ${target}\n`
+                    : `source-rpc: nothing to strip in ${file} -> ${target} unchanged\n`
+            )
+        }
+        return
+    }
+
     if (command === 'broker') {
         void runBroker(argv).catch(fail)
         return

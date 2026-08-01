@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Decorator-free marking that can say everything, and a CLI that strips
+
+`@rpc` and `@rpcNamespace` are standard ECMAScript decorators, V8 does not ship decorators, and Node's type stripping — how the scripts directory runs — dies on the `@` with a SyntaxError. The population that cannot compile was locked out of exactly the options the field trial proved scripts need most. Two answers, one mechanism:
+
+`exposeMethods` now takes an object form carrying the same options the decorator takes — `exposeMethods(ChatService, { say: { injectInvocation: true }, status: { semantics: 'query' } })` — and `declareRpcNamespace(ChatService, 'chat', { version })` is the decorator-free `@rpcNamespace`. Both write the records the decorators write, so semantics, conflation, authority and the invocation handle are no longer privileges of code with a build step. The array form of `exposeMethods` stays as the nothing-declared shorthand.
+
+`source-rpc strip <file…> --out <dir>` writes the decorator-free twin of a decorated source file: decorators blanked in place, the marks re-said as those runtime calls on each class's closing-brace line, line numbers unchanged so stack traces read against the source. Only the library's decorators are understood — anything else is refused, never guessed at — and the output refuses to overwrite the input, because the decorated source stays the one you edit and the one `extract` reads. The MCP server now teaches this in its instructions and in `save_script`, so a model writing a script learns the rule before hitting the SyntaxError instead of after.
+
 ## Source RPC 4.4.0
 
 The first fruits of the first field trial: an agent that had never seen the system used it for an afternoon (`notes/session-feedback-2026-08-01.md`), and what it stumbled on became issues. This release is their fixes — one behaviour change (the broker's bind, below), everything else additive.

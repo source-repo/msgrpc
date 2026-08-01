@@ -323,12 +323,19 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
                       'Write a script to the scripts directory. A script is an ESM Node program that imports @source-repo/rpc and is a peer in its own right - ' +
                       'so unlike start_fake it is not bound to one contract and can call as well as answer, drive a sequence, watch events, or stand several peers up at once. ' +
                       'It runs as its own process. The network this server is on is in the environment as SOURCE_RPC_HUB, SOURCE_RPC_BROKER, SOURCE_RPC_PREFIX and SOURCE_RPC_TOKEN, ' +
-                      'so a script should read those rather than hardcode a url. Saving does not start it.',
+                      'so a script should read those rather than hardcode a url. Saving does not start it. ' +
+                      'IMPORTANT: scripts run under Node type stripping, which cannot run decorators - a script using @rpc or @rpcNamespace dies with a SyntaxError at the @. ' +
+                      "Use the decorator-free forms instead: exposeMethods(MyClass, { say: { injectInvocation: true }, status: { semantics: 'query' } }) and " +
+                      "declareRpcNamespace(MyClass, 'chat'), which say everything the decorators say.",
                   inputSchema: {
                       type: 'object',
                       properties: {
                           name: { type: 'string', description: 'A name; the file becomes <name>.ts (or <name>.mjs) in the scripts directory.' },
-                          source: { type: 'string', description: 'The program. TypeScript by default - Node runs it directly - so `import type { Pump } from ...` gives a typed proxy.' },
+                          source: {
+                              type: 'string',
+                              description:
+                                  'The program. TypeScript by default - Node runs it directly, so `import type { Pump } from ...` gives a typed proxy - but no decorators: mark methods with exposeMethods and declare the namespace with declareRpcNamespace.'
+                          },
                           language: { type: 'string', enum: ['ts', 'mjs'], description: 'Default ts. Use mjs for plain JavaScript, or when the server runs on a Node older than 22.6.' },
                           node: {
                                   type: 'string',
@@ -995,7 +1002,9 @@ export const startMcp = async (options: McpOptions) => {
                             ' contract before calling it. Calls reach real devices, so treat anything that writes as consequential.' +
                             ' start_fake puts a peer of your own on the same network, built from a contract you supply - use it to try something' +
                             ' against a device that does not exist yet, rather than against one that does. watch_traffic shows what other peers' +
-                            ' are saying to each other, which is most of what is happening.'
+                            ' are saying to each other, which is most of what is happening.' +
+                            ' Scripts run under Node type stripping and cannot use decorators - mark methods with exposeMethods(MyClass, { method: options })' +
+                            ' and declare the namespace with declareRpcNamespace(MyClass, name) instead; see save_script.'
                     }
                 }
             }

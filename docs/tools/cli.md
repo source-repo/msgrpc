@@ -210,6 +210,29 @@ The peer describes itself and the answer runs through **the same comparison** th
 
 A namespace the peer does not serve at all is reported apart from one that changed. **A peer running without a schema is reported as unchecked, not as passing**: it describes its method names and nothing else, and calling that "no breaking changes" would be the most useful-sounding lie available.
 
+## strip
+
+```
+source-rpc strip scripts/hello.ts --out scripts/stripped
+```
+
+`@rpc` and `@rpcNamespace` are standard ECMAScript decorators, and V8 does not ship decorators — so a script written the natural way dies with a `SyntaxError` at the first `@` when Node's type stripping runs it, which is how the scripts directory runs. The CLI already understands these decorators, because [`extract`](#extract) reads them; `strip` is the second role that falls out of the first: write a decorator-free twin, with the marks re-said as the runtime calls `declareRpcNamespace` and `exposeMethods`, which record exactly the same things.
+
+```typescript
+// what you wrote                                    // what the twin says on the class's closing line
+@rpcNamespace('desk', { version: '1.2.0' })
+export class FrontDesk {
+    @rpc({ injectInvocation: true })
+    async say(from: string, text: string,
+              invocation?: RpcInvocationHandle) {…}
+}                                                    // }; __rpcNamespace(FrontDesk, 'desk', { version: '1.2.0' });
+                                                     //    __rpcMethods(FrontDesk, { say: { injectInvocation: true } })
+```
+
+Three rules keep it honest. **Line numbers do not move** — removed decorators are blanked in place and the marks land on each class's closing-brace line, so a stack trace from the twin reads against the decorated source. **The output never overwrites the input** — `--out` must be a different directory, because the decorated source stays the one you edit and the one `extract` reads. And **only the library's decorators are understood**: any other decorator, or one on a class `strip` cannot re-mark from the top level, is reported and the file is refused — stripping a decorator whose runtime effect cannot be reproduced would change what the program means and call that a success.
+
+Scripts that skip decorators entirely can say the same things directly — `exposeMethods(FrontDesk, { say: { injectInvocation: true } })` and `declareRpcNamespace(FrontDesk, 'desk')` are public API, and the MCP server tells a model writing scripts to use them.
+
 ## diff
 
 Why does cell 3 behave differently from cell 2? Usually because one of them is running last season's firmware.

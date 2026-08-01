@@ -162,16 +162,54 @@ export function rpc<This, Args extends unknown[], Return>(
 }
 
 /**
- * Marks methods without decorators, for JavaScript callers or code that prefers not to use them.
+ * Marks methods without decorators, and can say everything `@rpc` can.
+ *
+ * This exists for the population that cannot use decorators at all: V8 does not ship them, so a
+ * script run under Node's type stripping - which is how the scripts directory runs - dies on the
+ * `@` with a SyntaxError. The array form marks with nothing declared, as it always has; the object
+ * form carries the same options the decorator takes, so semantics, conflation, authority and the
+ * invocation handle are not privileges of code with a compile step.
+ *
+ * ```typescript
+ * exposeMethods(ChatService, ['say', 'who'])                          // marked, nothing declared
+ * exposeMethods(ChatService, {
+ *     say: { injectInvocation: true },                                // = @rpc({ injectInvocation: true })
+ *     who: {}                                                         // = bare @rpc
+ * })
+ * ```
+ *
  * Names that are not functions on the prototype are rejected, since a typo would silently expose
- * nothing.
+ * nothing. Note that `extract` reads decorators from source, not these runtime marks - a class
+ * marked only this way contributes no semantics to an extracted contract, which is the right
+ * bargain for scripts, whose whole point is running without a build step.
  */
-export const exposeMethods = <T>(constructor: new (...args: never[]) => T, methods: string[]) => {
-    for (const method of methods) {
+export function exposeMethods<T>(constructor: new (...args: never[]) => T, methods: string[]): new (...args: never[]) => T
+export function exposeMethods<T>(constructor: new (...args: never[]) => T, methods: { [method: string]: RpcMethodOptions }): new (...args: never[]) => T
+export function exposeMethods<T>(constructor: new (...args: never[]) => T, methods: string[] | { [method: string]: RpcMethodOptions }) {
+    const entries: [string, RpcMethodOptions][] = Array.isArray(methods) ? methods.map((method) => [method, {}]) : Object.entries(methods)
+    for (const [method, options] of entries) {
         if (typeof (constructor.prototype as Record<string, unknown>)[method] !== 'function')
             throw new Error(`exposeMethods: ${constructor.name}.${method} is not a method`)
-        markOn(constructor, method)
+        markOn(constructor, method, options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation)
     }
+    return constructor
+}
+
+/**
+ * Declares a class's namespace without the @rpcNamespace decorator, for the same population
+ * exposeMethods serves. The same declaration lands in the same place, so exposeClassInstance and
+ * the extraction machinery read it identically - only the syntax differs.
+ *
+ * ```typescript
+ * declareRpcNamespace(ChatService, 'chat', { version: '1.0.0' })
+ * ```
+ */
+export const declareRpcNamespace = <T extends abstract new (...args: never[]) => unknown>(
+    constructor: T,
+    name: string,
+    options: { version?: string; execution?: RpcExecution; mailbox?: number } = {}
+) => {
+    namespaces.set(constructor, { name, version: options.version, execution: options.execution, mailbox: options.mailbox })
     return constructor
 }
 

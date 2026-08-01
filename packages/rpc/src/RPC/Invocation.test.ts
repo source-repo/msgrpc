@@ -1,6 +1,6 @@
 import test from 'ava'
 import { randomUUID } from 'crypto'
-import { createTokenAuthenticator, RpcClient, RpcServer, rpc, rpcNamespace } from '../index.js'
+import { createTokenAuthenticator, declaredNamespace, declareRpcNamespace, exposeMethods, RpcClient, RpcServer, rpc, rpcNamespace } from '../index.js'
 import type { RpcInvocationHandle } from './Invocation.js'
 
 /**
@@ -96,6 +96,49 @@ test('optional arguments left out do not shift the handle, and undeclared method
     t.deepEqual(padded, { first: 'only-one', second: null, sawHandle: true }, 'the handle arrives in its own seat, padded past the absent optionals')
 
     t.is(await desk.plain('untouched'), 'untouched', 'a method that did not opt in sees exactly its wire arguments')
+
+    await client.close()
+    await server.close()
+})
+
+// Deliberately no decorators anywhere in this class: this is the form a script under Node's type
+// stripping can actually write, and it must be able to say everything @rpc can - the field trial's
+// spoof was against a script, and the fix cannot be a privilege of code with a compile step.
+class StrippedDesk {
+    async say(from: string, text: string, invocation?: RpcInvocationHandle) {
+        return { claimed: from, actual: invocation?.context.identity?.name ?? invocation?.context.source, text }
+    }
+    async plain(value: string) {
+        return value
+    }
+}
+declareRpcNamespace(StrippedDesk, 'desk', { version: '2.0.0' })
+exposeMethods(StrippedDesk, { say: { injectInvocation: true, semantics: 'query' }, plain: {} })
+
+test('exposeMethods can say what @rpc says, so a decorator-free class gets the handle too', async (t) => {
+    const server = new RpcServer({ name: peer('desk3857'), transports: [{ port: 3857, host: '127.0.0.1' }], exposeIntrospection: true })
+    await server.ready()
+    // No name passed: declareRpcNamespace supplied it, exactly as @rpcNamespace would have.
+    server.exposeClassInstance(new StrippedDesk())
+
+    const client = new RpcClient('http://localhost:3857', { name: peer('caller3857'), defaultTarget: peer('desk3857') })
+    await client.ready()
+    const desk = await client.proxy<StrippedDesk>('desk')
+
+    const answer = await desk.say('somebody-important', 'still there?')
+    t.is(answer.claimed, 'somebody-important')
+    t.is(answer.actual, peer('caller3857'), 'the routed source decides, marked without a single decorator')
+
+    t.is(await desk.plain('untouched'), 'untouched', 'a method marked with empty options sees exactly its wire arguments')
+
+    // The declaration went where the decorator's would have: the runtime records carry the
+    // version, and describe() reports the query semantics from the same marks. (A version in
+    // describe() itself comes from an extracted schema, which a runtime-marked class deliberately
+    // does not have - scripts run without a build step, and that is the point of this form.)
+    t.is(declaredNamespace(new StrippedDesk())?.version, '2.0.0')
+    const described = await (await client.proxy<{ describe(): Promise<{ namespaces: { name: string; methods: { name: string; semantics?: string }[] }[] }> }>('msgrpc')).describe()
+    const desk2 = described.namespaces.find((namespace) => namespace.name === 'desk')
+    t.is(desk2?.methods.find((method) => method.name === 'say')?.semantics, 'query')
 
     await client.close()
     await server.close()
