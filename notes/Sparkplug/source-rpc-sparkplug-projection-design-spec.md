@@ -11,7 +11,7 @@ Source RPC gains a Sparkplug B **projection**: selected components appear to sta
 
 - **Projection over tunnelling.** Sparkplug outside, Source RPC inside. An opaque byte tunnel through Sparkplug is not part of this design and is deliberately not promised (§10).
 - **Open source.** The projection ships as a public ecosystem package, `@source-repo/sparkplug`, versioning independently like `@source-repo/queue` — the second external consumer of the schema compatibility policy, and the proof that the extension architecture reaches the industry's own standard. Commercial products build policy, integration and certification on top; none of that lives here.
-- **The environment line is the security model.** Deployments are staged — dev, test, verify, prod — as zones with declared conduits between them, in the sense IEC 62443 auditors already recognize. AI-facing tooling (MCP, scripts, fakes, exec) belongs strictly to dev, where no real machines exist, and the line is enforced by the tools themselves refusing declared higher zones, not by procedure (§8).
+- **Per-node AI capability grants are the security model.** Four grants — AI-at-a-tool writing, AI-at-a-tool programming, AI-authored-program writing, AI-authored-program programming — closed by default on every node and opened explicitly, lease-shaped, on the node that bears the consequence, with the posture rendered and operated hierarchically in the console. Framed as enablement: the point is to allow AI exactly where it is useful, bounded in scope and time. Staged environments (dev/test/verify/prod) are recommended practice, not mechanism — ambient claims about places rot, grants travel with the machine (§8).
 - **Security, never safety.** Nothing in this design — the projection, the environment line, authorization, signing — is a functional safety mechanism, and no document may imply otherwise. Human safety belongs to the functional-safety tier: FSoE/TwinSAFE-class hardware with its own CPU, its own credentials and SIL-rated logic. The stance in one sentence: **no AI modelling with dangerous machines — and even that line is not what safety relies on** (§8.4).
 
 The central rule is:
@@ -100,38 +100,56 @@ Non-repeatable commands, parameterized queries, long-running workflows, typed er
 
 ## 7. What already exists and is reused
 
-Recorded so the implementation does not rebuild it: the component channel (snapshots, epoch/revision, status with age) is the projection's entire data source; the shape hash (4.4.0) is the rebirth trigger; the event cursors (4.4.0) are the ordering vocabulary for anything Sparkplug-carried; `peersSettled` is the gateway's startup discipline; the idempotency store and `UnknownOutcome` carry the QoS 0 story end to end; fakes, `serve --contract`, `record`/`replay` are the dev zone's machine park (§8); and the schema compatibility policy governs the projection contract file the way it governs `*.types.json`.
+Recorded so the implementation does not rebuild it: the component channel (snapshots, epoch/revision, status with age) is the projection's entire data source; the shape hash (4.4.0) is the rebirth trigger; the event cursors (4.4.0) are the ordering vocabulary for anything Sparkplug-carried; `peersSettled` is the gateway's startup discipline; the idempotency store and `UnknownOutcome` carry the QoS 0 story end to end; fakes, `serve --contract`, `record`/`replay` are the machine-free dev stage's machine park (§8.5); declared method semantics are the mechanical write boundary and command authority's lease pattern is the shape of a time-bounded grant (§8); and the schema compatibility policy governs the projection contract file the way it governs `*.types.json`.
 
-## 8. Environments: zones and conduits
+## 8. The AI boundary: per-node capability grants
 
-### 8.1 The ladder
+The purpose of this section is enablement, and that is not a softening — it is the design driver. The point is not to keep AI out of plant networks; it is to make AI **useful and safe at the same time**: to allow it exactly where it earns its keep, bounded in scope and in time, with the bounds visible at a glance. A boundary nobody can afford to open is a boundary people route around; a boundary that opens precisely is one people actually use.
 
-Deployments are staged, and the stages are zones in the IEC 62443 sense — that vocabulary is deliberate, because it is the one plant security auditors already hold checklists for.
+### 8.1 The four grants
 
-- **dev** — the AI-native zone. MCP with scripts and exec, fakes, hot prototyping, browsers, everything. **No real machines exist here, ever**; the machine park is fakes built from committed contracts and recordings replayed from above.
-- **test** — automated. CI, `record`/`replay`, `check`, benches; hardware-in-the-loop only on rigs that cannot hurt anyone.
-- **verify** — the dress rehearsal. Real topology, committed contracts checked against live peers (`check --peer`), read-only observation at most. No fabrication tooling.
-- **prod** — the plant. The Sparkplug projection northbound; command allowlists; no MCP server with write tools, no scripts directory, no fakes.
+AI capability is gated per node — on each `RpcServer`, independent of everything else — along two axes: **who originates** (AI at a tool, or an AI-authored program) times **what power** (writing to the plant, or programming the network).
 
-### 8.2 Artifacts cross; connections never
+| grant | what it permits |
+| --- | --- |
+| `ai.tool.write` | AI at a tool (MCP) calling state-changing methods on this node |
+| `ai.tool.program` | AI at a tool creating, changing, starting or removing programs on this node |
+| `ai.program.write` | An AI-authored program calling state-changing methods on this node |
+| `ai.program.program` | An AI-authored program managing programs on this node |
 
-The only things that pass between zones are files and code: contracts promote upward with the code that satisfies them, recordings promote downward as replay material, and CI is the vehicle. A live link never spans the line — there is no "dev peer on the prod broker", not as a rule of conduct but as a property the tooling enforces.
+All four are **closed by default on every node, everywhere** — not denied by a zone, not implied by an environment, simply absent until a person opens them on the node that bears the consequence. Observation is the deliberate exception: provenance-marked AI may make `query`-semantics calls wherever ordinary authorization allows, because diagnosis and understanding are where AI earns its place, and a bounded intelligence that can see everything and touch nothing is immediately useful and immediately safe.
 
-### 8.3 The line enforces itself
+The write boundary is mechanical, not curated: a method's declared semantics already split `query` from the two command kinds, so "AI may observe but not write" is enforced by the dispatch layer reading a declaration that exists today.
 
-A zone is a declared property of a bus, not a diagram annotation. The mechanism, kept deliberately small:
+`ai.program.program` is named now precisely because it is speculative. Unnamed powers get bundled into broader grants; naming this one lets it stay closed while `ai.program.write` opens. It is also where the future arrives — a node with resident AI maintaining its own toolkit is a plausible endpoint of the technology — and it is the replication link: a program that programs programs is a chain, which is why provenance carries generation (§8.2) and grants can bound the depth they permit.
 
-- Whoever provisions a bus declares its environment — for MQTT a retained marker under the prefix, for a hub a field in its configuration — stating `dev`, `test`, `verify` or `prod`.
-- **The dangerous tool refuses the dangerous place.** An MCP server started with `--scripts` or `--allow-exec` reads the declaration at connect and refuses to join a bus declared `verify` or `prod`, with a sentence naming why — the same fail-closed family as the wide door refusing to start without a token. `start_fake` and `serve` refuse likewise.
-- An undeclared bus is treated as it is treated today, with one loud line saying the zone is undeclared — refusal on absence would break every existing bench, and the goal is that declaring is cheap and refusing is automatic, so a mis-pasted broker URL becomes a startup refusal rather than an incident.
+### 8.2 Provenance
 
-This is a Source RPC feature, not a Sparkplug one: it lands in the core library and CLI, and it is valuable with or without a single Sparkplug frame. It is listed here because the plant boundary is what makes it urgent.
+A node can only enforce these grants if it can tell AI from everything else, and the claim must be vouched, never self-declared. Provenance therefore rides the existing rail: the identity's `roles`, issued with the credential by whoever operates the bus — `ai-tool` on the MCP server's token, `ai-program` on a script's, with a generation count distinguishing a program written at the tool from a program written by a program. `authorize` and the invocation handle already carry identity to every dispatch, so every target sees honest provenance with no new plumbing.
 
-For a dev zone at a site whose policy allows only the Sparkplug namespace: the practical answer is that a dev zone is not on the production broker, so granting a private topic on the dev broker is almost always available and always preferable. The tunnel stays rejected (§2.3).
+One prerequisite is a real gap today, filed as **DEV-361**: scripts are handed the node's own `SOURCE_RPC_TOKEN`, so on an authenticating bus an AI-authored program either cannot connect under its own name or dissolves into the node's identity. Derived per-script credentials — the script's own peer name, `ai-program` in its roles, revoked with the parent — are what make the `ai.program.*` grants enforceable at all.
 
-### 8.4 Security, never safety
+### 8.3 Enforcement and the shape of a grant
 
-Everything in this document is security and operational integrity. None of it is functional safety, and no product wording may drift there. Human safety belongs to the functional-safety tier — FSoE/TwinSAFE-class yellow hardware with its own CPU, its own program-change credentials, black-channel communication and SIL-rated logic — a tier this stack neither implements nor touches. The environment line keeps AI tooling away from machines as a matter of *policy hygiene*; it is explicitly not the mechanism a person's safety depends on, and the documentation says so wherever the boundary is described.
+Grants are **declarative data, not authorizer code**. A small per-node document states which of the four capabilities is open and to whom; the library enforces it before `authorize` ever runs, so the default is refusal even on a node whose author wrote no authorizer at all, and `authorize` remains the fine-grained veto on top. Declarative matters twice: it is what the console can render (§8.4), and it is what a reviewer can diff — the same argument as the committed projection contract.
+
+Write-class grants should default to being **lease-shaped**. "Bounded" means bounded in time as well as scope, and the machinery exists: command authority's acquire/TTL/renewal pattern, applied to permission. The ergonomic default for `ai.tool.write` on a commissioning afternoon is a lease somebody renews on purpose and everybody watches expire; standing grants remain possible and visible for the installations that want them. Grants that linger as configuration archaeology are the failure mode this prevents.
+
+### 8.4 The console is the switch
+
+The console gains a security panel under the existing peer tree: per node — authenticated, signing, authority, `--scriptable-by`, and the four AI grants with their scopes, grantees and remaining lease time. Its verb is not only *audit* but *open*: "open this, here, until then", with what is currently open always one glance away. That panel is simultaneously the auditor's screen and the reason default-closed never pressures anyone into blanket-opening — granting precisely must be cheaper than granting broadly.
+
+### 8.5 Environments as recommended practice
+
+An earlier draft of this specification made staged environments — dev, test, verify, prod — an enforced mechanism, with tools refusing buses declared as higher zones. That is demoted, deliberately, to **recommended practice**, and the reason deserves recording: a zone is an ambient claim about a *place*, and ambient claims about places rot. Floor space runs out, a prototype of something genuinely dangerous gets parked in the corner that has always been "just developers", and the declaration nobody re-reads now radiates confidence the reality no longer deserves. An enforced-but-wrong zone is negative security. Per-node grants do not have that failure mode: **the grant travels with the machine; the zone stays behind when the machine moves.** The dangerous newcomer arrives with its writes closed no matter whose corner it is parked in.
+
+What survives as guidance, because it is still good practice: stage deployments dev → test → verify → prod; keep the dev stage machine-free, its machine park built from fakes, committed contracts and replayed recordings; promote artifacts between stages — contracts upward with code, recordings downward as replay material, CI as the vehicle — and never span stages with a live connection. The documentation should present this as the recommended deployment shape, in the zones-and-conduits vocabulary plant security auditors already recognize, and the console may display an informational environment label where a deployment declares one. Nothing refuses on it.
+
+For a dev setup at a site whose policy allows only the Sparkplug namespace: a dev stage is not on the production broker, so granting a private topic on the dev broker is almost always available and always preferable. The tunnel stays rejected (§2.3).
+
+### 8.6 Security, never safety
+
+Everything in this document is security and operational integrity. None of it is functional safety, and no product wording may drift there. Human safety belongs to the functional-safety tier — FSoE/TwinSAFE-class yellow hardware with its own CPU, its own program-change credentials, black-channel communication and SIL-rated logic — a tier this stack neither implements nor touches. The grants keep AI bounded as a matter of *operational policy*; they are explicitly not the mechanism a person's safety depends on, and the documentation says so wherever the boundary is described.
 
 One architectural note for the reader who knows both worlds: the black channel treats the entire fieldbus as untrusted transport and puts all responsibility at certified endpoints — the same shape as this design's caller-owned retries over QoS 0. The industry's safety tier concluded long ago that you do not trust the middle. This design applies that shape one tier up, and never claims to be the tier below.
 
@@ -153,7 +171,7 @@ Commercial products — policy gateways, assessment integration, certified deplo
 
 - **M1 — substrate.** Vendored proto, committed codegen, the Edge Node session machine (bdSeq, seq wrap, rebirth requests, STATE observation) tested against a real broker with an in-repo host-side validator. No projection yet: an Edge Node that is born, publishes one metric honestly, and dies correctly is the milestone.
 - **M2 — read-only projection.** The projection contract file; component channel → snapshot-atomic DDATA; Quality on stale; DDEATH on closed; shape-hash rebirth; stable Device IDs under owner churn. This is the first customer-visible artifact.
-- **M3 — the environment line** (parallel track, core library + CLI, independent of Sparkplug): zone declaration, the refusal in `mcp`/`serve`/`start_fake`, the undeclared-bus warning, and the zone story in the docs.
+- **M3 — the AI boundary** (parallel track, core library + CLI + console, independent of Sparkplug): provenance roles on issued credentials, derived per-script credentials (DEV-361), the per-node grants document with library-side default-refusal enforcement, lease-shaped write grants, the console security panel, and the environments-as-recommended-practice chapter in the docs.
 - **M4 — allowlisted commands.** Writable metrics, idempotent-only, gateway-side bounds validation, confirmation-by-state, the full command-and-confirm flow tested rather than merely the DCMD arriving.
 - **M5 — Templates** from component profiles, for repeated units.
 - **M6 — relay profile**, only against a named paying need (§9).
@@ -161,4 +179,4 @@ Commercial products — policy gateways, assessment integration, certified deplo
 
 ## 12. Open questions
 
-Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; the exact zone-marker mechanism for hubs versus brokers (§8.3) — to be settled in M3's design review; and whether a dev-zone Sparkplug crossing ever becomes a real request rather than a theoretical one.
+Recorded, deliberately unresolved: command authority across the boundary (§5); whether Sparkplug Group IDs should mirror any level of the internal topology or stay a flat deployment label; historian expectations for transient event metrics; the grants document's exact format and where it lives (per-node file, bus-provisioned, or both — settled in M3's design review), and whether grantees are named peers, roles, or either; the right generation-depth default for `ai.program.program` beyond zero; and whether a dev-stage Sparkplug crossing ever becomes a real request rather than a theoretical one.
