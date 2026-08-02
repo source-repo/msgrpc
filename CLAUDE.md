@@ -32,6 +32,17 @@ git ls-files -z | xargs -0 grep -laP '\x00'
 
 Table rows, headings and fenced blocks are one line each already and are not prose. A deliberate line break inside a paragraph is `<br/>`, or two trailing spaces — a bare newline will not do it.
 
+**Make the diffs readable.** The cost of that convention is that changing one word reports the whole paragraph as rewritten. `tools/md-sentences.py` is a textconv filter that breaks prose onto one line per sentence *for diffing only* — the file on disk never changes, and only what git compares does. Wire it up once per clone:
+
+```
+git config diff.markdown.textconv      "$PWD/tools/md-sentences.py"
+git config diff.markdown.cachetextconv true
+```
+
+`.gitattributes` already points `*.md` at that driver. The command itself has to be local rather than committed, because git refuses to let a repository specify programs it will run — a clone should never execute something that arrived with it.
+
+Two things to know. A textconv diff is for reading, not applying: `git apply` will reject one, and `git diff --no-textconv` is how to get a real patch. And `git diff --word-diff` needs no setup at all, so it stays the answer for a one-off look.
+
 ## Commands
 
 ```
