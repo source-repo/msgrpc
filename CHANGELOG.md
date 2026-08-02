@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### The AI grants document: closed by default, on every node
+
+What an AI principal may do here is now a small declarative document rather than something an authorizer has to be written to express — because a console can render data and cannot render a callback, and a reviewer can diff a file and cannot diff a decision made inside somebody's `authorize`.
+
+`aiGrants` on `RpcServer` takes a schema-versioned document carrying a monotonic revision and the grants that are open: `ai.tool.write`, `ai.tool.program`, `ai.program.write`, `ai.program.program`, and `ai.sponsor` for `security-admin`-effect calls. Each may be scoped `to` peer names or `roles`, given an `expiresAt` lease, and bounded by `maxGeneration` so a grant can say how far down a chain of programs it reaches.
+
+The properties that matter: **closed is the default everywhere** — a node with no document refuses every AI write and programming call, and there is nothing to switch on to be safe; **enforcement runs before `authorize`**, so a node whose author wrote no authorizer still refuses, with `authorize` remaining the fine-grained veto above it; **observation stays open**, because a badged principal that can see everything and touch nothing is useful on day one; **one grant never covers another**, which is what `effect` was added for; and **a malformed document refuses the server** rather than being read as granting nothing. `onAiDecision` receives every gated decision with the sentence explaining it — the open half of the audit story.
+
+Behaviour note for anyone who adopted 4.6.0's derived credentials: scripts carry `ai-program`, so their state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression, and observation is unaffected.
+
 ## Source RPC 4.6.0
 
 Two pieces of the AI boundary's foundation, both prerequisites rather than the boundary itself, and one behaviour change worth reading before upgrading a node that runs scripts.

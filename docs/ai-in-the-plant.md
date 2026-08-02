@@ -60,9 +60,34 @@ These work with Source RPC as it ships now.
 
 **Put repetition in the risk assessment.** For anything an agent can reach: what happens if this is done twice, deliberately, or a hundred times in a minute.
 
-## What is coming
+## Bounding what an AI principal may do
 
-The design work for a per-node AI capability model — provenance carried in issued credentials, four explicit grants for tool-driven and program-driven writes and programming, sponsorship so that issuing an AI credential is itself a permissioned act, leases that expire, and a console panel that shows and opens all of it — is specified in [the AI boundary design](https://github.com/source-repo/rpc/blob/main/notes/ai-boundary/source-rpc-ai-boundary-design-spec.md) and is not yet implemented. This page describes what changes and what to do about it now; that document describes where the enforcement is going. Nothing on this page depends on it shipping.
+This part exists now. An AI principal is one whose credential says so — `ai-tool` for something a person is driving, `ai-program` for something that tool wrote — and what it may do on a node is decided by a small declarative document rather than by code:
+
+```json
+{
+    "grants": 1,
+    "revision": 4,
+    "open": {
+        "ai.tool.write": { "to": ["assistant"], "expiresAt": 1786000000000, "reason": "commissioning, 2 August" }
+    }
+}
+```
+
+Passed as `aiGrants` to an `RpcServer`, and the shape of the thing is the point: a console can render data and cannot render a callback, and a reviewer can diff a file and cannot diff a decision somebody made inside their `authorize`.
+
+The ladder has three rungs. **No badge, nothing** — a principal with no credential does not reach a secured bus. **Badged, observation** — a credentialed AI principal may call `observe`-effect methods and subscribe to events wherever ordinary authorization allows, because diagnosis is where AI earns its place and something that can see everything and touch nothing is useful and safe at once. **Granted, the rungs above** — `ai.tool.write`, `ai.tool.program`, `ai.program.write`, `ai.program.program`, each opened by name, plus `ai.sponsor` for the `security-admin` effect that changes who may do any of it.
+
+Four properties are worth knowing before you rely on it:
+
+- **Closed is the default, everywhere.** A node with no grants document refuses every AI write and every AI programming call. There is nothing to turn on to be safe.
+- **The library enforces it before your `authorize` runs**, so a node whose author wrote no authorizer at all still refuses. `authorize` stays the fine-grained veto on top — this decides whether the *class* of power is open, never whether a particular call is wise.
+- **One grant never covers another.** A tool permitted to operate is not thereby permitted to program, and a grant to the tool is not a grant to what the tool wrote. That is the whole reason [`effect`](guide/exposing#what-a-method-does-and-what-kind-of-power-it-is) is declared separately from `semantics`.
+- **A malformed document refuses the server**, rather than being read as granting nothing. A node that starts holding an unreadable security policy is the failure this exists to prevent.
+
+Grants take `expiresAt` for a lease, `to`/`roles` to scope them, and `maxGeneration` to bound how far down a chain of programs they reach. `onAiDecision` receives every gated decision, allowed or refused, with the sentence explaining it — the open half of the audit story, with fleet-scale retention and reporting left to products built on top.
+
+Still designed rather than built: sponsorship as a permissioned act with human principals behind it, the console panel that shows and opens all of this, admission-control limits, and — the one that matters most — a **runtime sandbox** for AI-authored programs. The grants bound what a program does *through Source RPC* and nothing about what it does beside it: reading files, opening its own socket, calling a device directly. Until that exists, the rule stands that AI-authored programs run where there is nothing worth stealing and nothing worth breaking. All of it is specified in [the AI boundary design](https://github.com/source-repo/rpc/blob/main/notes/ai-boundary/source-rpc-ai-boundary-design-spec.md).
 
 ## What this page is not
 

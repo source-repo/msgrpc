@@ -5,6 +5,7 @@ import { HostTopology, type HostTopologyOptions } from './RPC/Topology.js'
 import { contextEvent, contextNamespace, HostContext, type RpcCapturedContext, type RpcContextProviderHandle, type RpcContextToken } from './RPC/Context.js'
 import { ContextResolver, type RpcContextStore } from './RPC/ContextResolver.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
+import { validateAiGrants, type RpcAiGrants } from './RPC/Grants.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { Introspection, surfaceShape, withIntrospection } from './RPC/Introspection.js'
 import { ExposeOptions, RpcServerHandler } from './RPC/RpcServerHandler.js'
@@ -61,6 +62,16 @@ export interface RpcServerOptions {
     authenticate?: RpcAuthenticator
     /** Called for every call and every event subscription. Return false to reject it. */
     authorize?: RpcAuthorizer
+    /**
+     * What AI principals may do on this server. Absent - the default everywhere - means the four
+     * capability grants are closed: a credentialed AI principal may observe wherever ordinary
+     * authorization allows, and every write or programming call is refused until a rung is opened
+     * by name. Enforced before `authorize` runs, so a server with no authorizer at all still
+     * refuses. A malformed document refuses the server rather than being quietly ignored.
+     */
+    aiGrants?: RpcAiGrants
+    /** Called for every AI-gated decision, allowed or refused. The open half of the audit story. */
+    onAiDecision?: (record: { source: string; path: string; method: string; effect: string; allowed: boolean; grant?: string; reason: string }) => void
     /**
      * Reject calls from peers no transport can vouch for. Defaults to true when `authenticate` is
      * set. Note that MQTT peers can never be vouched for at this layer, so a server that mixes an
@@ -181,6 +192,11 @@ export class RpcServerBase implements IManageRpc {
         for (const module of [this.rpc, this.caller, this.switch]) module.usePeerRegistry(this.peers)
 
         this.rpc.authorize = this.options.authorize
+        // Validated here rather than consulted hopefully later: a node that starts holding an
+        // unreadable security policy is the failure this exists to prevent, so a malformed
+        // document refuses the server rather than quietly granting nothing.
+        if (this.options.aiGrants) this.rpc.aiGrants = validateAiGrants(this.options.aiGrants)
+        this.rpc.onAiDecision = this.options.onAiDecision
         this.rpc.requireIdentity = this.options.requireAuthenticatedPeers ?? !!this.options.authenticate
         // Identity comes from whichever transport the peer is connected to, never from the message
         // itself. Authenticating transports pin a peer name to one connection, so this lookup

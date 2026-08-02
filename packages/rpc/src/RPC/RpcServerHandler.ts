@@ -18,6 +18,7 @@ import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type Sto
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
 import { declaredAuthority, declaredConflation, declaredEffect, declaredInjection, declaredNamespace, declaredSemantics, markedMethods, type RpcEffect, type RpcExecution } from './Expose.js'
+import { decideAiAccess, type RpcAiGrants } from './Grants.js'
 import { rpcInvocationBrand, type RpcInvocationHandle } from './Invocation.js'
 import { contextNamespace, type HostContext } from './Context.js'
 import {
@@ -215,6 +216,18 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     /** Reject calls from peers no transport can vouch for. */
     requireIdentity = false
     /**
+     * What AI principals may do here. Absent means the four capability grants are closed, which is
+     * the default everywhere and on every node: an AI principal may observe and nothing more until
+     * somebody opens a rung by name on the node that bears the consequence.
+     */
+    aiGrants?: RpcAiGrants
+    /**
+     * Called for every AI-gated decision, allowed or refused. The open half of the audit story -
+     * a deployment wires this to a sink and can answer "which principal, which grant, what
+     * happened" without buying anything.
+     */
+    onAiDecision?: (record: { source: string; path: string; method: string; effect: RpcEffect; allowed: boolean; grant?: string; reason: string }) => void
+    /**
      * Suppress duplicate requests. MQTT at QoS 1 is at-least-once, so the same request can be
      * delivered twice; without this a retransmission would run the method a second time, which is
      * not something a caller can undo. A duplicate is answered from the cache instead.
@@ -277,6 +290,17 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     private async checkAccess(payload: RpcCallInstanceMethodPayload, source: string, subscription: boolean): Promise<RpcErrorCode | undefined> {
         const identity = this.resolveIdentity?.(source)
         if (this.requireIdentity && !identity) return 'Unauthorized'
+
+        // The AI boundary, before authorize and whether or not one exists - so a node whose author
+        // wrote no authorizer still refuses an AI principal by default. A subscription is reading,
+        // so it is weighed as observation however the `on` method itself would default; whether a
+        // particular event is too sensitive to watch stays authorize's call, below.
+        const effect: RpcEffect = subscription ? 'observe' : this.effectOf(payload)
+        const decision = decideAiAccess({ grants: this.aiGrants, identity, effect })
+        if (decision.grant || !decision.allowed)
+            this.onAiDecision?.({ source, path: payload.path, method: payload.method, effect, allowed: decision.allowed, grant: decision.grant, reason: decision.reason })
+        if (!decision.allowed) return 'Forbidden'
+
         if (!this.authorize) return undefined
         const context: RpcCallContext = {
             identity,
