@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## Source RPC 4.6.0
+
+Two pieces of the AI boundary's foundation, both prerequisites rather than the boundary itself, and one behaviour change worth reading before upgrading a node that runs scripts.
 
 ### Derived credentials: a script gets one of its own
 
