@@ -17,12 +17,32 @@ server.exposeClassInstance(new Plant())      // name taken from @rpcNamespace
 
 Standard ECMAScript decorators, so no `experimentalDecorators` is needed. Marks are inherited, so a subclass keeps its parent's.
 
+## What a method does, and what kind of power it is
+
+Two separate declarations, and keeping them separate matters:
+
+```typescript
+@rpc({ semantics: 'idempotent-command', effect: 'operate' }) async setSetpoint(bar: number) { ... }
+@rpc({ semantics: 'idempotent-command', effect: 'program' })  async deployProgram(bundle: Bundle) { ... }
+```
+
+`semantics` answers *may a caller repeat this* — it decides retries, idempotency stores and what an uncertain answer means. `effect` answers *what kind of power is this* — `observe`, `operate`, `program` or `security-admin` — which decides what authority a caller must hold. The two methods above are equally safe to repeat and are not remotely the same thing to be allowed to call, which is precisely why one field cannot carry both.
+
+Effect is optional and defaults conservatively: a declared `query` observes, and **anything else operates**. Declaring nothing is never read as a claim to harmlessness. Declare it where the default would be wrong — above all on anything that deploys, edits, starts or removes programs, contracts or logic, because `program` is the class whose blast radius is unbounded.
+
+`describe()` always reports an effect, defaulted if undeclared, so a consumer deciding what to permit never has to reimplement the rule. `extract` records only what the source declared, and `check` treats an escalation as breaking — a method that climbs from `operate` to `program` starts refusing callers that were granted the lesser authority — while adopting a declaration where there was none is deliberately not flagged, since saying out loud what a method always did must never be the change that fails a build.
+
+Nothing enforces effect against AI principals yet; that is [the AI boundary](../ai-in-the-plant) work. The classification lands first because contracts are long-lived, and a field that grants will be written against is cheapest to add while the only contracts in the world are your own.
+
+## Without decorators
+
 Without decorators — and code run under Node's type stripping has no choice, since V8 does not ship decorators — the runtime forms say everything the decorators say, through the same records:
 
 ```typescript
 declareRpcNamespace(Plant, 'plant', { version: '3' })          // = @rpcNamespace('plant', { version: '3' })
 exposeMethods(Plant, {
-    writeSetpoint: { semantics: 'idempotent-command' },        // = @rpc({ semantics: 'idempotent-command' })
+    writeSetpoint: { semantics: 'idempotent-command', effect: 'operate' },
+    loadRecipe: { semantics: 'idempotent-command', effect: 'program' },
     readSetpoint: {},                                          // = bare @rpc
 })
 ```

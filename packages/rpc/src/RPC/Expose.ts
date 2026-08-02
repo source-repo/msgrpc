@@ -28,6 +28,26 @@ import type { RpcMethodSemantics } from './Messages.js'
 export type RpcExecution = 'parallel' | 'serial' | ((context: RpcCallContext) => string)
 
 /**
+ * What kind of power a method exercises, as opposed to whether it may be repeated.
+ *
+ * Deliberately orthogonal to `semantics`, because the two answer different questions and conflating
+ * them was a real bug in an earlier design: `deployProgram(bundle)` and `setSetpoint(value)` can
+ * both be honest `idempotent-command`s, and an AI principal permitted to adjust a setpoint must not
+ * thereby be permitted to deploy a program. Semantics decide retry; effect decides which authority
+ * a caller needs to have been granted.
+ *
+ * - `observe` reads and changes nothing a caller could notice.
+ * - `operate` changes the world the way an operator does: setpoints, modes, acknowledgements.
+ * - `program` changes what the system *is* - deploying, editing, starting or removing programs,
+ *   contracts or logic. The distinction that matters most, because its blast radius is unbounded.
+ * - `security-admin` changes who may do any of the above.
+ *
+ * Absent, a method's effect is inferred conservatively: a declared `query` observes, and anything
+ * else operates. An unclassifiable method is never treated as harmless.
+ */
+export type RpcEffect = 'observe' | 'operate' | 'program' | 'security-admin'
+
+/**
  * Marking which methods of a class may be called remotely.
  *
  * exposeClassInstance walks the prototype chain and publishes every function it finds, so a helper
@@ -48,8 +68,10 @@ const conflated = new WeakMap<object, Set<string>>()
 const authority = new WeakMap<object, Set<string>>()
 /** Methods that receive an injected RpcInvocation as their final parameter, per constructor. */
 const injected = new WeakMap<object, Set<string>>()
+/** Declared effect per constructor and method name, for the methods that declare one. */
+const effects = new WeakMap<object, Map<string, RpcEffect>>()
 
-const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean, injectInvocation?: boolean) => {
+const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean, injectInvocation?: boolean, effect?: RpcEffect) => {
     let names = marked.get(constructor)
     if (!names) marked.set(constructor, (names = new Set()))
     names.add(method)
@@ -67,6 +89,11 @@ const markOn = (constructor: object, method: string, declared?: RpcMethodSemanti
         let handles = injected.get(constructor)
         if (!handles) injected.set(constructor, (handles = new Set()))
         handles.add(method)
+    }
+    if (effect) {
+        let declaredEffects = effects.get(constructor)
+        if (!declaredEffects) effects.set(constructor, (declaredEffects = new Map()))
+        declaredEffects.set(method, effect)
     }
     if (!declared) return
     let declarations = semantics.get(constructor)
@@ -110,6 +137,16 @@ export interface RpcMethodOptions {
      * how a handler reads the authenticated caller instead of trusting a `from`-style argument.
      */
     injectInvocation?: boolean
+    /**
+     * What kind of power this method exercises - `observe`, `operate`, `program` or
+     * `security-admin`. Orthogonal to `semantics`: see RpcEffect.
+     *
+     * Declared where it is not obvious, and it is not obvious more often than it looks. A method
+     * that deploys a program is `program` however idempotent it is, and leaving that undeclared
+     * means it is read as `operate` - safe for a human caller, and the difference between two
+     * different grants for an AI one.
+     */
+    effect?: RpcEffect
 }
 
 type RpcMethodDecorator<This, Args extends unknown[], Return> = (
@@ -124,7 +161,7 @@ const mark = <This, Args extends unknown[], Return>(
     if (context.static) throw new Error('@rpc: static methods cannot be exposed')
     if (context.private) throw new Error('@rpc: private methods cannot be exposed')
     context.addInitializer(function (this: This) {
-        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation)
+        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation, options.effect)
     })
 }
 
@@ -190,7 +227,7 @@ export function exposeMethods<T>(constructor: new (...args: never[]) => T, metho
     for (const [method, options] of entries) {
         if (typeof (constructor.prototype as Record<string, unknown>)[method] !== 'function')
             throw new Error(`exposeMethods: ${constructor.name}.${method} is not a method`)
-        markOn(constructor, method, options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation)
+        markOn(constructor, method, options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation, options.effect)
     }
     return constructor
 }
@@ -273,6 +310,19 @@ export const declaredSemantics = (instance: object): Map<string, RpcMethodSemant
     const declarations = new Map<string, RpcMethodSemantics>()
     for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
         for (const [method, declared] of semantics.get(ctor) ?? []) if (!declarations.has(method)) declarations.set(method, declared)
+    }
+    return declarations
+}
+
+/**
+ * The effects an instance's methods declare, walking the chain so a subclass inherits them, with
+ * the nearest constructor winning - an override that turns an operation into a programming action
+ * has to be able to say so.
+ */
+export const declaredEffect = (instance: object): Map<string, RpcEffect> => {
+    const declarations = new Map<string, RpcEffect>()
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        for (const [method, effect] of effects.get(ctor) ?? []) if (!declarations.has(method)) declarations.set(method, effect)
     }
     return declarations
 }

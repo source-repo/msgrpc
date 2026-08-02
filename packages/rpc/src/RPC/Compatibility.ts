@@ -1,4 +1,17 @@
 import { SEMANTICS_RISK } from './Messages.js'
+import type { RpcEffect } from './Expose.js'
+
+/**
+ * How much authority each effect class represents. Climbing this ladder refuses callers that were
+ * granted the rung below, which is what makes an escalation a compatibility problem rather than a
+ * detail - see the check in methodProblems.
+ */
+const EFFECT_RISK: { [effect in RpcEffect]: number } = {
+    observe: 0,
+    operate: 1,
+    program: 2,
+    'security-admin': 3
+}
 import { MethodSchema, NamespaceSchema, RpcSchema, TypeNode } from './Schema.js'
 
 /**
@@ -163,6 +176,19 @@ const methodProblems = (name: string, caller: MethodSchema, current: MethodSchem
         problems.push({ where: name, reason: `is now ${now} where the caller was told ${was}, so a retry the caller may already make is no longer safe` })
     if (was && !now && SEMANTICS_RISK[was] < SEMANTICS_RISK['non-repeatable-command'])
         problems.push({ where: name, reason: `no longer declares that it is ${was}, so a caller relying on that promise has nothing to rely on` })
+
+    // Effect may not escalate, for the same shape of reason semantics may not: a caller granted the
+    // authority to operate is not thereby granted the authority to program, so a method that climbs
+    // this ladder starts refusing callers that were previously permitted - and a method that stops
+    // declaring its effect falls back to a weaker default, which is the dangerous direction.
+    // Adopting a declaration where there was none is not flagged: saying out loud what a method
+    // always did must never be the change that fails a check.
+    const wasEffect: RpcEffect | undefined = caller.effect
+    const nowEffect: RpcEffect | undefined = current.effect
+    if (wasEffect && nowEffect && EFFECT_RISK[nowEffect] > EFFECT_RISK[wasEffect])
+        problems.push({ where: name, reason: `now has effect '${nowEffect}' where the caller was told '${wasEffect}', so a caller granted the lesser authority is refused` })
+    if (wasEffect && !nowEffect)
+        problems.push({ where: name, reason: `no longer declares effect '${wasEffect}', so it falls back to the default and a grant written against the declaration no longer matches` })
 
     return problems
 }

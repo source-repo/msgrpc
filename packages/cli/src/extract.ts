@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve as resolvePath, dirname, join } from 'node:path'
 import { ClassDeclaration, MethodDeclaration, Node, Project, Symbol as MorphSymbol, ts, Type } from 'ts-morph'
-import { SCHEMA_VERSION, type ComponentSchema, type MethodSchema, type NamespaceSchema, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
+import { SCHEMA_VERSION, type ComponentSchema, type MethodSchema, type NamespaceSchema, type RpcEffect, type RpcMethodSemantics, type RpcSchema, type TypeNode } from '@source-repo/rpc'
 
 /**
  * Reads a contract out of TypeScript source.
@@ -154,6 +154,32 @@ const literalOption = (argument: Node | undefined, option: string) => {
 }
 
 const SEMANTICS = new Set<string>(['query', 'idempotent-command', 'non-repeatable-command'])
+const EFFECTS = new Set<string>(['observe', 'operate', 'program', 'security-admin'])
+
+/**
+ * What `@rpc({ effect: '…' })` declares, if anything.
+ *
+ * In the contract because it is a promise about what calling this *is* - which authority a caller
+ * must hold - and a grant will be written against it. Undeclared is left undeclared here; the
+ * server applies its conservative default, and `check` compares only what both sides declared.
+ */
+const declaredEffect = (method: MethodDeclaration, context: Context): RpcEffect | undefined => {
+    const decorator = method.getDecorators().find((candidate) => candidate.getName() === 'rpc')
+    const declared = literalOption(decorator?.getArguments()[0], 'effect')
+    if (declared === undefined) return undefined
+    if (!EFFECTS.has(declared)) {
+        // Named rather than dropped, for the same reason a mistyped semantics is: a typo publishes
+        // a contract saying nothing about a method whose author thought it said something.
+        context.diagnostics.push({
+            where: context.where,
+            reason: `declares effect '${declared}', which is not one of ${[...EFFECTS].join(', ')}`,
+            file: method.getSourceFile().getFilePath(),
+            line: method.getStartLineNumber()
+        })
+        return undefined
+    }
+    return declared as RpcEffect
+}
 
 /**
  * What `@rpc({ semantics: '…' })` declares, if anything.
@@ -255,12 +281,14 @@ const methodToSchema = (method: MethodDeclaration, context: Context): MethodSche
     const returns = returnType.isVoid() || returnType.isUndefined() ? undefined : typeToNode(returnType, { ...context, where: `${context.where} return` })
 
     const semantics = declaredSemantics(method, context)
+    const effect = declaredEffect(method, context)
     return {
         params,
         ...(paramNames.length ? { paramNames } : {}),
         ...(rest ? { rest } : {}),
         ...(returns ? { returns } : {}),
-        ...(semantics ? { semantics } : {})
+        ...(semantics ? { semantics } : {}),
+        ...(effect ? { effect } : {})
     }
 }
 

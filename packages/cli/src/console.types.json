@@ -1940,6 +1940,30 @@
           },
           "optional": true
         },
+        "effect": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "observe"
+              },
+              {
+                "kind": "literal",
+                "value": "operate"
+              },
+              {
+                "kind": "literal",
+                "value": "program"
+              },
+              {
+                "kind": "literal",
+                "value": "security-admin"
+              }
+            ]
+          },
+          "optional": true
+        },
         "requiresAuthority": {
           "type": {
             "kind": "boolean"

@@ -70,6 +70,15 @@ export class Plant {
     async advanceBatch() {
         return 'advanced'
     }
+    /**
+     * The same semantics as setMode above and a different kind of power: repeating it leaves the
+     * same recipe loaded, and loading a recipe is not adjusting a setpoint. The pair is here so the
+     * extractor is tested against the case the effect classification exists for.
+     */
+    @rpc({ semantics: 'idempotent-command', effect: 'program' })
+    async loadRecipe(recipe: string) {
+        return recipe
+    }
     /** Unmarked, so it must not appear in the contract. */
     async internalOnly() {
         return 'secret'

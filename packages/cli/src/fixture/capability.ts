@@ -38,4 +38,11 @@ export class Spinner implements HomeGrown {
     async orphaned(value: string, invocation: RpcInvocationHandle) {
         return `${value}${String(invocation)}`
     }
+
+    /** A typo where a grant will be written. Named rather than dropped: another diagnostic. */
+    // @ts-expect-error - deliberately misspelled, so the extractor's diagnostic has something to find
+    @rpc({ semantics: 'query', effect: 'programme' })
+    async misspelled(value: string) {
+        return value
+    }
 }

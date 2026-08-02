@@ -17,7 +17,7 @@ import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
 import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredAuthority, declaredConflation, declaredInjection, declaredNamespace, declaredSemantics, markedMethods, type RpcExecution } from './Expose.js'
+import { declaredAuthority, declaredConflation, declaredEffect, declaredInjection, declaredNamespace, declaredSemantics, markedMethods, type RpcEffect, type RpcExecution } from './Expose.js'
 import { rpcInvocationBrand, type RpcInvocationHandle } from './Invocation.js'
 import { contextNamespace, type HostContext } from './Context.js'
 import {
@@ -810,6 +810,19 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         return this.manageRpc.exposedSemantics[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.semantics
     }
 
+    /**
+     * The effect class this server will enforce for a method: what it declared, or the conservative
+     * default when it declared nothing - a declared `query` observes, and anything else operates.
+     *
+     * Never undefined, deliberately. An unclassified method is not a harmless one, and a caller
+     * asking what a method does should not have to know the defaulting rule to find out.
+     */
+    effectOf(payload: { path: string; method: string }): RpcEffect {
+        const declared = this.manageRpc.exposedEffect[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.effect
+        if (declared) return declared
+        return this.semanticsOf(payload) === 'query' ? 'observe' : 'operate'
+    }
+
     /** The queue a call belongs in, or undefined when it may overlap with its siblings. */
     private executionKey(payload: RpcCallInstanceMethodPayload, source: string): string | undefined {
         const execution = this.manageRpc.exposedExecution[payload.path]
@@ -928,6 +941,8 @@ export class ManageRpc implements IManageRpc {
     createdInstances = new Map<string, object>()
     /** What each exposed namespace's methods declare about repeating them. */
     exposedSemantics: { [nameSpace: string]: Map<string, RpcMethodSemantics> } = {}
+    /** What each exposed namespace's methods declare about the kind of power they exercise. */
+    exposedEffect: { [nameSpace: string]: Map<string, RpcEffect> } = {}
     /** How each exposed namespace lets its calls overlap. Absent means graded by method semantics. */
     exposedExecution: { [nameSpace: string]: RpcExecution } = {}
     /** Which of each namespace's methods conflate: a queued call replaced by a newer one. */
@@ -998,6 +1013,8 @@ export class ManageRpc implements IManageRpc {
         if (execution) this.exposedExecution[namespace] = execution
         const semantics = declaredSemantics(instance)
         if (semantics.size) this.exposedSemantics[namespace] = semantics
+        const effects = declaredEffect(instance)
+        if (effects.size) this.exposedEffect[namespace] = effects
         const conflation = declaredConflation(instance)
         if (conflation.size) {
             // Conflation drops a queued call in favour of a newer one, which is only safe when the

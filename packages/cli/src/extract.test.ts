@@ -24,6 +24,7 @@ test('a marked class becomes a namespace, and unmarked methods stay out of it', 
         'configure',
         'counts',
         'labels',
+        'loadRecipe',
         'readSetpoint',
         'readings',
         'setMode',
@@ -45,6 +46,23 @@ test('what a method does to the world is read off the decorator and into the con
     // mistake this feature exists to stop anybody making.
     t.is(plant.methods.writeSetpoint.semantics, undefined)
 })
+
+test('effect is read off the decorator, independently of semantics', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('tsconfig.json'))
+    t.deepEqual(diagnostics, [], 'the fixture should describe cleanly')
+    const plant = schema.namespaces.plant
+
+    // The point of the classification: identical semantics, different power.
+    t.is(plant.methods.setMode.semantics, 'idempotent-command')
+    t.is(plant.methods.loadRecipe.semantics, 'idempotent-command')
+    t.is(plant.methods.loadRecipe.effect, 'program')
+
+    // Undeclared stays undeclared in the contract. The server applies the conservative default;
+    // recording a guess here would put an invention in a file that gets committed and compared.
+    t.is(plant.methods.setMode.effect, undefined)
+    t.is(plant.methods.readSetpoint.effect, undefined)
+})
+
 
 test('parameters, optionals and rest arguments are described', (t) => {
     const { schema } = extractSchema(fixture('tsconfig.json'))
@@ -215,4 +233,13 @@ test('an injected invocation handle never reaches the contract, and the half-dec
         diagnostics.some((diagnostic) => /nothing will ever inject it/.test(diagnostic.reason)),
         `expected the orphaned-handle diagnostic, got: ${JSON.stringify(diagnostics)}`
     )
+
+    // A mistyped effect is the same class of mistake and gets the same treatment: this is the
+    // field a grant is written against, so a typo must not quietly publish a method that claims
+    // nothing about the power it exercises.
+    t.true(
+        diagnostics.some((diagnostic) => /declares effect 'programme'/.test(diagnostic.reason)),
+        `expected the mistyped-effect diagnostic, got: ${JSON.stringify(diagnostics)}`
+    )
+    t.is(schema.namespaces.local_spinner.methods.misspelled.effect, undefined, 'a refused effect is absent, never guessed')
 })

@@ -12,6 +12,7 @@
  */
 
 import type { RpcMethodSemantics } from './Messages.js'
+import type { RpcEffect } from './Expose.js'
 
 export type TypeNode =
     /** Accepts anything. Use sparingly: it is the hole every other check is trying to close. */
@@ -66,6 +67,13 @@ export interface MethodSchema {
      * that quietly stopped being repeatable would break callers that were told it was.
      */
     semantics?: RpcMethodSemantics
+    /**
+     * What kind of power the method exercises - `observe`, `operate`, `program`, `security-admin`.
+     * Orthogonal to `semantics`, and in the contract for the same reason: it is a promise about
+     * what calling this *is*, which decides what authority a caller must have been granted. Absent
+     * means the source declared nothing and the server applies its conservative default.
+     */
+    effect?: RpcEffect
 }
 
 /**

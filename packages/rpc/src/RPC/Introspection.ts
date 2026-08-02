@@ -1,6 +1,6 @@
 import EventEmitter from 'events'
 import { componentSnapshotEvent, RpcComponent } from './Component.js'
-import { rpc, rpcNamespace } from './Expose.js'
+import { rpc, rpcNamespace, type RpcEffect } from './Expose.js'
 import type { RpcServerHandler } from './RpcServerHandler.js'
 import { SCHEMA_VERSION, type MethodSchema, type NamespaceSchema, type RpcSchema, type TypeNode } from './Schema.js'
 import { HOST_ROOT, type RpcRef, type RpcTopologyCapabilities, type RpcTopologyMutation, type RpcTopologyPatch, type RpcTopologyRecord } from './Topology.js'
@@ -32,6 +32,12 @@ export interface DescribedMethod {
      * methods should treat as "ask before pressing this".
      */
     semantics?: RpcMethodSemantics
+    /**
+     * What kind of power calling this exercises. Always present: this is the effect the server will
+     * enforce, which is the declared one or its conservative default - a consumer deciding what an
+     * AI principal may call should not have to reimplement the defaulting rule.
+     */
+    effect?: RpcEffect
     /** True when only the peer holding the component's authority may call it. */
     requiresAuthority?: boolean
 }
@@ -271,6 +277,7 @@ export class Introspection {
                     name: method,
                     ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}),
                     ...(semantics ? { semantics } : {}),
+                    effect: this.handler.effectOf({ path: name, method }),
                     ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
                 }
             })
@@ -390,6 +397,7 @@ export const surfaceShape = (handler: RpcServerHandler): string => {
                     name: method,
                     ...(described?.methods[method] ? { signature: described.methods[method] } : {}),
                     ...(semantics ? { semantics } : {}),
+                    effect: handler.effectOf({ path: name, method }),
                     ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
                 }
             })

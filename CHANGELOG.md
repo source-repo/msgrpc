@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### `effect`: what kind of power a method exercises
+
+Declared beside `semantics` and deliberately orthogonal to it, because the two answer different questions and one field cannot carry both: `deployProgram(bundle)` and `setSetpoint(value)` can be equally honest `idempotent-command`s, and permission to move a setpoint is not permission to deploy a program. `@rpc({ semantics, effect })` takes `observe`, `operate`, `program` or `security-admin`; `exposeMethods` takes it too, so code that cannot use decorators is not locked out.
+
+Undeclared defaults conservatively — a declared `query` observes, anything else operates — because an unclassified method is not a harmless one. `describe()` always reports an effect so a consumer never reimplements that rule; `extract` records only what the source declared, and a mistyped effect is a loud diagnostic rather than a silent omission, since this is the field a future grant is written against. `check` treats an escalation as breaking and a dropped declaration as breaking, while *adopting* a declaration where there was none is deliberately not flagged: saying out loud what a method always did must never be the change that fails a build.
+
+Nothing enforces this against AI principals yet — that is the AI boundary work, and this classification is its prerequisite. It lands first because contracts are long-lived and the field is cheapest to add while the only contracts in the world are ours.
+
 ## Source RPC 4.5.0
 
 One thing, both halves: code that cannot use decorators can now say everything the decorators say.
