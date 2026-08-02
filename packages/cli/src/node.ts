@@ -24,6 +24,8 @@ import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 export interface NodeOptions extends NetworkOptions {
     /** Where scripts are kept and run. */
     scripts: string
+    /** Mints each script's own credential; see ScriptingOptions. Absent means scripts run unauthenticated. */
+    credentialFor?: (script: string) => Promise<{ name: string; token: string } | undefined>
     /** Peers permitted to script this machine. At least one, or there is no reason to be running. */
     scriptableBy: string[]
 }
@@ -36,7 +38,8 @@ export const startNode = async (options: NodeOptions) => {
         // Handed to each script it starts, so a script reads its broker url from the environment
         // rather than carrying one that is right on this machine and wrong on the next.
         environment: environmentFor(options),
-        allow: options.scriptableBy
+        allow: options.scriptableBy,
+        ...(options.credentialFor ? { credentialFor: options.credentialFor } : {})
     })
 
     const connected = await connectNetwork({

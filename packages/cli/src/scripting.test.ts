@@ -8,8 +8,17 @@ import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
 import { connectAsync } from 'mqtt'
 import { writeFileSync } from 'node:fs'
-import { createHmacSigner, createHmacVerifier, createTokenAuthenticator, MqttTransport, RpcServer } from '@source-repo/rpc'
+import { createDerivedAuthenticator, createHmacSigner, createHmacVerifier, createTokenAuthenticator, mintDerivedCredential, MqttTransport, RpcServer } from '@source-repo/rpc'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
+import { ScriptRunner, saveScript } from './scripts.js'
+
+const waitForCondition = async (condition: () => boolean, timeout = 5000) => {
+    const deadline = Date.now() + timeout
+    while (!condition()) {
+        if (Date.now() > deadline) throw new Error('waitForCondition timed out')
+        await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+}
 
 /**
  * Scripting one node from another.
@@ -401,4 +410,57 @@ test('a node command is scriptable and nothing else, and says so when it cannot 
     await bench.close()
     rmSync(keyDirectory, { recursive: true, force: true })
     rmSync(scripts, { recursive: true, force: true })
+})
+
+test('a script started by a node connects to an authenticating bus as itself', async (t) => {
+    // The whole of DEV-361 in one test: the node holds a secret, the bus trusts that node as an
+    // issuer, and the script - which the bus has never heard of - authenticates under its own name.
+    const secret = `derive-${randomUUID().slice(0, 8)}`
+    const nodeName = peer('node7574')
+    const bus = new RpcServer({
+        name: peer('bus7574'),
+        transports: [{ port: 7574, host: '127.0.0.1' }],
+        authenticate: createDerivedAuthenticator({ issuers: { [nodeName]: secret } })
+    })
+    await bus.ready()
+
+    // Beside the package rather than in /tmp, so the script's `import '@source-repo/rpc'` resolves
+    // through the repository's node_modules exactly as a real scripts directory's would.
+    const directory = mkdtempSync(join(dirname(fileURLToPath(import.meta.url)), 'derived-run-'))
+    saveScript(
+        directory,
+        'joiner',
+        [
+            "import { RpcServer } from '@source-repo/rpc'",
+            "const peer = new RpcServer({ name: process.env.SOURCE_RPC_NAME, transports: [{ connect: process.env.SOURCE_RPC_HUB, credentials: { token: process.env.SOURCE_RPC_TOKEN } }] })",
+            'await peer.ready()',
+            "console.log('joined as ' + process.env.SOURCE_RPC_NAME)",
+            'await new Promise((resume) => setTimeout(resume, 3000))',
+            'await peer.close()'
+        ].join('\n'),
+        'mjs'
+    )
+
+    const runner = new ScriptRunner(directory, { SOURCE_RPC_HUB: 'http://127.0.0.1:7574' }, async (script) => {
+        const issuedAt = Date.now()
+        const name = `${script}@${nodeName}`
+        return {
+            name,
+            token: await mintDerivedCredential(
+                { credentialId: script, subject: name, roles: ['ai-program'], issuer: nodeName, generation: 2, issuedAt, expiresAt: issuedAt + 60_000 },
+                secret
+            )
+        }
+    })
+
+    await runner.start('joiner')
+    const expected = `joiner@${nodeName}`
+    await waitForCondition(() => bus.peers.names().includes(expected), 8000)
+
+    t.true(bus.peers.names().includes(expected), 'the script is on the bus under its own name, not the node\'s')
+    t.false(bus.peers.names().includes(nodeName), 'and the node itself never connected - only its child did')
+
+    await runner.stopAll()
+    rmSync(directory, { recursive: true, force: true })
+    await bus.close()
 })

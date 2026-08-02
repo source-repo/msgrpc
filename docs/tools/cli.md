@@ -494,6 +494,32 @@ source-rpc broker plantBus on ws 127.0.0.1:7843, authenticating
 
 `tokens` is what this broker accepts. `token` is what it presents when it dials an `--upstream`, so a broker joining another needs both: it is a bus to one side and a peer to the other. Every other command takes `--auth` too, and uses the `token` to join a hub that authenticates.
 
+### Credentials for the programs a node starts
+
+A node that runs scripts used to hand each one its own token. That was wrong twice over: a token is pinned to exactly one peer name, so a script could not authenticate under its own name with it anyway — and passing it put the node's credential into the environment of an arbitrary program. **The node's token no longer reaches a script at all.**
+
+Instead a node mints a short-lived credential per script, naming that script and nobody else:
+
+```json
+{ "derive": "the-secret-this-node-mints-with" }          // on the node
+{ "issuers": { "node-a": "the-same-secret" } }           // on the bus
+```
+
+The script is started with `SOURCE_RPC_NAME` and `SOURCE_RPC_TOKEN` in its environment — the name matters, because a derived credential is pinned to one peer name and a script that picked its own would be refused rather than mysteriously ignored:
+
+```typescript
+const peer = new RpcServer({
+    name: process.env.SOURCE_RPC_NAME ?? 'my-script',
+    transports: [{ connect: process.env.SOURCE_RPC_HUB!, credentials: { token: process.env.SOURCE_RPC_TOKEN } }]
+})
+```
+
+The bus verifies the signature against the issuer it was told about, so it never needs to know anything in advance about a script that did not exist when it started. What it is configured with is **which nodes it trusts to speak for their children**, which is a decision about nodes rather than programs. The credential carries the issuer, the generation and — where a sponsor is named — the chain, all of it visible to `authorize` and to the invocation handle at every dispatch, and the identity's roles mark it `ai-program`.
+
+Lifetimes are short and there is no renewal, so a node that stops means its scripts' credentials expire on their own. Immediate revocation is a separate mechanism and does not exist yet; a credential is valid until it expires. HMAC is symmetric, so the secret is shared only between a bus and the nodes it is willing to let vouch — whoever can verify one of these can also mint one.
+
+Without `derive`, scripts start with no credential at all rather than borrowing the node's. On an open bench that is exactly right; on an authenticating bus it means a script reaches only what an unauthenticated peer may reach, which is the honest outcome rather than a silent inheritance.
+
 **One token per peer.** A token that maps to a name is evidence of who is calling; a single token everyone shares proves only that the caller got inside the fence. The peer presents it as its `credentials`, and its `--name` has to be the name the token was issued for — the bus drops frames claiming any other source, so a mismatch reads as every call timing out rather than as a refusal.
 
 The flag names a path, never a secret, because `ps` is readable by everyone on the box. For a container there are `SOURCE_RPC_TOKEN` and `SOURCE_RPC_TOKENS`, which say the same two things.

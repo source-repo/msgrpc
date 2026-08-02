@@ -159,7 +159,7 @@ test('a script can import what was installed for it', async (t) => {
 
     const { ScriptRunner } = await import('./scripts.js')
     const runner = new ScriptRunner(dir)
-    runner.start('uses-it')
+    await runner.start('uses-it')
     const deadline = Date.now() + 15000
     while (!runner.status('uses-it')?.ended && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
 

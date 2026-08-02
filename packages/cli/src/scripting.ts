@@ -66,6 +66,13 @@ export interface ScriptingOptions {
     /** Handed to each script it starts, so a script reads its broker url rather than carrying one. */
     environment?: { [key: string]: string }
     /**
+     * Mints the credential a script connects with. Absent means scripts start unauthenticated,
+     * which is right on an open bench and is why it is not required: what must never happen again
+     * is a script inheriting the node's own credential, and that is now impossible rather than
+     * discouraged.
+     */
+    credentialFor?: (script: string) => Promise<{ name: string; token: string } | undefined>
+    /**
      * Peer names permitted to script this node from elsewhere. Empty - the default - means nobody:
      * the namespace can be exposed for a local server's own use without opening it to the bus.
      *
@@ -115,7 +122,7 @@ export class ScriptingService {
     private runner: ScriptRunner
 
     constructor(private options: ScriptingOptions) {
-        this.runner = new ScriptRunner(options.directory, options.environment ?? {})
+        this.runner = new ScriptRunner(options.directory, options.environment ?? {}, options.credentialFor)
     }
 
     /** The scripts here, and which of them this node is running. */
@@ -153,7 +160,7 @@ export class ScriptingService {
      */
     @rpc({ semantics: 'idempotent-command' })
     async start(name: string) {
-        const started = this.runner.start(name)
+        const started = await this.runner.start(name)
         return { name: started.name, pid: started.pid ?? null, startedAt: started.startedAt }
     }
 

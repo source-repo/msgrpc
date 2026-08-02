@@ -3,9 +3,12 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
 import {
+    createDerivedAuthenticator,
     createHmacSigner,
     createHmacVerifier,
     createTokenAuthenticator,
+    firstAuthenticator,
+    mintDerivedCredential,
     defaultSecureWebPort,
     defaultSecureWebSocketPort,
     defaultWebPort,
@@ -207,7 +210,12 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
     { "token": "…",             presented when this command dials a hub that authenticates
       "tokens": {               accepted when this command is the bus: token -> the peer it admits
         "…": "plantServer",
-        "…": { "name": "hmi", "roles": ["operator"] } } }
+        "…": { "name": "hmi", "roles": ["operator"] } },
+      "derive": "…",            on a node: the secret it mints credentials with for the scripts it
+                                starts, so each one connects as itself and the node's own token
+                                never reaches a script's environment
+      "issuers": {              on a bus: which nodes it lets vouch for the programs they start
+        "node-a": "…" } }       issuer peer name -> the same secret that node derives with
     SOURCE_RPC_TOKEN            the same "token", for a container
     SOURCE_RPC_TOKENS           the same "tokens" as JSON, for a container
                                 never a flag: ps is readable by everyone on the box
@@ -319,9 +327,62 @@ const readSigningKeys = (path: string, command: string) => {
  * is a mount and an environment variable is a line in the compose file. `--auth` names a path
  * rather than a secret, so it is explicit and wins over both.
  */
+/**
+ * Builds the per-script credential minter for a node that has a signing secret, or undefined.
+ *
+ * Undefined is a real answer rather than a failure: a bench with no authentication needs no
+ * credentials, and the thing that must never happen - a script inheriting the node's own token -
+ * is now impossible either way. Lifetimes are short and renewal does not exist, so stopping the
+ * node means its scripts' credentials expire on their own; immediate revocation is the grants
+ * work, not this.
+ */
+const scriptCredentials = (auth: AuthFile, issuer: string, command: string) => {
+    if (!auth.derive) return undefined
+    if (!auth.token && !auth.tokens && !auth.issuers)
+        process.stderr.write(`source-rpc ${command}: 'derive' is set but nothing else in the auth file is - scripts will present credentials to a bus that may not be checking any.\n`)
+    return async (script: string) => {
+        const name = `${script}@${issuer}`
+        const issuedAt = Date.now()
+        return {
+            name,
+            token: await mintDerivedCredential(
+                {
+                    credentialId: `${script}-${issuedAt.toString(36)}`,
+                    subject: name,
+                    // The provenance the AI boundary reads. A script is a program this node started,
+                    // whoever wrote it - the honest claim, and never a claim about what wrote it.
+                    roles: ['ai-program'],
+                    issuer,
+                    generation: 2,
+                    issuedAt,
+                    expiresAt: issuedAt + SCRIPT_CREDENTIAL_MS
+                },
+                auth.derive!
+            )
+        }
+    }
+}
+
+/**
+ * How long a script's credential lasts. Deliberately short of a working day: a credential that
+ * outlives the run it was minted for is the failure this design exists to avoid, and a script that
+ * needs longer should be a peer with a credential an operator issued.
+ */
+const SCRIPT_CREDENTIAL_MS = 4 * 60 * 60 * 1000
+
 interface AuthFile {
     token?: string
     tokens?: { [token: string]: TokenGrant }
+    /**
+     * This node's own signing secret, for minting credentials for the scripts it starts. Present on
+     * a node; the bus that should accept those credentials lists the same secret under `issuers`.
+     */
+    derive?: string
+    /**
+     * Issuer peer name -> the secret it mints with. Present on a bus: it says which nodes this bus
+     * lets speak for the programs they start, which is a decision about nodes rather than programs.
+     */
+    issuers?: { [issuer: string]: string }
 }
 
 /**
@@ -836,7 +897,11 @@ const runBroker = async (argv: string[]) => {
     const auth = readAuth(argv, 'broker')
     let authenticate
     try {
-        authenticate = auth.tokens ? createTokenAuthenticator(auth.tokens) : undefined
+        const byToken = auth.tokens ? createTokenAuthenticator(auth.tokens) : undefined
+        const byDerivation = auth.issuers ? createDerivedAuthenticator({ issuers: auth.issuers }) : undefined
+        // Operators hold tokens; nodes vouch for the programs they start. A bus configured with
+        // both admits both, and one configured with neither admits nobody, as before.
+        authenticate = byToken && byDerivation ? firstAuthenticator(byToken, byDerivation) : (byToken ?? byDerivation)
     } catch (e) {
         // Every way of getting this wrong - a blank token, a grant with no name, an empty map -
         // would otherwise start a bus that admits more than the operator meant it to.
@@ -917,8 +982,10 @@ const runMcp = async (argv: string[]) => {
             process.exit(1)
         }
     }
+    const credentialFor = scriptsDir ? scriptCredentials(readAuth(argv, 'mcp'), network.name, 'mcp') : undefined
     const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
         ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}),
+        ...(credentialFor ? { credentialFor } : {}),
         ...(scriptableBy.length ? { scriptableBy } : {}),
         ...(doorPort ? { port: doorPort, host: doorHost, ...(doorToken ? { doorToken } : {}) } : {}) }).catch((e: Error) => {
         // The refusal a wide bind without a token earns arrives here, with its sentence intact.
@@ -948,7 +1015,8 @@ const runNode = async (argv: string[]) => {
         process.exit(1)
     }
 
-    const running = await startNode({ ...network, scripts: resolve(scriptsDir), scriptableBy }).catch((e: Error) => {
+    const credentialFor = scriptCredentials(readAuth(argv, 'node'), network.name, 'node')
+    const running = await startNode({ ...network, scripts: resolve(scriptsDir), scriptableBy, ...(credentialFor ? { credentialFor } : {}) }).catch((e: Error) => {
         process.stderr.write(`source-rpc node: cannot start: ${e.message}\n`)
         process.exit(1)
     })

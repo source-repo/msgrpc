@@ -74,6 +74,8 @@ export interface McpOptions extends NetworkOptions {
      * it out of band. A bus able to hand over that key is a bus able to script the node.
      */
     scriptableBy?: string[]
+    /** Mints each script's own credential; see ScriptingOptions. Absent means scripts run unauthenticated. */
+    credentialFor?: (script: string) => Promise<{ name: string; token: string } | undefined>
     /**
      * Serve streamable HTTP on this port as a second door beside stdio. Absent means stdio only,
      * which is where this server has always lived. The door exists because stdio means exactly one
@@ -553,7 +555,12 @@ export const startMcp = async (options: McpOptions) => {
     // and unguarded.
     const scriptableBy = options.scriptableBy?.filter((entry) => entry.trim()) ?? []
     const scripting = options.scripts
-        ? new ScriptingService({ directory: options.scripts, environment: environmentFor(options), allow: scriptableBy })
+        ? new ScriptingService({
+              directory: options.scripts,
+              environment: environmentFor(options),
+              allow: scriptableBy,
+              ...(options.credentialFor ? { credentialFor: options.credentialFor } : {})
+          })
         : undefined
     const connected = await connectNetwork({
         ...options,

@@ -116,15 +116,19 @@ export const nodeArgvFor = (file: string, version = process.versions.node) => {
  *
  * So a script does not hardcode a broker url that is right on one machine and wrong on the next -
  * and so a model writing one has something to read rather than a value to invent. The names match
- * the flags they came from, and `SOURCE_RPC_TOKEN` is the one the CLI already reads for credentials.
+ * the flags they came from.
+ *
+ * **This deliberately no longer hands over the node's own token.** It used to, and that was wrong
+ * twice: a token is pinned to exactly one peer name, so a script could not authenticate under its
+ * own name with it anyway, and passing it put the node's credential in the environment of an
+ * arbitrary program - which, for a program an AI wrote, is precisely the thing the boundary work
+ * exists to prevent. A script that must authenticate is given a credential of its own, minted for
+ * it and expiring on its own schedule; see `ScriptRunner`'s `credentialFor`.
  */
 export const environmentFor = (options: NetworkOptions): { [key: string]: string } => ({
     ...(options.broker ? { SOURCE_RPC_BROKER: options.broker } : {}),
     ...(options.hub ? { SOURCE_RPC_HUB: options.hub } : {}),
-    ...(options.prefix ? { SOURCE_RPC_PREFIX: options.prefix } : {}),
-    ...((options.hubCredentials as { token?: string } | undefined)?.token
-        ? { SOURCE_RPC_TOKEN: (options.hubCredentials as { token: string }).token }
-        : {})
+    ...(options.prefix ? { SOURCE_RPC_PREFIX: options.prefix } : {})
 })
 
 export interface RunningScript {
@@ -143,24 +147,42 @@ export class ScriptRunner {
 
     constructor(
         private directory: string,
-        private environment: { [key: string]: string } = {}
+        private environment: { [key: string]: string } = {},
+        /**
+         * Mints the credential this script will connect with, when the node can. Called once per
+         * start, so each run gets its own short-lived credential rather than sharing one - and a
+         * node that cannot mint simply starts the script without one, which is honest: the script
+         * then reaches whatever an unauthenticated peer may reach, and nothing more.
+         */
+        private credentialFor?: (script: string) => Promise<{ name: string; token: string } | undefined>
     ) {}
 
     isRunning(name: string) {
         return this.running.has(name)
     }
 
-    start(name: string) {
+    async start(name: string) {
         if (this.running.has(name)) throw new Error(`'${name}' is already running. Stop it first.`)
         const file = scriptFile(this.directory, name)
         const argv = nodeArgvFor(file)
+
+        // Minted per start, before the process exists, so the credential is never written anywhere
+        // the script could have read it from earlier.
+        const credential = await this.credentialFor?.(name)
 
         const record: RunningScript = { name, startedAt: Date.now(), output: [] }
         const child = spawn(process.execPath, argv, {
             // The script's own directory, so a relative import in it means what its author meant and
             // `@source-repo/rpc` resolves from the project the directory sits in.
             cwd: resolve(this.directory),
-            env: { ...process.env, ...this.environment },
+            env: {
+                ...process.env,
+                ...this.environment,
+                // The name is handed over with the credential, because a derived credential is
+                // pinned to one peer name: a script that picks its own would be refused by the bus
+                // rather than mysteriously ignored.
+                ...(credential ? { SOURCE_RPC_NAME: credential.name, SOURCE_RPC_TOKEN: credential.token } : {})
+            },
             stdio: ['ignore', 'pipe', 'pipe']
         })
         record.pid = child.pid ?? undefined

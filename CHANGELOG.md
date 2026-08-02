@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Derived credentials: a script gets one of its own
+
+A node that runs scripts used to hand each one its own bearer token. That was wrong twice: a token is pinned to exactly one peer name, so the script could not authenticate under its own name with it anyway — and passing it put the node's credential into the environment of an arbitrary program, which for a program an AI wrote is precisely what the boundary work exists to prevent. **The node's token no longer reaches a script at all.**
+
+`mintDerivedCredential` and `createDerivedAuthenticator` are the mechanism: an issuer holds a secret the bus also knows, mints a short-lived signed credential naming the child, and the bus verifies it without having been configured with anything about that child in advance — which is the point, since a node may start a script the operator has never heard of. What a bus is configured with is which nodes it lets vouch for their children. `firstAuthenticator` composes it with `createTokenAuthenticator`, so operators hold tokens and nodes vouch for programs on the same bus.
+
+In the CLI: `derive` in a node's auth file, `issuers` in the bus's. A script is started with `SOURCE_RPC_NAME` and `SOURCE_RPC_TOKEN`, its identity carries `ai-program` in roles and the issuer, generation and chain in claims — visible to `authorize` and the invocation handle at every dispatch. Without `derive` a script starts with no credential rather than borrowing the node's, which on an authenticating bus means it reaches only what an unauthenticated peer may reach. Honest, and the previous behaviour was not.
+
+Lifetimes are short and there is no renewal, so a stopped node's credentials expire on their own; immediate revocation is separate work and does not exist yet. HMAC is symmetric — whoever can verify one of these can mint one — so the secret is shared only between a bus and the nodes it trusts to speak for their children.
+
 ### `effect`: what kind of power a method exercises
 
 Declared beside `semantics` and deliberately orthogonal to it, because the two answer different questions and one field cannot carry both: `deployProgram(bundle)` and `setSetpoint(value)` can be equally honest `idempotent-command`s, and permission to move a setpoint is not permission to deploy a program. `@rpc({ semantics, effect })` takes `observe`, `operate`, `program` or `security-admin`; `exposeMethods` takes it too, so code that cannot use decorators is not locked out.
