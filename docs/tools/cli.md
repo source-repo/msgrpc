@@ -619,7 +619,7 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--against <file>` | check | `msgrpc.types.json` | the contract to compare against |
 | `--peer <name>` | check | — | ask a live peer what it serves instead of reading source; needs `--broker`/`--hub` |
 | `--keep-history` | extract | off | move the previous contract into `history` when the version changed |
-| `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883` |
+| `--broker <url>` | console, mcp, verbs | — | an MQTT network, e.g. `mqtt://localhost:1883`. Set `SOURCE_RPC_MQTT_USERNAME` and `SOURCE_RPC_MQTT_PASSWORD` when the broker requires login |
 | `--hub <url>` | console, mcp, verbs | — | a socket.io network, e.g. `http://hub:7843`. One of `--broker`/`--hub` is required; both watches both |
 | `--prefix <topic>` | console, mcp, verbs | the transport's own | must match the network you are watching |
 | `--port <n>` | console, mcp | console: `7844`, or `8844` with `--cert` | mcp has no default: the HTTP door only exists when a port is given |

@@ -5,7 +5,7 @@ source-rpc mcp --broker mqtt://localhost:1883
 source-rpc mcp --hub http://hub:7843
 ```
 
-Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can look at a plant the way a person looks at the console. It takes the same network flags as `console`, including `--sign`. `--port` opens [a second door](#a-second-door-streamable-http) over streamable HTTP, so a second client can attach to the same node.
+Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdio, so a model can look at a plant the way a person looks at the console. It takes the same network flags as `console`, including `--sign`. `--port` opens [a second door](#a-second-door-streamable-http) over streamable HTTP, so a second client can attach to the same node. If the MQTT broker requires a login, keep `--broker` as the broker address and set `SOURCE_RPC_MQTT_USERNAME` and `SOURCE_RPC_MQTT_PASSWORD` in the environment rather than putting the password in the command line.
 
 | tool | what it does |
 | --- | --- |

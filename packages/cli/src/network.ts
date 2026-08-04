@@ -58,11 +58,19 @@ export interface NetworkOptions {
     insecureTls?: boolean
 }
 
+const hasEnvironmentValue = (name: string) => Object.prototype.hasOwnProperty.call(process.env, name)
+
+export const mqttAuthFromEnvironment = () => ({
+    ...(hasEnvironmentValue('SOURCE_RPC_MQTT_USERNAME') ? { username: process.env.SOURCE_RPC_MQTT_USERNAME } : {}),
+    ...(hasEnvironmentValue('SOURCE_RPC_MQTT_PASSWORD') ? { password: process.env.SOURCE_RPC_MQTT_PASSWORD } : {})
+})
+
 /** The links a set of options asks for, in the order the commands have always built them. */
 export const networkTransports = (options: NetworkOptions): Transport[] => [
     ...(options.broker
         ? [
               new MqttTransport(options.name, options.broker, {
+                  mqtt: mqttAuthFromEnvironment(),
                   ...(options.prefix ? { prefix: options.prefix } : {}),
                   ...(options.sign ? { sign: options.sign } : {}),
                   ...(options.verify ? { verify: options.verify } : {}),

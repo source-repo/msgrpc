@@ -89,6 +89,8 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
 
   peers / describe / call / watch
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
+                                SOURCE_RPC_MQTT_USERNAME and SOURCE_RPC_MQTT_PASSWORD are used
+                                as broker credentials when set
     --hub <url>                 a socket.io network, e.g. http://hub:7843
                                 one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
@@ -105,6 +107,8 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
 
   console
     --broker <url>              an MQTT network, e.g. mqtt://localhost:1883
+                                SOURCE_RPC_MQTT_USERNAME and SOURCE_RPC_MQTT_PASSWORD are used
+                                as broker credentials when set
     --hub <url>                 a socket.io network, e.g. http://hub:7843
                                 one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
@@ -121,6 +125,8 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
 
   mcp
     --broker <url>              an MQTT network
+                                SOURCE_RPC_MQTT_USERNAME and SOURCE_RPC_MQTT_PASSWORD are used
+                                as broker credentials when set
     --hub <url>                 a socket.io network
                                 one of --broker and --hub is required; both watches both
     --prefix <topic>            topic namespace, default the transport's own
