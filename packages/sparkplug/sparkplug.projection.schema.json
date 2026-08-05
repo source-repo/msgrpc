@@ -10,6 +10,7 @@
         "schema": { "const": 1 },
         "groupId": { "$ref": "#/$defs/topicSegment" },
         "edgeNodeId": { "$ref": "#/$defs/topicSegment" },
+        "maxPacketBytes": { "type": "integer", "minimum": 1, "maximum": 268435455 },
         "devices": {
             "type": "array",
             "minItems": 1,
@@ -36,6 +37,19 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["name", "path", "datatype"],
+            "allOf": [
+                {
+                    "if": { "properties": { "datatype": { "enum": ["String", "Text", "Bytes", "File"] } }, "required": ["datatype"] },
+                    "then": { "required": ["maxBytes"] }
+                },
+                {
+                    "if": {
+                        "properties": { "datatype": { "not": { "enum": ["String", "Text", "UUID", "Bytes", "File"] } } },
+                        "required": ["datatype"]
+                    },
+                    "then": { "not": { "required": ["maxBytes"] } }
+                }
+            ],
             "properties": {
                 "name": { "type": "string", "minLength": 1, "maxLength": 256 },
                 "path": { "type": "string", "pattern": "^(props|state)\\.[^.]+(?:\\.[^.]+)*$" },
@@ -51,6 +65,7 @@
                 "minimum": { "type": "number" },
                 "maximum": { "type": "number" },
                 "deadband": { "type": "number", "minimum": 0 },
+                "maxBytes": { "type": "integer", "minimum": 1 },
                 "historical": { "type": "boolean" },
                 "transient": { "type": "boolean" }
             }

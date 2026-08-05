@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto'
+import { DEFAULT_SPARKPLUG_MAX_PACKET_BYTES, MAXIMUM_SPARKPLUG_PACKET_BYTES, sparkplugMqttPacketBytes } from './PacketSize.js'
+import type { SparkplugMetric, SparkplugMetricPrimitive, SparkplugPropertySet } from './Payload.js'
 import type { SparkplugMetricMapping } from './Projection.js'
-import { SparkplugDataType, assertSparkplugTopicSegment } from './Types.js'
+import { encodeSparkplugPayload } from './Protobuf.js'
+import { SparkplugDataType, assertSparkplugTopicSegment, deviceTopic } from './Types.js'
 
 export const SPARKPLUG_PROJECTION_SCHEMA_VERSION = 1
 export const SPARKPLUG_PROJECTION_ENCODING_VERSION = 1
@@ -42,6 +45,7 @@ export interface SparkplugProjectionContractMetric {
     readonly minimum?: number
     readonly maximum?: number
     readonly deadband?: number
+    readonly maxBytes?: number
     readonly historical?: boolean
     readonly transient?: boolean
 }
@@ -57,6 +61,7 @@ export interface SparkplugProjectionContract {
     readonly schema: typeof SPARKPLUG_PROJECTION_SCHEMA_VERSION
     readonly groupId: string
     readonly edgeNodeId: string
+    readonly maxPacketBytes?: number
     readonly devices: readonly SparkplugProjectionContractDevice[]
 }
 
@@ -71,7 +76,15 @@ export interface SparkplugCompiledProjectionContract {
     readonly encodingVersion: typeof SPARKPLUG_PROJECTION_ENCODING_VERSION
     readonly contract: SparkplugProjectionContract
     readonly hash: string
+    readonly maxPacketBytes: number
+    readonly packetEstimates: readonly SparkplugProjectionPacketEstimate[]
     readonly devices: readonly SparkplugCompiledDeviceProjection[]
+}
+
+export interface SparkplugProjectionPacketEstimate {
+    readonly deviceId: string
+    readonly dbirthBytes: number
+    readonly ddataBytes: number
 }
 
 export interface SparkplugProjectionCompileOptions {
@@ -113,20 +126,28 @@ const NUMERIC_DATATYPES = new Set<SparkplugProjectionDatatype>([
 ])
 
 const INTEGER_DATATYPES = new Set<SparkplugProjectionDatatype>(['Int8', 'Int16', 'Int32', 'Int64', 'UInt8', 'UInt16', 'UInt32', 'UInt64'])
-
+const VARIABLE_LENGTH_DATATYPES = new Set<SparkplugProjectionDatatype>(['String', 'Text', 'UUID', 'Bytes', 'File'])
 const PATH_ROOTS = new Set(['props', 'state'])
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor'])
 const textEncoder = new TextEncoder()
 
 export function validateSparkplugProjectionContract(input: unknown): SparkplugProjectionContract {
     const root = objectAt(input, 'contract')
-    exactKeys(root, ['$schema', 'schema', 'groupId', 'edgeNodeId', 'devices'], ['schema', 'groupId', 'edgeNodeId', 'devices'], 'contract')
+    exactKeys(
+        root,
+        ['$schema', 'schema', 'groupId', 'edgeNodeId', 'maxPacketBytes', 'devices'],
+        ['schema', 'groupId', 'edgeNodeId', 'devices'],
+        'contract'
+    )
     if (root.$schema !== undefined && typeof root.$schema !== 'string') throw new Error('contract.$schema must be a string when present')
     if (root.schema !== SPARKPLUG_PROJECTION_SCHEMA_VERSION)
         throw new Error(`contract.schema must be ${SPARKPLUG_PROJECTION_SCHEMA_VERSION}`)
 
     const groupId = topicSegment(root.groupId, 'contract.groupId')
     const edgeNodeId = topicSegment(root.edgeNodeId, 'contract.edgeNodeId')
+    const maxPacketBytes = optionalFiniteNumber(root.maxPacketBytes, 'contract.maxPacketBytes') ?? DEFAULT_SPARKPLUG_MAX_PACKET_BYTES
+    if (!Number.isSafeInteger(maxPacketBytes) || maxPacketBytes <= 0 || maxPacketBytes > MAXIMUM_SPARKPLUG_PACKET_BYTES)
+        throw new Error(`contract.maxPacketBytes must be a positive safe integer no greater than ${MAXIMUM_SPARKPLUG_PACKET_BYTES}`)
     const devicesInput = arrayAt(root.devices, 'contract.devices')
     if (devicesInput.length === 0) throw new Error('contract.devices must contain at least one Device')
 
@@ -154,7 +175,7 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             const metric = objectAt(metricValue, metricPath)
             exactKeys(
                 metric,
-                ['name', 'path', 'qualityPath', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'deadband', 'historical', 'transient'],
+                ['name', 'path', 'qualityPath', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'deadband', 'maxBytes', 'historical', 'transient'],
                 ['name', 'path', 'datatype'],
                 metricPath
             )
@@ -169,6 +190,7 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             const minimum = optionalFiniteNumber(metric.minimum, `${metricPath}.minimum`)
             const maximum = optionalFiniteNumber(metric.maximum, `${metricPath}.maximum`)
             const deadband = optionalFiniteNumber(metric.deadband, `${metricPath}.deadband`)
+            let maxBytes = optionalFiniteNumber(metric.maxBytes, `${metricPath}.maxBytes`)
             const historical = optionalBoolean(metric.historical, `${metricPath}.historical`)
             const transient = optionalBoolean(metric.transient, `${metricPath}.transient`)
             if ((unit !== undefined || minimum !== undefined || maximum !== undefined || deadband !== undefined) && !NUMERIC_DATATYPES.has(datatype))
@@ -178,6 +200,13 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             if (deadband !== undefined && deadband < 0) throw new Error(`${metricPath}.deadband must not be negative`)
             if (deadband !== undefined && INTEGER_DATATYPES.has(datatype) && !Number.isInteger(deadband))
                 throw new Error(`${metricPath}.deadband must be an integer for ${datatype}`)
+            if (datatype === 'UUID' && maxBytes === undefined) maxBytes = 36
+            if (VARIABLE_LENGTH_DATATYPES.has(datatype) && maxBytes === undefined)
+                throw new Error(`${metricPath}.maxBytes is required for ${datatype}`)
+            if (maxBytes !== undefined && !VARIABLE_LENGTH_DATATYPES.has(datatype))
+                throw new Error(`${metricPath}.maxBytes is only valid for String, Text, UUID, Bytes and File`)
+            if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > maxPacketBytes))
+                throw new Error(`${metricPath}.maxBytes must be a positive safe integer no greater than maxPacketBytes`)
             if (historical && transient) throw new Error(`${metricPath} cannot be both historical and transient`)
             return {
                 name,
@@ -189,13 +218,14 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
                 ...(minimum === undefined ? {} : { minimum }),
                 ...(maximum === undefined ? {} : { maximum }),
                 ...(deadband === undefined ? {} : { deadband }),
+                ...(maxBytes === undefined ? {} : { maxBytes }),
                 ...(historical === undefined ? {} : { historical }),
                 ...(transient === undefined ? {} : { transient })
             }
         })
         return { deviceId, source: { peer, component }, ...(maxPublishHz === undefined ? {} : { maxPublishHz }), metrics }
     })
-    return { schema: SPARKPLUG_PROJECTION_SCHEMA_VERSION, groupId, edgeNodeId, devices }
+    return { schema: SPARKPLUG_PROJECTION_SCHEMA_VERSION, groupId, edgeNodeId, maxPacketBytes, devices }
 }
 
 export function compileSparkplugProjectionContract(
@@ -239,6 +269,7 @@ export function compileSparkplugProjectionContract(
             ...(metric.minimum === undefined ? {} : { minimum: metric.minimum }),
             ...(metric.maximum === undefined ? {} : { maximum: metric.maximum }),
             ...(metric.deadband === undefined ? {} : { deadband: metric.deadband }),
+            ...(metric.maxBytes === undefined ? {} : { maxBytes: metric.maxBytes }),
             ...(metric.historical ? { isHistorical: true } : {}),
             ...(metric.transient ? { isTransient: true } : {}),
             ...(!metric.unit && metric.minimum === undefined && metric.maximum === undefined
@@ -258,6 +289,14 @@ export function compileSparkplugProjectionContract(
                   })
         }))
     }))
+    const packetEstimates = devices.map((device) => estimateDevicePackets(contract, device))
+    for (const estimate of packetEstimates) {
+        const largest = Math.max(estimate.dbirthBytes, estimate.ddataBytes)
+        if (largest > contract.maxPacketBytes!)
+            throw new Error(
+                `contract Device ${JSON.stringify(estimate.deviceId)} needs up to ${largest} bytes in one MQTT packet, exceeding maxPacketBytes ${contract.maxPacketBytes}`
+            )
+    }
     const hash = createHash('sha256')
         .update(
             canonicalJson({
@@ -267,7 +306,76 @@ export function compileSparkplugProjectionContract(
             })
         )
         .digest('hex')
-    return { encodingVersion: SPARKPLUG_PROJECTION_ENCODING_VERSION, contract, hash, devices }
+    return {
+        encodingVersion: SPARKPLUG_PROJECTION_ENCODING_VERSION,
+        contract,
+        hash,
+        maxPacketBytes: contract.maxPacketBytes!,
+        packetEstimates,
+        devices
+    }
+}
+
+function estimateDevicePackets(
+    contract: SparkplugProjectionContract,
+    device: SparkplugCompiledDeviceProjection
+): SparkplugProjectionPacketEstimate {
+    const address = { groupId: contract.groupId, edgeNodeId: contract.edgeNodeId, deviceId: device.deviceId }
+    const variableValueBytes = device.mappings.reduce((total, mapping) => total + (mapping.maxBytes ?? 0), 0)
+    if (variableValueBytes >= contract.maxPacketBytes!)
+        throw new Error(
+            `contract Device ${JSON.stringify(device.deviceId)} declares ${variableValueBytes} variable-value bytes, which cannot fit with Sparkplug and MQTT framing in maxPacketBytes ${contract.maxPacketBytes}`
+        )
+    const birthMetrics = device.mappings.map((mapping) => maximumMetric(mapping, true))
+    const dataMetrics = device.mappings.map((mapping) => maximumMetric(mapping, false))
+    const birthPayload = encodeSparkplugPayload({ timestamp: Number.MAX_SAFE_INTEGER, seq: 255, metrics: birthMetrics })
+    const dataPayload = encodeSparkplugPayload({ timestamp: Number.MAX_SAFE_INTEGER, seq: 255, metrics: dataMetrics })
+    return {
+        deviceId: device.deviceId,
+        dbirthBytes: sparkplugMqttPacketBytes(deviceTopic('DBIRTH', address), birthPayload, 0),
+        ddataBytes: sparkplugMqttPacketBytes(deviceTopic('DDATA', address), dataPayload, 0)
+    }
+}
+
+function maximumMetric(mapping: SparkplugMetricMapping, birth: boolean): SparkplugMetric {
+    const name = mapping.name ?? mapping.path
+    const quality: SparkplugPropertySet = { Quality: { datatype: SparkplugDataType.Int32, value: 500 } }
+    const properties = birth
+        ? { ...mapping.properties, ...(mapping.qualityPath ? quality : {}) }
+        : mapping.qualityPath
+          ? quality
+          : undefined
+    return {
+        ...(birth || mapping.alias === undefined ? { name } : {}),
+        ...(mapping.alias === undefined ? {} : { alias: mapping.alias }),
+        timestamp: Number.MAX_SAFE_INTEGER,
+        datatype: mapping.datatype ?? SparkplugDataType.Unknown,
+        ...(properties === undefined || Object.keys(properties).length === 0 ? {} : { properties }),
+        value: maximumMetricValue(mapping.datatype ?? SparkplugDataType.Unknown, mapping.maxBytes)
+    }
+}
+
+function maximumMetricValue(datatype: SparkplugDataType, maxBytes: number | undefined): SparkplugMetricPrimitive {
+    switch (datatype) {
+        case SparkplugDataType.Boolean:
+            return true
+        case SparkplugDataType.String:
+        case SparkplugDataType.Text:
+        case SparkplugDataType.UUID:
+            return 'x'.repeat(maxBytes ?? 1)
+        case SparkplugDataType.Bytes:
+        case SparkplugDataType.File:
+            return new Uint8Array(maxBytes ?? 1)
+        case SparkplugDataType.Float:
+        case SparkplugDataType.Double:
+            return Number.MAX_VALUE
+        case SparkplugDataType.Int64:
+        case SparkplugDataType.UInt64:
+        case SparkplugDataType.DateTime:
+            return (1n << 64n) - 1n
+        default:
+            return 0xffff_ffff
+    }
 }
 
 export function canonicalSparkplugProjectionJson(value: unknown): string {

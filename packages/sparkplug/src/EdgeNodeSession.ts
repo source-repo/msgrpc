@@ -11,6 +11,7 @@ import {
     type SparkplugPayload
 } from './Payload.js'
 import { encodeSparkplugPayload } from './Protobuf.js'
+import { DEFAULT_SPARKPLUG_MAX_PACKET_BYTES, MAXIMUM_SPARKPLUG_PACKET_BYTES, assertSparkplugPacketFits } from './PacketSize.js'
 import { deviceTopic, nodeTopic, type SparkplugDeviceMessageType, type SparkplugNodeAddress, type SparkplugNodeMessageType } from './Types.js'
 
 export type SparkplugPublishMessageType = Exclude<SparkplugNodeMessageType | SparkplugDeviceMessageType, 'NCMD' | 'DCMD'>
@@ -31,6 +32,7 @@ export interface SparkplugEdgeNodeSessionOptions extends SparkplugNodeAddress {
     readonly now?: () => number
     readonly seq?: SparkplugSequence
     readonly bdSeq?: SparkplugBirthDeathSequence
+    readonly maxPacketBytes?: number
 }
 
 export class SparkplugEdgeNodeSession {
@@ -46,6 +48,7 @@ export class SparkplugEdgeNodeSession {
     #bornDevices = new Set<string>()
     #deviceMetrics = new Map<string, Map<string, SparkplugMetric>>()
     #publishQueue = Promise.resolve()
+    readonly #maxPacketBytes: number
 
     constructor(options: SparkplugEdgeNodeSessionOptions) {
         this.groupId = options.groupId
@@ -54,6 +57,9 @@ export class SparkplugEdgeNodeSession {
         this.#now = options.now ?? Date.now
         this.#seq = options.seq ?? new SparkplugSequence()
         this.#bdSeq = options.bdSeq ?? new SparkplugBirthDeathSequence()
+        this.#maxPacketBytes = options.maxPacketBytes ?? DEFAULT_SPARKPLUG_MAX_PACKET_BYTES
+        if (!Number.isSafeInteger(this.#maxPacketBytes) || this.#maxPacketBytes <= 0 || this.#maxPacketBytes > MAXIMUM_SPARKPLUG_PACKET_BYTES)
+            throw new Error(`maxPacketBytes must be a positive safe integer no greater than ${MAXIMUM_SPARKPLUG_PACKET_BYTES}`)
     }
 
     get born(): boolean {
@@ -68,14 +74,7 @@ export class SparkplugEdgeNodeSession {
         const birth = this.#birth ?? this.#bdSeq.claimBirth()
         this.#birth = birth
         const payloadDescription = nodeDeathPayload({ timestamp: this.#now(), bdSeq: birth.bdSeq })
-        return {
-            topic: nodeTopic('NDEATH', this),
-            payload: encodeSparkplugPayload(payloadDescription),
-            payloadDescription,
-            qos: 1,
-            retain: false,
-            type: 'NDEATH'
-        }
+        return this.frame('NDEATH', nodeTopic('NDEATH', this), payloadDescription, 1)
     }
 
     async birth(metrics: readonly SparkplugMetric[] = []): Promise<SparkplugPublishFrame> {
@@ -187,12 +186,14 @@ export class SparkplugEdgeNodeSession {
         })
     }
 
-    private frame(type: SparkplugPublishMessageType, topic: string, payloadDescription: SparkplugPayload): SparkplugPublishFrame {
+    private frame(type: SparkplugPublishMessageType, topic: string, payloadDescription: SparkplugPayload, qos: 0 | 1 = 0): SparkplugPublishFrame {
+        const payload = encodeSparkplugPayload(payloadDescription)
+        assertSparkplugPacketFits({ topic, payload, qos, maxPacketBytes: this.#maxPacketBytes })
         return {
             topic,
-            payload: encodeSparkplugPayload(payloadDescription),
+            payload,
             payloadDescription,
-            qos: 0,
+            qos,
             retain: false,
             type
         }

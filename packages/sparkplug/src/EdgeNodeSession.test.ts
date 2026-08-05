@@ -32,6 +32,23 @@ test('an Edge Node birth publishes NBIRTH with seq and bdSeq', async (t) => {
     t.deepEqual(published, [frame])
 })
 
+test('an oversized frame is refused before the publisher is called', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        maxPacketBytes: 100,
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+
+    await t.throwsAsync(session.birth([{ name: 'large', datatype: SparkplugDataType.String, value: 'x'.repeat(100) }]), {
+        message: /exceeding maxPacketBytes 100.*one snapshot/
+    })
+    t.deepEqual(published, [])
+})
+
 test('the NDEATH will reuses the same bdSeq as NBIRTH and is not retained', async (t) => {
     const published: SparkplugPublishFrame[] = []
     const session = new SparkplugEdgeNodeSession({

@@ -39,6 +39,17 @@ test('projection emits null metrics for missing mapped paths', (t) => {
     ])
 })
 
+test('projection enforces declared variable-value byte bounds', (t) => {
+    t.throws(
+        () =>
+            projectNodeMetrics(
+                { state: { label: 'värde' } },
+                [{ path: 'state.label', name: 'State/Label', datatype: SparkplugDataType.String, maxBytes: 5 }]
+            ),
+        { message: /value is 6 bytes, exceeding maxBytes 5/ }
+    )
+})
+
 test('metric quality transitions publish even when the value does not change', async (t) => {
     const published: SparkplugPublishFrame[] = []
     const session = new SparkplugEdgeNodeSession({
@@ -135,7 +146,7 @@ test('compiled contract definitions publish full DBIRTH metrics, alias-only DDAT
                 deviceId: 'pump-7',
                 source: { peer: 'pump-controller', component: 'pump' },
                 metrics: [
-                    { name: 'Properties/Tag', path: 'props.tag', datatype: 'String' },
+                    { name: 'Properties/Tag', path: 'props.tag', datatype: 'String', maxBytes: 64 },
                     { name: 'State/Temperature', path: 'state.temperature', datatype: 'Double', unit: 'degC', minimum: -40, maximum: 180 }
                 ]
             }

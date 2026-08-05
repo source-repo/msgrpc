@@ -23,7 +23,7 @@ const contract = {
                     maximum: 180,
                     deadband: 0.1
                 },
-                { name: 'Properties/Tag', path: 'props.tag', datatype: 'String' }
+                { name: 'Properties/Tag', path: 'props.tag', datatype: 'String', maxBytes: 64 }
             ]
         },
         {
@@ -57,6 +57,12 @@ test('projection contracts normalize order and allocate aliases across the Edge 
     t.is(compiled.devices[1]?.maxPublishHz, 20)
     t.is(compiled.devices[1]?.mappings[1]?.deadband, 0.1)
     t.is(compiled.devices[1]?.mappings[1]?.qualityPath, 'state.temperatureQuality')
+    t.is(compiled.maxPacketBytes, 1024 * 1024)
+    t.deepEqual(
+        compiled.packetEstimates.map((estimate) => estimate.deviceId),
+        ['motor-2', 'pump-7']
+    )
+    t.true(compiled.packetEstimates.every((estimate) => estimate.dbirthBytes > estimate.ddataBytes))
 })
 
 test('projection hash and aliases do not depend on authoring order', (t) => {
@@ -156,5 +162,38 @@ test('projection contracts validate metric metadata combinations', (t) => {
                 ]
             }),
         { message: /must be an integer/ }
+    )
+    t.throws(
+        () =>
+            validateSparkplugProjectionContract({
+                ...contract,
+                devices: [
+                    {
+                        ...contract.devices[0],
+                        metrics: [{ name: 'Mode', path: 'state.mode', datatype: 'String' }]
+                    }
+                ]
+            }),
+        { message: /maxBytes is required for String/ }
+    )
+})
+
+test('projection compilation refuses a Device whose complete snapshot cannot fit one packet', (t) => {
+    t.throws(
+        () =>
+            compileSparkplugProjectionContract({
+                schema: 1,
+                groupId: 'plant-a',
+                edgeNodeId: 'edge-01',
+                maxPacketBytes: 180,
+                devices: [
+                    {
+                        deviceId: 'pump-7',
+                        source: { peer: 'pump-controller', component: 'pump' },
+                        metrics: [{ name: 'State/Description', path: 'state.description', datatype: 'String', maxBytes: 120 }]
+                    }
+                ]
+            }),
+        { message: /needs up to .*exceeding maxPacketBytes 180/ }
     )
 })

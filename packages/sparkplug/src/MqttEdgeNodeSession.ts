@@ -16,6 +16,7 @@ export interface MqttSparkplugEdgeNodeSessionOptions {
     readonly now?: () => number
     readonly seq?: SparkplugSequence
     readonly bdSeq?: SparkplugBirthDeathSequence
+    readonly maxPacketBytes?: number
     readonly birthMetrics?: readonly SparkplugMetric[]
     readonly primaryHostId?: string
     readonly onPrimaryHostState?: (state: SparkplugHostState) => void | Promise<void>
@@ -58,6 +59,7 @@ export class MqttSparkplugEdgeNodeSession {
             now: options.now,
             seq: options.seq,
             bdSeq: options.bdSeq,
+            maxPacketBytes: options.maxPacketBytes,
             publish: async (frame) => {
                 if (!connection.client) throw new Error('Sparkplug MQTT client is not connected')
                 await connection.client.publishAsync(frame.topic, Buffer.from(frame.payload), { qos: frame.qos, retain: frame.retain })

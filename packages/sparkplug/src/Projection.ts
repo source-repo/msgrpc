@@ -12,6 +12,7 @@ export interface SparkplugMetricMapping {
     readonly minimum?: number
     readonly maximum?: number
     readonly deadband?: number
+    readonly maxBytes?: number
     readonly isHistorical?: boolean
     readonly isTransient?: boolean
     readonly properties?: SparkplugPropertySet
@@ -45,6 +46,7 @@ export interface SparkplugComponentProjectionStore {
 }
 
 const metricName = (mapping: SparkplugMetricMapping) => mapping.name ?? mapping.path
+const textEncoder = new TextEncoder()
 
 function valueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unknown {
     let value: unknown = snapshot
@@ -117,6 +119,10 @@ export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappin
             return { ...definition, isNull: true }
         }
         const metricValue = assertMetricValue(name, value)
+        if (mapping.maxBytes !== undefined) {
+            const bytes = typeof metricValue === 'string' ? textEncoder.encode(metricValue).length : metricValue instanceof Uint8Array ? metricValue.length : 0
+            if (bytes > mapping.maxBytes) throw new Error(`cannot project ${name}: value is ${bytes} bytes, exceeding maxBytes ${mapping.maxBytes}`)
+        }
         if (typeof metricValue === 'number') {
             if (mapping.minimum !== undefined && metricValue < mapping.minimum) throw new Error(`cannot project ${name}: value is below minimum ${mapping.minimum}`)
             if (mapping.maximum !== undefined && metricValue > mapping.maximum) throw new Error(`cannot project ${name}: value is above maximum ${mapping.maximum}`)
