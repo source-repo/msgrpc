@@ -5,7 +5,7 @@ import { SparkplugEdgeNodeSession, type SparkplugPublishFrame } from './EdgeNode
 import { SparkplugBirthDeathSequence, SparkplugSequence } from './Sequence.js'
 import type { SparkplugMetric } from './Payload.js'
 import { decodeSparkplugPayload } from './Protobuf.js'
-import { decodeHostStatePayload, hostStateTopic, nodeTopic, type SparkplugHostState } from './Types.js'
+import { decodeHostStatePayload, deviceCommandTopicFilter, hostStateTopic, nodeTopic, type SparkplugHostState } from './Types.js'
 
 export interface MqttSparkplugEdgeNodeSessionOptions {
     readonly url: string
@@ -30,6 +30,7 @@ export class MqttSparkplugEdgeNodeSession {
     readonly primaryHostTopic?: string
     #primaryHostState?: SparkplugHostState
     #onPrimaryHostState?: (state: SparkplugHostState) => void | Promise<void>
+    #primaryHostQueue = Promise.resolve()
 
     private constructor(
         client: MqttClient,
@@ -81,18 +82,20 @@ export class MqttSparkplugEdgeNodeSession {
         })
         connection.client = client
         const commandTopic = nodeTopic('NCMD', session)
+        const deviceCommandTopic = deviceCommandTopicFilter(session)
         const primaryHostTopic = options.primaryHostId ? hostStateTopic(options.primaryHostId) : undefined
         const edge = new MqttSparkplugEdgeNodeSession(client, session, will, options.birthMetrics ?? [], primaryHostTopic, options.onPrimaryHostState)
-        await client.subscribeAsync(commandTopic, { qos: 0 })
-        if (primaryHostTopic) await client.subscribeAsync(primaryHostTopic, { qos: 1 })
         client.on('message', (topic, payload) => {
             if (topic === commandTopic) {
                 void edge.handleNodeCommand(new Uint8Array(payload)).catch((error: unknown) => edge.emitClientError(error))
                 return
             }
-            if (topic === primaryHostTopic) void edge.handlePrimaryHostState(new Uint8Array(payload)).catch((error: unknown) => edge.emitClientError(error))
+            if (topic === primaryHostTopic) void edge.queuePrimaryHostState(new Uint8Array(payload)).catch((error: unknown) => edge.emitClientError(error))
         })
-        await session.birth(edge.birthMetrics)
+        await client.subscribeAsync(commandTopic, { qos: 0 })
+        await client.subscribeAsync(deviceCommandTopic, { qos: 0 })
+        if (primaryHostTopic) await client.subscribeAsync(primaryHostTopic, { qos: 1 })
+        if (!primaryHostTopic) await session.birth(edge.birthMetrics)
         return edge
     }
 
@@ -106,8 +109,26 @@ export class MqttSparkplugEdgeNodeSession {
         const hostId = parsed[2]
         if (!hostId) return
         const state = decodeHostStatePayload(hostId, payload)
+        if (this.#primaryHostState?.timestamp !== undefined && state.timestamp !== undefined && state.timestamp < this.#primaryHostState.timestamp) return
         this.#primaryHostState = state
         await this.#onPrimaryHostState?.(state)
+        if (state.online && !this.session.born) {
+            await this.session.resume(this.birthMetrics)
+        } else if (!state.online && this.session.born) {
+            await this.session.suspend()
+        }
+    }
+
+    private queuePrimaryHostState(payload: Uint8Array): Promise<void> {
+        const pending = this.#primaryHostQueue.then(
+            () => this.handlePrimaryHostState(payload),
+            () => this.handlePrimaryHostState(payload)
+        )
+        this.#primaryHostQueue = pending.then(
+            () => undefined,
+            () => undefined
+        )
+        return pending
     }
 
     private emitClientError(error: unknown): void {
@@ -116,7 +137,8 @@ export class MqttSparkplugEdgeNodeSession {
 
     async close(): Promise<void> {
         try {
-            if (this.session.born) await this.session.death()
+            await this.#primaryHostQueue
+            if (this.session.born) await this.session.suspend()
         } finally {
             await this.client.endAsync()
         }

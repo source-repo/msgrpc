@@ -98,7 +98,7 @@ test.serial('Source RPC owner churn does not change the projected Device identit
     await runner.flush()
 
     t.deepEqual(published.map((frame) => frame.type), ['NBIRTH', 'DBIRTH', 'DDATA'])
-    t.is(published.at(-1)?.topic, 'spBv1.0/DDATA/plant-a/edge-01/pump-7')
+    t.is(published.at(-1)?.topic, 'spBv1.0/plant-a/DDATA/edge-01/pump-7')
 
     await runner.close()
     runner = undefined

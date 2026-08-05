@@ -36,7 +36,7 @@ test('Host validator rejects a death before birth', (t) => {
 
     t.like(
         validator.observe({
-            topic: 'spBv1.0/NDEATH/plant-a/edge-01',
+            topic: 'spBv1.0/plant-a/NDEATH/edge-01',
             payloadDescription: { timestamp: 1, metrics: [{ name: 'bdSeq', datatype: SparkplugDataType.UInt64, value: 1 }] }
         })[0],
         { code: 'death-before-birth' }
@@ -50,7 +50,7 @@ test('Host validator rejects rebirth with changed bdSeq', async (t) => {
 
     t.like(
         validator.observe({
-            topic: 'spBv1.0/NBIRTH/plant-a/edge-01',
+            topic: 'spBv1.0/plant-a/NBIRTH/edge-01',
             payloadDescription: { timestamp: 1, seq: 255, metrics: [{ name: 'bdSeq', datatype: SparkplugDataType.UInt64, value: 13 }] }
         })[0],
         { code: 'rebirth-bdseq-changed' }
@@ -85,7 +85,7 @@ test('Host validator rejects Device data before Device birth', async (t) => {
 
     t.like(
         validator.observe({
-            topic: 'spBv1.0/DDATA/plant-a/edge-01/pump-7',
+            topic: 'spBv1.0/plant-a/DDATA/edge-01/pump-7',
             payloadDescription: { timestamp: 1, seq: 255, metrics: [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21 }] }
         })[0],
         { code: 'device-data-before-birth' }

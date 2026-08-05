@@ -44,6 +44,7 @@ export class SparkplugEdgeNodeSession {
     #seq: SparkplugSequence
     #bdSeq: SparkplugBirthDeathSequence
     #birth?: SparkplugBirthDeathClaim
+    #isBorn = false
     #birthMetrics: readonly SparkplugMetric[] = []
     #bornDevices = new Set<string>()
     #deviceMetrics = new Map<string, Map<string, SparkplugMetric>>()
@@ -63,7 +64,7 @@ export class SparkplugEdgeNodeSession {
     }
 
     get born(): boolean {
-        return this.#birth !== undefined
+        return this.#isBorn
     }
 
     get bdSeq(): number | undefined {
@@ -84,6 +85,7 @@ export class SparkplugEdgeNodeSession {
             const payloadDescription = nodeBirthPayload({ timestamp: this.#now(), seq: this.#seq.next(), bdSeq: birth.bdSeq, metrics })
             const frame = this.frame('NBIRTH', nodeTopic('NBIRTH', this), payloadDescription)
             await this.#publish(frame)
+            this.#isBorn = true
             this.#birthMetrics = metrics
             this.#bornDevices.clear()
             this.#deviceMetrics.clear()
@@ -92,9 +94,9 @@ export class SparkplugEdgeNodeSession {
     }
 
     async rebirth(metrics: readonly SparkplugMetric[] = []): Promise<SparkplugPublishFrame> {
-        if (!this.#birth) throw new Error('cannot publish NBIRTH rebirth before the Edge Node is born')
+        if (!this.#isBorn || !this.#birth) throw new Error('cannot publish NBIRTH rebirth before the Edge Node is born')
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish NBIRTH rebirth before the Edge Node is born')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish NBIRTH rebirth before the Edge Node is born')
             const birthMetrics = metrics.length ? metrics : this.#birthMetrics
             const payloadDescription = nodeBirthPayload({ timestamp: this.#now(), seq: this.#seq.next(), bdSeq: this.#birth.bdSeq, metrics: birthMetrics })
             const birth = this.frame('NBIRTH', nodeTopic('NBIRTH', this), payloadDescription)
@@ -115,6 +117,33 @@ export class SparkplugEdgeNodeSession {
         })
     }
 
+    async resume(metrics: readonly SparkplugMetric[] = []): Promise<SparkplugPublishFrame> {
+        if (this.#isBorn) throw new Error('cannot resume an Edge Node that is already born')
+        return this.enqueue(async () => {
+            if (this.#isBorn) throw new Error('cannot resume an Edge Node that is already born')
+            const birth = this.#birth ?? this.#bdSeq.claimBirth()
+            this.#birth = birth
+            const birthMetrics = metrics.length ? metrics : this.#birthMetrics
+            const payloadDescription = nodeBirthPayload({ timestamp: this.#now(), seq: this.#seq.next(), bdSeq: birth.bdSeq, metrics: birthMetrics })
+            const nodeBirth = this.frame('NBIRTH', nodeTopic('NBIRTH', this), payloadDescription)
+            await this.#publish(nodeBirth)
+            this.#isBorn = true
+            this.#birthMetrics = birthMetrics
+            this.#bornDevices.clear()
+            for (const [deviceId, deviceMetrics] of this.#deviceMetrics) {
+                const devicePayload = deviceBirthPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics: [...deviceMetrics.values()] })
+                const deviceBirth = this.frame(
+                    'DBIRTH',
+                    deviceTopic('DBIRTH', { groupId: this.groupId, edgeNodeId: this.edgeNodeId, deviceId }),
+                    devicePayload
+                )
+                await this.#publish(deviceBirth)
+                this.#bornDevices.add(deviceId)
+            }
+            return nodeBirth
+        })
+    }
+
     async handleNodeCommand(payload: SparkplugPayload): Promise<SparkplugPublishFrame | undefined> {
         if (!isNodeRebirthCommand(payload)) return undefined
         return this.rebirth()
@@ -123,7 +152,7 @@ export class SparkplugEdgeNodeSession {
     async data(metrics: readonly SparkplugMetric[]): Promise<SparkplugPublishFrame | undefined> {
         if (metrics.length === 0) return undefined
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish NDATA before NBIRTH')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish NDATA before NBIRTH')
             const latest = mergeMetricMap(metricMap(this.#birthMetrics), metrics)
             const payloadDescription = nodeDataPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics })
             const frame = this.frame('NDATA', nodeTopic('NDATA', this), payloadDescription)
@@ -135,7 +164,7 @@ export class SparkplugEdgeNodeSession {
 
     async deviceBirth(deviceId: string, metrics: readonly SparkplugMetric[] = []): Promise<SparkplugPublishFrame> {
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish DBIRTH before NBIRTH')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish DBIRTH before NBIRTH')
             const latest = metricMap(metrics)
             const payloadDescription = deviceBirthPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics })
             const frame = this.frame('DBIRTH', deviceTopic('DBIRTH', { groupId: this.groupId, edgeNodeId: this.edgeNodeId, deviceId }), payloadDescription)
@@ -149,7 +178,7 @@ export class SparkplugEdgeNodeSession {
     async deviceData(deviceId: string, metrics: readonly SparkplugMetric[]): Promise<SparkplugPublishFrame | undefined> {
         if (metrics.length === 0) return undefined
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish DDATA before NBIRTH')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish DDATA before NBIRTH')
             if (!this.#bornDevices.has(deviceId)) throw new Error(`cannot publish DDATA before DBIRTH for ${deviceId}`)
             const latest = mergeMetricMap(new Map(this.#deviceMetrics.get(deviceId) ?? []), metrics)
             const payloadDescription = deviceDataPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics })
@@ -162,7 +191,7 @@ export class SparkplugEdgeNodeSession {
 
     async deviceDeath(deviceId: string): Promise<SparkplugPublishFrame> {
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish DDEATH before NBIRTH')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish DDEATH before NBIRTH')
             if (!this.#bornDevices.has(deviceId)) throw new Error(`cannot publish DDEATH before DBIRTH for ${deviceId}`)
             const payloadDescription = deviceDeathPayload({ timestamp: this.#now(), seq: this.#seq.next() })
             const frame = this.frame('DDEATH', deviceTopic('DDEATH', { groupId: this.groupId, edgeNodeId: this.edgeNodeId, deviceId }), payloadDescription)
@@ -175,14 +204,36 @@ export class SparkplugEdgeNodeSession {
 
     async death(): Promise<SparkplugPublishFrame> {
         return this.enqueue(async () => {
-            if (!this.#birth) throw new Error('cannot publish NDEATH before NBIRTH or will creation claimed bdSeq')
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot publish NDEATH before NBIRTH')
             const payloadDescription = nodeDeathPayload({ timestamp: this.#now(), bdSeq: this.#birth.bdSeq })
             const frame = this.frame('NDEATH', nodeTopic('NDEATH', this), payloadDescription)
             await this.#publish(frame)
+            this.#isBorn = false
             this.#birth = undefined
             this.#bornDevices.clear()
             this.#deviceMetrics.clear()
             return frame
+        })
+    }
+
+    async suspend(): Promise<SparkplugPublishFrame> {
+        return this.enqueue(async () => {
+            if (!this.#isBorn || !this.#birth) throw new Error('cannot suspend an Edge Node before NBIRTH')
+            for (const deviceId of this.#bornDevices) {
+                const devicePayload = deviceDeathPayload({ timestamp: this.#now(), seq: this.#seq.next() })
+                const deviceDeath = this.frame(
+                    'DDEATH',
+                    deviceTopic('DDEATH', { groupId: this.groupId, edgeNodeId: this.edgeNodeId, deviceId }),
+                    devicePayload
+                )
+                await this.#publish(deviceDeath)
+            }
+            const payloadDescription = nodeDeathPayload({ timestamp: this.#now(), bdSeq: this.#birth.bdSeq })
+            const nodeDeath = this.frame('NDEATH', nodeTopic('NDEATH', this), payloadDescription)
+            await this.#publish(nodeDeath)
+            this.#isBorn = false
+            this.#bornDevices.clear()
+            return nodeDeath
         })
     }
 

@@ -85,8 +85,8 @@ export function assertSparkplugTopicSegment(value: string, name: string): string
 export function nodeTopic(type: SparkplugNodeMessageType, address: SparkplugNodeAddress): string {
     return [
         SPARKPLUG_NAMESPACE,
-        type,
         assertSparkplugTopicSegment(address.groupId, 'groupId'),
+        type,
         assertSparkplugTopicSegment(address.edgeNodeId, 'edgeNodeId')
     ].join('/')
 }
@@ -94,10 +94,20 @@ export function nodeTopic(type: SparkplugNodeMessageType, address: SparkplugNode
 export function deviceTopic(type: SparkplugDeviceMessageType, address: SparkplugDeviceAddress): string {
     return [
         SPARKPLUG_NAMESPACE,
-        type,
         assertSparkplugTopicSegment(address.groupId, 'groupId'),
+        type,
         assertSparkplugTopicSegment(address.edgeNodeId, 'edgeNodeId'),
         assertSparkplugTopicSegment(address.deviceId, 'deviceId')
+    ].join('/')
+}
+
+export function deviceCommandTopicFilter(address: SparkplugNodeAddress): string {
+    return [
+        SPARKPLUG_NAMESPACE,
+        assertSparkplugTopicSegment(address.groupId, 'groupId'),
+        'DCMD',
+        assertSparkplugTopicSegment(address.edgeNodeId, 'edgeNodeId'),
+        '+'
     ].join('/')
 }
 
@@ -121,19 +131,20 @@ export function decodeHostStatePayload(hostId: string, payload: Uint8Array): Spa
 export function parseSparkplugTopic(topic: string): ParsedSparkplugTopic | undefined {
     const parts = topic.split('/')
     if (parts[0] !== SPARKPLUG_NAMESPACE) return undefined
-    const type = parts[1] as SparkplugMessageType | 'STATE' | undefined
-    if (!type) return undefined
-    if (type === 'STATE') {
-        if (parts.length !== 3 || !NODE_MESSAGE_TYPES.has(type)) return undefined
+    if (parts[1] === 'STATE') {
+        if (parts.length !== 3) return undefined
+        const type = 'STATE'
         return { namespace: SPARKPLUG_NAMESPACE, type, hostId: parts[2] }
     }
+    const type = parts[2] as SparkplugMessageType | undefined
+    if (!type) return undefined
     if (NODE_MESSAGE_TYPES.has(type)) {
         if (parts.length !== 4) return undefined
-        return { namespace: SPARKPLUG_NAMESPACE, type, groupId: parts[2], edgeNodeId: parts[3] }
+        return { namespace: SPARKPLUG_NAMESPACE, type, groupId: parts[1], edgeNodeId: parts[3] }
     }
     if (DEVICE_MESSAGE_TYPES.has(type)) {
         if (parts.length !== 5) return undefined
-        return { namespace: SPARKPLUG_NAMESPACE, type, groupId: parts[2], edgeNodeId: parts[3], deviceId: parts[4] }
+        return { namespace: SPARKPLUG_NAMESPACE, type, groupId: parts[1], edgeNodeId: parts[3], deviceId: parts[4] }
     }
     return undefined
 }

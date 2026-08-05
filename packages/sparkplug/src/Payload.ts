@@ -31,17 +31,19 @@ export interface SparkplugPayload {
 
 export const NODE_CONTROL_REBIRTH = 'Node Control/Rebirth'
 
+export function nodeRebirthMetric(timestamp: number, value = false): SparkplugMetric {
+    return {
+        name: NODE_CONTROL_REBIRTH,
+        timestamp,
+        datatype: SparkplugDataType.Boolean,
+        value
+    }
+}
+
 export function nodeRebirthCommandPayload(timestamp: number): SparkplugPayload {
     return {
         timestamp,
-        metrics: [
-            {
-                name: NODE_CONTROL_REBIRTH,
-                timestamp,
-                datatype: SparkplugDataType.Boolean,
-                value: true
-            }
-        ]
+        metrics: [nodeRebirthMetric(timestamp, true)]
     }
 }
 
@@ -68,7 +70,7 @@ export function nodeBirthPayload(options: {
     return {
         timestamp: options.timestamp,
         seq: options.seq,
-        metrics: [bdSeqMetric(options.bdSeq, options.timestamp), ...(options.metrics ?? [])]
+        metrics: [bdSeqMetric(options.bdSeq, options.timestamp), nodeRebirthMetric(options.timestamp), ...(options.metrics ?? [])]
     }
 }
 

@@ -228,7 +228,7 @@ test('node metric projection publishes NDATA only for changed metrics', async (t
     const dataPayload = decodeSparkplugPayload(changed.payload)
 
     t.is(unchanged, undefined)
-    t.is(changed.topic, 'spBv1.0/NDATA/plant-a/edge-01')
+    t.is(changed.topic, 'spBv1.0/plant-a/NDATA/edge-01')
     t.is(dataPayload.seq, 1)
     t.deepEqual(
         dataPayload.metrics.map((metric) => ({ name: metric.name, datatype: metric.datatype, value: metric.value })),
@@ -311,9 +311,9 @@ test('component projection runner births a Device from the first snapshot and pu
     const dataPayload = decodeSparkplugPayload(data.payload)
 
     t.is(birth.type, 'DBIRTH')
-    t.is(birth.topic, 'spBv1.0/DBIRTH/plant-a/edge-01/pump-7')
+    t.is(birth.topic, 'spBv1.0/plant-a/DBIRTH/edge-01/pump-7')
     t.is(data.type, 'DDATA')
-    t.is(data.topic, 'spBv1.0/DDATA/plant-a/edge-01/pump-7')
+    t.is(data.topic, 'spBv1.0/plant-a/DDATA/edge-01/pump-7')
     t.deepEqual(
         birthPayload.metrics.map((metric) => metric.name),
         ['Properties/Tag', 'State/Running', 'State/Temperature']

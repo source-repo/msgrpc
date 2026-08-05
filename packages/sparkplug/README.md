@@ -8,7 +8,7 @@ The commercial product and tools around this will be named Source Spark. This pa
 
 ## Status
 
-M1 and read-only M2 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, observe retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, and project read-only Source RPC component snapshots as Sparkplug Devices.
+M1 and read-only M2 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, gate Node and Device lifecycle on retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, and project read-only Source RPC component snapshots as Sparkplug Devices.
 
 The component runner publishes a complete `DBIRTH` from the first live snapshot, changed-only `DDATA`, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. Under backpressure it holds one in-flight and one latest pending snapshot per Device, then computes the coalesced diff against the last successfully handed-off state. The committed projection contract supplies the stable Device ID, metric map, datatypes, nullability, units, bounds, deadbands and maximum publish rate. Its compiler normalizes the file, allocates aliases across the entire Edge Node, and hashes the normalized contract together with the Source RPC schema fragments it reads.
 
@@ -34,8 +34,19 @@ The component runner publishes a complete `DBIRTH` from the first live snapshot,
 - broker-backed sequence-gap/NCMD convergence and Source RPC owner-churn identity coverage
 - compile-time DBIRTH/DDATA packet estimates, runtime packet refusal and declared byte bounds for variable-length metrics
 - `peerShape`-triggered projection revalidation with canonical-hash-controlled complete rebirth
+- reproducible Eclipse Sparkplug TCK 3.0.0 Edge profile runner and committed baseline report
 
 The read-only M2 slice is complete. No ingestion or command mapping exists yet.
+
+## TCK baseline
+
+The package includes a reproducible development run of the official Eclipse Sparkplug TCK 3.0.0 Edge profile. It verifies the downloaded binary checksum, runs the official extension in a digest-pinned HiveMQ container, and records both the official raw log and a summary under [`tck/reports`](./tck/reports).
+
+```sh
+npm run tck:edge -w @source-repo/sparkplug
+```
+
+The committed baseline covers Session Establishment, Session Termination, Send Data, Send Complex Data, Receive Command, and Primary Host over MQTT 3.1.1 with zero failed assertions. MQTT 5 alternatives, Multiple Broker, Dataset, Template, and other optional groups are explicitly outside that run. This is engineering evidence, not an Eclipse Foundation compatibility claim or listing; see [`tck/README.md`](./tck/README.md) for prerequisites and pinned inputs.
 
 ## Projection contract
 

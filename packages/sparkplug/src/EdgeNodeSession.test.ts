@@ -21,13 +21,15 @@ test('an Edge Node birth publishes NBIRTH with seq and bdSeq', async (t) => {
     const frame = await session.birth([{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
     const payload = decodeSparkplugPayload(frame.payload)
 
-    t.is(frame.topic, 'spBv1.0/NBIRTH/plant-a/edge-01')
+    t.is(frame.topic, 'spBv1.0/plant-a/NBIRTH/edge-01')
     t.true(frame.payload.length > 0)
     t.is(payload.seq, 7)
     t.is(payload.metrics[0]?.name, 'bdSeq')
     t.is(payload.metrics[0]?.value, 3n)
-    t.is(payload.metrics[1]?.name, 'temperature')
-    t.is(payload.metrics[1]?.value, 21.5)
+    t.is(payload.metrics[1]?.name, 'Node Control/Rebirth')
+    t.is(payload.metrics[1]?.value, false)
+    t.is(payload.metrics[2]?.name, 'temperature')
+    t.is(payload.metrics[2]?.value, 21.5)
     t.is(session.bdSeq, 3)
     t.deepEqual(published, [frame])
 })
@@ -68,13 +70,28 @@ test('the NDEATH will reuses the same bdSeq as NBIRTH and is not retained', asyn
     const birthPayload = decodeSparkplugPayload(birth.payload)
     const deathPayload = decodeSparkplugPayload(death.payload)
 
-    t.is(will.topic, 'spBv1.0/NDEATH/plant-a/edge-01')
+    t.is(will.topic, 'spBv1.0/plant-a/NDEATH/edge-01')
     t.is(will.qos, 1)
     t.false(will.retain)
     t.is(willPayload.metrics[0]?.value, 9n)
     t.is(birthPayload.metrics[0]?.value, 9n)
     t.is(deathPayload.metrics[0]?.value, 9n)
     t.deepEqual(published, [birth, death])
+})
+
+test('creating the NDEATH Will does not mark the Edge Node born', async (t) => {
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        publish: () => undefined
+    })
+
+    session.nodeWill()
+
+    t.false(session.born)
+    await t.throwsAsync(session.data([{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }]), {
+        message: 'cannot publish NDATA before NBIRTH'
+    })
 })
 
 test('a new birth after graceful death claims the next bdSeq', async (t) => {
@@ -118,13 +135,13 @@ test('Node Control/Rebirth republishes NBIRTH with the same bdSeq and next seq',
     const birthPayload = decodeSparkplugPayload(birth.payload)
     const rebirthPayload = decodeSparkplugPayload(rebirth.payload)
 
-    t.is(rebirth.topic, 'spBv1.0/NBIRTH/plant-a/edge-01')
+    t.is(rebirth.topic, 'spBv1.0/plant-a/NBIRTH/edge-01')
     t.is(birthPayload.seq, 41)
     t.is(rebirthPayload.seq, 42)
     t.is(birthPayload.metrics[0]?.value, 8n)
     t.is(rebirthPayload.metrics[0]?.value, 8n)
-    t.is(rebirthPayload.metrics[1]?.name, 'temperature')
-    t.is(rebirthPayload.metrics[1]?.value, 21.5)
+    t.is(rebirthPayload.metrics[2]?.name, 'temperature')
+    t.is(rebirthPayload.metrics[2]?.value, 21.5)
     t.deepEqual(published, [birth, rebirth])
 })
 
@@ -151,7 +168,7 @@ test('Node Control/Rebirth retains Node definitions after alias-only NDATA', asy
     await session.data([{ alias: 1, timestamp: 1001, datatype: SparkplugDataType.Double, value: 22 }])
     await session.handleNodeCommand(nodeRebirthCommandPayload(1002))
 
-    const rebirth = decodeSparkplugPayload(published.at(-1)!.payload).metrics[1]
+    const rebirth = decodeSparkplugPayload(published.at(-1)!.payload).metrics[2]
     t.deepEqual(rebirth, {
         name: 'temperature',
         alias: 1,
@@ -200,12 +217,12 @@ test('rebirth republishes NBIRTH with the same bdSeq and a new seq', async (t) =
     const birthPayload = decodeSparkplugPayload(birth.payload)
     const rebirthPayload = decodeSparkplugPayload(rebirth.payload)
 
-    t.is(rebirth.topic, 'spBv1.0/NBIRTH/plant-a/edge-01')
+    t.is(rebirth.topic, 'spBv1.0/plant-a/NBIRTH/edge-01')
     t.is(birthPayload.metrics[0]?.value, 4n)
     t.is(rebirthPayload.metrics[0]?.value, 4n)
     t.is(birthPayload.seq, 10)
     t.is(rebirthPayload.seq, 11)
-    t.is(rebirthPayload.metrics[1]?.name, 'temperature')
+    t.is(rebirthPayload.metrics[2]?.name, 'temperature')
     t.deepEqual(published, [birth, rebirth])
 })
 
@@ -229,10 +246,10 @@ test('Device lifecycle frames share the Edge Node sequence and wrap at 255', asy
     t.deepEqual(
         [nodeBirth, deviceBirth, deviceData, deviceDeath].map((frame) => ({ type: frame.type, topic: frame.topic, seq: decodeSparkplugPayload(frame.payload).seq })),
         [
-            { type: 'NBIRTH', topic: 'spBv1.0/NBIRTH/plant-a/edge-01', seq: 254 },
-            { type: 'DBIRTH', topic: 'spBv1.0/DBIRTH/plant-a/edge-01/pump-7', seq: 255 },
-            { type: 'DDATA', topic: 'spBv1.0/DDATA/plant-a/edge-01/pump-7', seq: 0 },
-            { type: 'DDEATH', topic: 'spBv1.0/DDEATH/plant-a/edge-01/pump-7', seq: 1 }
+            { type: 'NBIRTH', topic: 'spBv1.0/plant-a/NBIRTH/edge-01', seq: 254 },
+            { type: 'DBIRTH', topic: 'spBv1.0/plant-a/DBIRTH/edge-01/pump-7', seq: 255 },
+            { type: 'DDATA', topic: 'spBv1.0/plant-a/DDATA/edge-01/pump-7', seq: 0 },
+            { type: 'DDEATH', topic: 'spBv1.0/plant-a/DDEATH/edge-01/pump-7', seq: 1 }
         ]
     )
     t.deepEqual(published, [nodeBirth, deviceBirth, deviceData, deviceDeath])
@@ -263,7 +280,7 @@ test('Node Control/Rebirth republishes complete current Device births', async (t
 
     t.is(rebirth.type, 'NBIRTH')
     t.is(deviceRebirth.type, 'DBIRTH')
-    t.is(deviceRebirth.topic, 'spBv1.0/DBIRTH/plant-a/edge-01/pump-7')
+    t.is(deviceRebirth.topic, 'spBv1.0/plant-a/DBIRTH/edge-01/pump-7')
     t.deepEqual(
         payload.metrics.map((metric) => ({ name: metric.name, value: metric.value })),
         [
@@ -272,6 +289,39 @@ test('Node Control/Rebirth republishes complete current Device births', async (t
         ]
     )
     t.deepEqual(published.map((frame) => decodeSparkplugPayload(frame.payload).seq), [0, 1, 2, 3, 4])
+})
+
+test('Primary Host suspension publishes deaths and resumes complete cached births', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        bdSeq: new SparkplugBirthDeathSequence(12),
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+
+    await session.birth([{ name: 'node-temperature', datatype: SparkplugDataType.Double, value: 20 }])
+    await session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
+    await session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 22 }])
+    await session.suspend()
+
+    t.false(session.born)
+    await session.resume()
+
+    t.true(session.born)
+    t.deepEqual(
+        published.map((frame) => frame.type),
+        ['NBIRTH', 'DBIRTH', 'DDATA', 'DDEATH', 'NDEATH', 'NBIRTH', 'DBIRTH']
+    )
+    t.deepEqual(published.map((frame) => decodeSparkplugPayload(frame.payload).seq), [0, 1, 2, 3, undefined, 4, 5])
+    const nodePayloads = published.filter((frame) => frame.type === 'NBIRTH' || frame.type === 'NDEATH').map((frame) => decodeSparkplugPayload(frame.payload))
+    t.deepEqual(nodePayloads.map((payload) => payload.metrics[0]?.value), [12n, 12n, 12n])
+    t.deepEqual(
+        decodeSparkplugPayload(published.at(-1)!.payload).metrics.map((metric) => ({ name: metric.name, value: metric.value })),
+        [{ name: 'temperature', value: 22 }]
+    )
 })
 
 test('queued Device publishes cannot overtake one another', async (t) => {

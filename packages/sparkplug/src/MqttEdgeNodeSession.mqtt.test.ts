@@ -66,8 +66,8 @@ test.serial('mqtt: Edge Node publishes NBIRTH bytes and graceful NDEATH with the
     host.on('message', (topic, payload) => {
         seen.push({ topic, payload: new Uint8Array(payload) })
     })
-    await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}`, { qos: 1 })
-    await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}/+`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}/+`, { qos: 1 })
 
     const edge = await MqttSparkplugEdgeNodeSession.connect({
         url: BROKER_URL,
@@ -95,13 +95,15 @@ test.serial('mqtt: Edge Node publishes NBIRTH bytes and graceful NDEATH with the
     const birthPayload = decodeSparkplugPayload(birth.payload)
     const deathPayload = decodeSparkplugPayload(death.payload)
 
-    t.is(birth.topic, `spBv1.0/NBIRTH/${groupId}/${edgeNodeId}`)
-    t.is(death.topic, `spBv1.0/NDEATH/${groupId}/${edgeNodeId}`)
+    t.is(birth.topic, `spBv1.0/${groupId}/NBIRTH/${edgeNodeId}`)
+    t.is(death.topic, `spBv1.0/${groupId}/NDEATH/${edgeNodeId}`)
     t.is(birthPayload.metrics[0]?.name, 'bdSeq')
     t.is(deathPayload.metrics[0]?.name, 'bdSeq')
     t.is(birthPayload.metrics[0]?.value, deathPayload.metrics[0]?.value)
-    t.is(birthPayload.metrics[1]?.name, 'temperature')
-    t.is(birthPayload.metrics[1]?.value, 21.5)
+    t.is(birthPayload.metrics[1]?.name, 'Node Control/Rebirth')
+    t.is(birthPayload.metrics[1]?.value, false)
+    t.is(birthPayload.metrics[2]?.name, 'temperature')
+    t.is(birthPayload.metrics[2]?.value, 21.5)
     t.deepEqual(
         [birth, deviceBirth, deviceData, deviceDeath].map((message) => decodeSparkplugPayload(message.payload).seq),
         [0, 1, 2, 3]
@@ -146,8 +148,8 @@ test.serial('mqtt: NCMD Node Control/Rebirth republishes NBIRTH', async (t) => {
     t.is(first.metrics[0]?.name, 'bdSeq')
     t.is(second.metrics[0]?.name, 'bdSeq')
     t.is(first.metrics[0]?.value, second.metrics[0]?.value)
-    t.is(second.metrics[1]?.name, 'temperature')
-    t.is(second.metrics[1]?.value, 19.25)
+    t.is(second.metrics[2]?.name, 'temperature')
+    t.is(second.metrics[2]?.value, 19.25)
 
     await edge.close()
     await host.endAsync()
@@ -227,19 +229,25 @@ test.serial('mqtt: a missed QoS 0 DDATA converges through complete Node and Devi
     await host.endAsync()
 })
 
-test.serial('mqtt: Primary Host STATE is observed from retained and live messages', async (t) => {
+test.serial('mqtt: Primary Host STATE gates birth, ignores old timestamps and restores complete births', async (t) => {
     if (skipWithoutBroker(t)) return
 
     const groupId = name('source-spark-host')
     const edgeNodeId = name('edge')
     const hostId = name('primary-host')
     const states: SparkplugHostState[] = []
+    const seen: string[] = []
     const host = await connectAsync(BROKER_URL, {
         clientId: name('sparkplug-host'),
         clean: true,
         reconnectPeriod: 0
     })
     const stateTopic = hostStateTopic(hostId)
+    host.on('message', (topic) => {
+        if (topic.startsWith(`spBv1.0/${groupId}/`)) seen.push(topic)
+    })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}/+`, { qos: 1 })
     await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: true, timestamp: 1000 })), { qos: 1, retain: true })
 
     const edge = await MqttSparkplugEdgeNodeSession.connect({
@@ -253,16 +261,37 @@ test.serial('mqtt: Primary Host STATE is observed from retained and live message
         }
     })
 
-    await waitFor(() => edge.primaryHostState?.online === true)
+    await waitFor(() => edge.primaryHostState?.online === true && edge.session.born)
+    await edge.session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
     t.deepEqual(edge.primaryHostState, { hostId, online: true, timestamp: 1000 })
     t.deepEqual(states, [{ hostId, online: true, timestamp: 1000 }])
 
-    await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: false, timestamp: 2000 })), { qos: 1, retain: true })
-    await waitFor(() => edge.primaryHostState?.online === false)
-    t.deepEqual(edge.primaryHostState, { hostId, online: false, timestamp: 2000 })
+    await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: false, timestamp: 999 })), { qos: 1, retain: true })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    t.true(edge.session.born)
+    t.deepEqual(edge.primaryHostState, { hostId, online: true, timestamp: 1000 })
 
-    await host.publishAsync(stateTopic, Buffer.alloc(0), { qos: 1, retain: true })
+    await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: false, timestamp: 2000 })), { qos: 1, retain: true })
+    await waitFor(() => edge.primaryHostState?.online === false && !edge.session.born)
+    t.deepEqual(edge.primaryHostState, { hostId, online: false, timestamp: 2000 })
+    t.true(seen.some((topic) => topic.includes('/DDEATH/')))
+    t.true(seen.some((topic) => topic.includes('/NDEATH/')))
+
+    await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: true, timestamp: 1500 })), { qos: 1, retain: true })
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    t.false(edge.session.born)
+
+    await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: true, timestamp: 2000 })), { qos: 1, retain: true })
+    await waitFor(() => edge.primaryHostState?.online === true && edge.session.born)
+    await waitFor(() => seen.filter((topic) => topic.includes('/DBIRTH/')).length === 2)
+    t.deepEqual(states, [
+        { hostId, online: true, timestamp: 1000 },
+        { hostId, online: false, timestamp: 2000 },
+        { hostId, online: true, timestamp: 2000 }
+    ])
+
     await edge.close()
+    await host.publishAsync(stateTopic, Buffer.alloc(0), { qos: 1, retain: true })
     await host.endAsync()
 })
 
@@ -281,7 +310,7 @@ test.serial('mqtt: graceful reconnect claims the next bdSeq', async (t) => {
     host.on('message', (topic, payload) => {
         seen.push({ topic, payload: new Uint8Array(payload) })
     })
-    await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}`, { qos: 1 })
 
     const first = await MqttSparkplugEdgeNodeSession.connect({
         url: BROKER_URL,
@@ -328,7 +357,7 @@ test.serial('mqtt: ungraceful disconnect publishes the NDEATH Will with the live
     host.on('message', (topic, payload) => {
         seen.push({ topic, payload: new Uint8Array(payload) })
     })
-    await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/${groupId}/+/${edgeNodeId}`, { qos: 1 })
 
     const edge = await MqttSparkplugEdgeNodeSession.connect({
         url: BROKER_URL,
