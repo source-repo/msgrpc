@@ -74,6 +74,10 @@ console.log(await calculator.add(5))         // 15 - one instance, holding its o
 - **[Contracts checked at runtime](https://source-repo.github.io/rpc/guide/contracts)**, compared between versions so a change that would break a deployed caller fails a build rather than a plant — and `describe()`, so a server reports what it exposes.
 - **[Authentication both ways.](https://source-repo.github.io/rpc/guide/security)** Per-connection tokens where there is a connection, per-frame signing (HMAC or Ed25519) where there is not, `authorize()` on every call and subscription, TLS with a plant's own CA.
 
-The tooling — contract extraction, the browser console, taps, record/replay, fakes, an MCP server, find-by-capability — is [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli); the lease-based work queue is [`@source-repo/queue`](https://www.npmjs.com/package/@source-repo/queue).
+## Related packages
+
+- [`@source-repo/rpc-cli`](https://www.npmjs.com/package/@source-repo/rpc-cli) is the tooling: contract extraction, the browser console, taps, record/replay, fakes, an MCP server and find-by-capability.
+- [`@source-repo/queue`](https://www.npmjs.com/package/@source-repo/queue) is a lease-based work queue for Source RPC networks: every-value work with leases, retries, dead letters and capacity that refuses rather than drops.
+- `@source-repo/sparkplug` is planned as the Sparkplug B integration package: selected Source RPC components projected as Sparkplug Edge Nodes, Devices and metrics, with ingestion and commands added in later milestones.
 
 Upgrading? [`CHANGELOG.md`](https://github.com/source-repo/rpc/blob/main/CHANGELOG.md) lists what changed, release by release, with the reasoning.

@@ -1,0 +1,9 @@
+@source-repo/sparkplug vendors the Sparkplug B protobuf definition from Eclipse Tahu.
+
+The vendored file is:
+
+    proto/sparkplug_b.proto
+
+It carries its original Eclipse Public License 2.0 header and SPDX identifier.
+Sparkplug, Sparkplug Compatible, and the Sparkplug logo are trademarks of the
+Eclipse Foundation.

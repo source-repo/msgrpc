@@ -8,10 +8,10 @@
         "packages/*"
     ],
     "scripts": {
-        "build": "npm run build --workspace=@source-repo/rpc && npm run build --workspace=@source-repo/rpc-cli && npm run build --workspace=@source-repo/queue",
+        "build": "npm run build --workspace=@source-repo/rpc && npm run build --workspace=@source-repo/rpc-cli && npm run build --workspace=@source-repo/queue && npm run build --workspace=@source-repo/sparkplug",
         "clean": "npm run clean --workspaces",
-        "test": "npm run test --workspace=@source-repo/rpc && npm run test --workspace=@source-repo/rpc-cli && npm run test --workspace=@source-repo/queue",
-        "typecheck": "npm run typecheck --workspace=@source-repo/rpc && npm run typecheck --workspace=@source-repo/rpc-cli && npm run typecheck --workspace=@source-repo/queue",
+        "test": "npm run test --workspace=@source-repo/rpc && npm run test --workspace=@source-repo/rpc-cli && npm run test --workspace=@source-repo/queue && npm run test --workspace=@source-repo/sparkplug",
+        "typecheck": "npm run typecheck --workspace=@source-repo/rpc && npm run typecheck --workspace=@source-repo/rpc-cli && npm run typecheck --workspace=@source-repo/queue && npm run typecheck --workspace=@source-repo/sparkplug",
         "lint": "eslint . --max-warnings 0",
         "docs:dev": "vitepress dev docs",
         "docs:build": "vitepress build docs",
