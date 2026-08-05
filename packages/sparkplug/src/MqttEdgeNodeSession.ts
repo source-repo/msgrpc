@@ -81,7 +81,7 @@ export class MqttSparkplugEdgeNodeSession {
         const commandTopic = nodeTopic('NCMD', session)
         const primaryHostTopic = options.primaryHostId ? hostStateTopic(options.primaryHostId) : undefined
         const edge = new MqttSparkplugEdgeNodeSession(client, session, will, options.birthMetrics ?? [], primaryHostTopic, options.onPrimaryHostState)
-        await client.subscribeAsync(commandTopic, { qos: 1 })
+        await client.subscribeAsync(commandTopic, { qos: 0 })
         if (primaryHostTopic) await client.subscribeAsync(primaryHostTopic, { qos: 1 })
         client.on('message', (topic, payload) => {
             if (topic === commandTopic) {

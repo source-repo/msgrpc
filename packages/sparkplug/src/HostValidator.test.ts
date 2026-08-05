@@ -63,3 +63,31 @@ test('Host validator rejects retained node lifecycle messages', async (t) => {
 
     t.like(validator.observe({ ...birth, retain: true })[0], { code: 'retained-node-message' })
 })
+
+test('Host validator follows one sequence across Node and Device frames', async (t) => {
+    const { session, validator } = await validatorWithFrames()
+    const birth = await session.birth()
+    const deviceBirth = await session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 20 }])
+    const deviceData = await session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21 }])
+    const deviceDeath = await session.deviceDeath('pump-7')
+    if (!deviceData) throw new Error('Device data was not published')
+
+    t.deepEqual(validator.observe(birth), [])
+    t.deepEqual(validator.observe(deviceBirth), [])
+    t.deepEqual(validator.observe(deviceData), [])
+    t.deepEqual(validator.observe(deviceDeath), [])
+})
+
+test('Host validator rejects Device data before Device birth', async (t) => {
+    const { session, validator } = await validatorWithFrames()
+    const birth = await session.birth()
+    validator.observe(birth)
+
+    t.like(
+        validator.observe({
+            topic: 'spBv1.0/DDATA/plant-a/edge-01/pump-7',
+            payloadDescription: { timestamp: 1, seq: 255, metrics: [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21 }] }
+        })[0],
+        { code: 'device-data-before-birth' }
+    )
+})

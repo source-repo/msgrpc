@@ -1,4 +1,4 @@
-import { create, fromBinary, toBinary } from '@bufbuild/protobuf'
+import { create, fromBinary, isFieldSet, toBinary } from '@bufbuild/protobuf'
 import { Payload_MetricSchema, PayloadSchema, type Payload, type Payload_Metric } from './generated/sparkplug_b_pb.js'
 import { SparkplugDataType } from './Types.js'
 import type { SparkplugMetric, SparkplugPayload } from './Payload.js'
@@ -116,7 +116,7 @@ export function decodeSparkplugPayload(bytes: Uint8Array): SparkplugPayload {
     const payload = fromBinary(PayloadSchema, bytes) as Payload
     return {
         timestamp: Number(payload.timestamp),
-        seq: payload.seq === 0n ? undefined : Number(payload.seq),
+        seq: isFieldSet(payload, PayloadSchema.field.seq) ? Number(payload.seq) : undefined,
         metrics: payload.metrics.map(decodeMetric)
     }
 }

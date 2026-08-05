@@ -2,11 +2,13 @@ import { SparkplugEdgeNodeSession, type SparkplugPublishFrame } from './EdgeNode
 import { SparkplugDataType } from './Types.js'
 import type { SparkplugMetric, SparkplugMetricPrimitive } from './Payload.js'
 
-export interface SparkplugNodeMetricMapping {
+export interface SparkplugMetricMapping {
     readonly path: string
     readonly name?: string
     readonly datatype?: SparkplugDataType
 }
+
+export type SparkplugNodeMetricMapping = SparkplugMetricMapping
 
 export interface SparkplugProjectedMetric extends SparkplugMetric {
     readonly name: string
@@ -33,7 +35,7 @@ export interface SparkplugComponentProjectionStore {
     close(): Promise<void>
 }
 
-const metricName = (mapping: SparkplugNodeMetricMapping) => mapping.name ?? mapping.path
+const metricName = (mapping: SparkplugMetricMapping) => mapping.name ?? mapping.path
 
 function valueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unknown {
     let value: unknown = snapshot
@@ -75,7 +77,7 @@ function sameMetricValue(left: SparkplugMetricPrimitive | undefined, right: Spar
     return Object.is(left, right)
 }
 
-export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappings: readonly SparkplugNodeMetricMapping[]): SparkplugProjectedMetric[] {
+export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappings: readonly SparkplugMetricMapping[]): SparkplugProjectedMetric[] {
     return mappings.map((mapping) => {
         const name = metricName(mapping)
         const value = valueAtPath(snapshot, mapping.path)
@@ -85,26 +87,17 @@ export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappin
     })
 }
 
-export class SparkplugNodeMetricProjection {
-    readonly mappings: readonly SparkplugNodeMetricMapping[]
+class SparkplugMetricProjectionState {
     #latest = new Map<string, SparkplugProjectedMetric>()
 
-    constructor(
-        private readonly session: SparkplugEdgeNodeSession,
-        mappings: readonly SparkplugNodeMetricMapping[]
-    ) {
-        this.mappings = mappings
+    constructor(readonly mappings: readonly SparkplugMetricMapping[]) {}
+
+    metrics(snapshot: SparkplugProjectionSnapshot): SparkplugProjectedMetric[] {
+        return projectNodeMetrics(snapshot, this.mappings)
     }
 
-    birthMetrics(snapshot: SparkplugProjectionSnapshot): SparkplugProjectedMetric[] {
-        const metrics = projectNodeMetrics(snapshot, this.mappings)
-        this.#latest = new Map(metrics.map((metric) => [metric.name, metric]))
-        return metrics
-    }
-
-    changedMetrics(snapshot: SparkplugProjectionSnapshot): SparkplugProjectedMetric[] {
-        const metrics = projectNodeMetrics(snapshot, this.mappings)
-        const changed = metrics.filter((metric) => {
+    changed(metrics: readonly SparkplugProjectedMetric[]): SparkplugProjectedMetric[] {
+        return metrics.filter((metric) => {
             const previous = this.#latest.get(metric.name)
             return (
                 !previous ||
@@ -113,59 +106,185 @@ export class SparkplugNodeMetricProjection {
                 !sameMetricValue(previous.value, metric.value)
             )
         })
-        for (const metric of metrics) this.#latest.set(metric.name, metric)
-        return changed
+    }
+
+    published(metrics: readonly SparkplugProjectedMetric[]): void {
+        this.#latest = new Map(metrics.map((metric) => [metric.name, metric]))
+    }
+
+    clear(): void {
+        this.#latest.clear()
+    }
+}
+
+export class SparkplugNodeMetricProjection {
+    readonly #state: SparkplugMetricProjectionState
+
+    constructor(
+        private readonly session: SparkplugEdgeNodeSession,
+        mappings: readonly SparkplugMetricMapping[]
+    ) {
+        this.#state = new SparkplugMetricProjectionState(mappings)
+    }
+
+    get mappings(): readonly SparkplugMetricMapping[] {
+        return this.#state.mappings
+    }
+
+    async birth(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame> {
+        const metrics = this.#state.metrics(snapshot)
+        const frame = await this.session.birth(metrics)
+        this.#state.published(metrics)
+        return frame
+    }
+
+    changedMetrics(snapshot: SparkplugProjectionSnapshot): SparkplugProjectedMetric[] {
+        return this.#state.changed(this.#state.metrics(snapshot))
     }
 
     async publishChanges(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame | undefined> {
-        return this.session.data(this.changedMetrics(snapshot))
+        const metrics = this.#state.metrics(snapshot)
+        const frame = await this.session.data(this.#state.changed(metrics))
+        if (frame) this.#state.published(metrics)
+        return frame
+    }
+}
+
+export class SparkplugDeviceMetricProjection {
+    readonly #state: SparkplugMetricProjectionState
+
+    constructor(
+        private readonly session: SparkplugEdgeNodeSession,
+        readonly deviceId: string,
+        mappings: readonly SparkplugMetricMapping[]
+    ) {
+        this.#state = new SparkplugMetricProjectionState(mappings)
+    }
+
+    get mappings(): readonly SparkplugMetricMapping[] {
+        return this.#state.mappings
+    }
+
+    async birth(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame> {
+        const metrics = this.#state.metrics(snapshot)
+        const frame = await this.session.deviceBirth(this.deviceId, metrics)
+        this.#state.published(metrics)
+        return frame
+    }
+
+    async publishChanges(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame | undefined> {
+        const metrics = this.#state.metrics(snapshot)
+        const frame = await this.session.deviceData(this.deviceId, this.#state.changed(metrics))
+        if (frame) this.#state.published(metrics)
+        return frame
+    }
+
+    async death(): Promise<SparkplugPublishFrame> {
+        const frame = await this.session.deviceDeath(this.deviceId)
+        this.#state.clear()
+        return frame
     }
 }
 
 export interface SparkplugComponentProjectionRunnerOptions {
     readonly session: SparkplugEdgeNodeSession
+    readonly deviceId: string
     readonly store: SparkplugComponentProjectionStore
-    readonly mappings: readonly SparkplugNodeMetricMapping[]
+    readonly mappings: readonly SparkplugMetricMapping[]
 }
 
 export class SparkplugComponentProjectionRunner {
-    readonly projection: SparkplugNodeMetricProjection
+    readonly projection: SparkplugDeviceMetricProjection
     #unsubscribe?: () => void
     #latestKey?: string
+    #bornEpoch?: string
     #queue = Promise.resolve()
+    #queuedError?: unknown
 
     constructor(private readonly options: SparkplugComponentProjectionRunnerOptions) {
-        this.projection = new SparkplugNodeMetricProjection(options.session, options.mappings)
+        this.projection = new SparkplugDeviceMetricProjection(options.session, options.deviceId, options.mappings)
     }
 
-    async start(): Promise<SparkplugPublishFrame> {
+    async start(): Promise<SparkplugPublishFrame | undefined> {
         if (this.#unsubscribe) throw new Error('Sparkplug component projection is already started')
-        const snapshot = this.options.store.getSnapshot()
-        this.#latestKey = snapshotKey(snapshot)
-        const birth = await this.options.session.birth(this.projection.birthMetrics(snapshotProjectionView(snapshot)))
         this.#unsubscribe = this.options.store.subscribe(() => {
-            this.#queue = this.#queue.then(() => this.publishCurrent()).then(() => undefined)
+            void this.enqueue(this.options.store.getSnapshot()).catch(() => undefined)
         })
-        return birth
+        try {
+            return await this.enqueue(this.options.store.getSnapshot())
+        } catch (error) {
+            this.#unsubscribe?.()
+            this.#unsubscribe = undefined
+            this.#queuedError = undefined
+            throw error
+        }
     }
 
     async flush(): Promise<void> {
         await this.#queue
+        if (this.#queuedError !== undefined) {
+            const error = this.#queuedError
+            this.#queuedError = undefined
+            throw error
+        }
     }
 
     async close(): Promise<void> {
         this.#unsubscribe?.()
         this.#unsubscribe = undefined
-        await this.flush()
-        await this.options.store.close()
+        let failure: unknown
+        try {
+            await this.flush()
+        } catch (error) {
+            failure = error
+        }
+        try {
+            if (this.#bornEpoch) await this.projection.death()
+            this.#bornEpoch = undefined
+        } catch (error) {
+            failure ??= error
+        } finally {
+            await this.options.store.close()
+        }
+        if (failure !== undefined) throw failure
     }
 
-    private async publishCurrent(): Promise<SparkplugPublishFrame | undefined> {
-        const snapshot = this.options.store.getSnapshot()
+    private enqueue(snapshot: SparkplugComponentProjectionView): Promise<SparkplugPublishFrame | undefined> {
+        const operation = this.#queue.then(() => this.publishObserved(snapshot))
+        this.#queue = operation.then(
+            () => undefined,
+            (error: unknown) => {
+                this.#queuedError ??= error
+            }
+        )
+        return operation
+    }
+
+    private async publishObserved(snapshot: SparkplugComponentProjectionView): Promise<SparkplugPublishFrame | undefined> {
         const key = snapshotKey(snapshot)
         if (key === this.#latestKey) return undefined
+        const previousKey = this.#latestKey
         this.#latestKey = key
-        if (snapshot.status === 'closed') return undefined
+        try {
+            return await this.publishSnapshot(snapshot)
+        } catch (error) {
+            this.#latestKey = previousKey
+            throw error
+        }
+    }
+
+    private async publishSnapshot(snapshot: SparkplugComponentProjectionView): Promise<SparkplugPublishFrame | undefined> {
+        if (snapshot.status !== 'live') {
+            if (!this.#bornEpoch) return undefined
+            const death = await this.projection.death()
+            this.#bornEpoch = undefined
+            return death
+        }
+        if (snapshot.epoch !== this.#bornEpoch) {
+            const birth = await this.projection.birth(snapshotProjectionView(snapshot))
+            this.#bornEpoch = snapshot.epoch
+            return birth
+        }
         return this.projection.publishChanges(snapshotProjectionView(snapshot))
     }
 }

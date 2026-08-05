@@ -67,6 +67,7 @@ test.serial('mqtt: Edge Node publishes NBIRTH bytes and graceful NDEATH with the
         seen.push({ topic, payload: new Uint8Array(payload) })
     })
     await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}`, { qos: 1 })
+    await host.subscribeAsync(`spBv1.0/+/${groupId}/${edgeNodeId}/+`, { qos: 1 })
 
     const edge = await MqttSparkplugEdgeNodeSession.connect({
         url: BROKER_URL,
@@ -78,12 +79,19 @@ test.serial('mqtt: Edge Node publishes NBIRTH bytes and graceful NDEATH with the
     })
 
     await waitFor(() => seen.some((message) => message.topic.includes('/NBIRTH/')))
+    await edge.session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
+    await edge.session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 22 }])
+    await edge.session.deviceDeath('pump-7')
+    await waitFor(() => seen.some((message) => message.topic.includes('/DDEATH/')))
     await edge.close()
     await waitFor(() => seen.some((message) => message.topic.includes('/NDEATH/')))
 
     const birth = seen.find((message) => message.topic.includes('/NBIRTH/'))
     const death = seen.find((message) => message.topic.includes('/NDEATH/'))
-    if (!birth || !death) throw new Error('missing birth or death frame')
+    const deviceBirth = seen.find((message) => message.topic.includes('/DBIRTH/'))
+    const deviceData = seen.find((message) => message.topic.includes('/DDATA/'))
+    const deviceDeath = seen.find((message) => message.topic.includes('/DDEATH/'))
+    if (!birth || !death || !deviceBirth || !deviceData || !deviceDeath) throw new Error('missing Node or Device lifecycle frame')
     const birthPayload = decodeSparkplugPayload(birth.payload)
     const deathPayload = decodeSparkplugPayload(death.payload)
 
@@ -94,6 +102,10 @@ test.serial('mqtt: Edge Node publishes NBIRTH bytes and graceful NDEATH with the
     t.is(birthPayload.metrics[0]?.value, deathPayload.metrics[0]?.value)
     t.is(birthPayload.metrics[1]?.name, 'temperature')
     t.is(birthPayload.metrics[1]?.value, 21.5)
+    t.deepEqual(
+        [birth, deviceBirth, deviceData, deviceDeath].map((message) => decodeSparkplugPayload(message.payload).seq),
+        [0, 1, 2, 3]
+    )
 
     await host.endAsync()
 })
@@ -124,7 +136,7 @@ test.serial('mqtt: NCMD Node Control/Rebirth republishes NBIRTH', async (t) => {
     })
 
     await waitFor(() => births.length === 1)
-    await host.publishAsync(nodeTopic('NCMD', { groupId, edgeNodeId }), Buffer.from(encodeSparkplugPayload(nodeRebirthCommandPayload(3333))), { qos: 1 })
+    await host.publishAsync(nodeTopic('NCMD', { groupId, edgeNodeId }), Buffer.from(encodeSparkplugPayload(nodeRebirthCommandPayload(3333))), { qos: 0 })
     await waitFor(() => births.length === 2)
 
     const first = decodeSparkplugPayload(births[0]!)

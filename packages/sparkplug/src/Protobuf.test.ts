@@ -28,6 +28,12 @@ test('Sparkplug payloads encode to protobuf bytes and decode back', (t) => {
     })
 })
 
+test('sequence zero survives protobuf encoding', (t) => {
+    const decoded = decodeSparkplugPayload(encodeSparkplugPayload({ timestamp: 1234, seq: 0, metrics: [] }))
+
+    t.is(decoded.seq, 0)
+})
+
 test('the M1 encoder refuses datatypes it does not implement yet', (t) => {
     t.throws(
         () =>

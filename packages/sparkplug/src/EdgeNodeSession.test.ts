@@ -157,3 +157,97 @@ test('rebirth republishes NBIRTH with the same bdSeq and a new seq', async (t) =
     t.is(rebirthPayload.metrics[1]?.name, 'temperature')
     t.deepEqual(published, [birth, rebirth])
 })
+
+test('Device lifecycle frames share the Edge Node sequence and wrap at 255', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        seq: new SparkplugSequence(254),
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+
+    const nodeBirth = await session.birth()
+    const deviceBirth = await session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
+    const deviceData = await session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 22 }])
+    const deviceDeath = await session.deviceDeath('pump-7')
+    if (!deviceData) throw new Error('Device data was not published')
+
+    t.deepEqual(
+        [nodeBirth, deviceBirth, deviceData, deviceDeath].map((frame) => ({ type: frame.type, topic: frame.topic, seq: decodeSparkplugPayload(frame.payload).seq })),
+        [
+            { type: 'NBIRTH', topic: 'spBv1.0/NBIRTH/plant-a/edge-01', seq: 254 },
+            { type: 'DBIRTH', topic: 'spBv1.0/DBIRTH/plant-a/edge-01/pump-7', seq: 255 },
+            { type: 'DDATA', topic: 'spBv1.0/DDATA/plant-a/edge-01/pump-7', seq: 0 },
+            { type: 'DDEATH', topic: 'spBv1.0/DDEATH/plant-a/edge-01/pump-7', seq: 1 }
+        ]
+    )
+    t.deepEqual(published, [nodeBirth, deviceBirth, deviceData, deviceDeath])
+})
+
+test('Node Control/Rebirth republishes complete current Device births', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+
+    await session.birth()
+    await session.deviceBirth('pump-7', [
+        { name: 'running', datatype: SparkplugDataType.Boolean, value: true },
+        { name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }
+    ])
+    await session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 22 }])
+    const rebirth = await session.handleNodeCommand(nodeRebirthCommandPayload(9100))
+    if (!rebirth) throw new Error('rebirth command did not publish')
+
+    const deviceRebirth = published.at(-1)
+    if (!deviceRebirth) throw new Error('Device rebirth was not published')
+    const payload = decodeSparkplugPayload(deviceRebirth.payload)
+
+    t.is(rebirth.type, 'NBIRTH')
+    t.is(deviceRebirth.type, 'DBIRTH')
+    t.is(deviceRebirth.topic, 'spBv1.0/DBIRTH/plant-a/edge-01/pump-7')
+    t.deepEqual(
+        payload.metrics.map((metric) => ({ name: metric.name, value: metric.value })),
+        [
+            { name: 'running', value: true },
+            { name: 'temperature', value: 22 }
+        ]
+    )
+    t.deepEqual(published.map((frame) => decodeSparkplugPayload(frame.payload).seq), [0, 1, 2, 3, 4])
+})
+
+test('queued Device publishes cannot overtake one another', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const releases: Array<() => void> = []
+    let hold = false
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        publish: async (frame) => {
+            published.push(frame)
+            if (hold) await new Promise<void>((resolve) => releases.push(resolve))
+        }
+    })
+
+    await session.birth()
+    hold = true
+    const birth = session.deviceBirth('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 21.5 }])
+    const data = session.deviceData('pump-7', [{ name: 'temperature', datatype: SparkplugDataType.Double, value: 22 }])
+    await new Promise<void>((resolve) => setImmediate(resolve))
+
+    t.deepEqual(published.map((frame) => frame.type), ['NBIRTH', 'DBIRTH'])
+    releases.shift()?.()
+    await birth
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    t.deepEqual(published.map((frame) => frame.type), ['NBIRTH', 'DBIRTH', 'DDATA'])
+    releases.shift()?.()
+    await data
+    t.deepEqual(published.map((frame) => decodeSparkplugPayload(frame.payload).seq), [0, 1, 2])
+})

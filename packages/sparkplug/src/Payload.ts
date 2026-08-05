@@ -70,6 +70,18 @@ export function nodeDataPayload(options: { readonly timestamp: number; readonly 
     }
 }
 
+export function deviceBirthPayload(options: { readonly timestamp: number; readonly seq: number; readonly metrics: readonly SparkplugMetric[] }): SparkplugPayload {
+    return nodeDataPayload(options)
+}
+
+export function deviceDataPayload(options: { readonly timestamp: number; readonly seq: number; readonly metrics: readonly SparkplugMetric[] }): SparkplugPayload {
+    return nodeDataPayload(options)
+}
+
+export function deviceDeathPayload(options: { readonly timestamp: number; readonly seq: number }): SparkplugPayload {
+    return nodeDataPayload({ ...options, metrics: [] })
+}
+
 export function nodeDeathPayload(options: { readonly timestamp: number; readonly bdSeq: number }): SparkplugPayload {
     return {
         timestamp: options.timestamp,
