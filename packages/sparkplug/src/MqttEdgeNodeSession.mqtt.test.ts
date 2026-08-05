@@ -5,7 +5,7 @@ import { connectAsync } from 'mqtt'
 import { decodeSparkplugPayload, encodeSparkplugPayload } from './Protobuf.js'
 import { nodeRebirthCommandPayload } from './Payload.js'
 import { SparkplugBirthDeathSequence } from './Sequence.js'
-import { SparkplugDataType, encodeHostStatePayload, hostStateTopic, nodeTopic, type SparkplugHostState } from './Types.js'
+import { SparkplugDataType, deviceTopic, encodeHostStatePayload, hostStateTopic, nodeTopic, type SparkplugHostState } from './Types.js'
 import { MqttSparkplugEdgeNodeSession } from './MqttEdgeNodeSession.js'
 
 const BROKER_URL = process.env.MSGRPC_TEST_BROKER ?? 'mqtt://localhost:1883'
@@ -148,6 +148,80 @@ test.serial('mqtt: NCMD Node Control/Rebirth republishes NBIRTH', async (t) => {
     t.is(first.metrics[0]?.value, second.metrics[0]?.value)
     t.is(second.metrics[1]?.name, 'temperature')
     t.is(second.metrics[1]?.value, 19.25)
+
+    await edge.close()
+    await host.endAsync()
+})
+
+test.serial('mqtt: a missed QoS 0 DDATA converges through complete Node and Device rebirth', async (t) => {
+    if (skipWithoutBroker(t)) return
+
+    const groupId = name('source-spark-gap')
+    const edgeNodeId = name('edge')
+    const deviceId = 'pump-7'
+    const seen: { topic: string; payload: Uint8Array }[] = []
+    const host = await connectAsync(BROKER_URL, {
+        clientId: name('sparkplug-host'),
+        clean: true,
+        reconnectPeriod: 0
+    })
+    host.on('message', (topic, payload) => {
+        seen.push({ topic, payload: new Uint8Array(payload) })
+    })
+    const nBirthTopic = nodeTopic('NBIRTH', { groupId, edgeNodeId })
+    const dBirthTopic = deviceTopic('DBIRTH', { groupId, edgeNodeId, deviceId })
+    const dDataTopic = deviceTopic('DDATA', { groupId, edgeNodeId, deviceId })
+    await host.subscribeAsync(nBirthTopic, { qos: 0 })
+    await host.subscribeAsync(dBirthTopic, { qos: 0 })
+    await host.subscribeAsync(dDataTopic, { qos: 0 })
+
+    const edge = await MqttSparkplugEdgeNodeSession.connect({
+        url: BROKER_URL,
+        groupId,
+        edgeNodeId,
+        clientId: name('sparkplug-edge')
+    })
+    await waitFor(() => seen.some((message) => message.topic === nBirthTopic))
+    await edge.session.deviceBirth(deviceId, [
+        {
+            name: 'State/Temperature',
+            alias: 1,
+            timestamp: 1000,
+            datatype: SparkplugDataType.Double,
+            properties: { 'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' } },
+            value: 21.5
+        }
+    ])
+    await waitFor(() => seen.some((message) => message.topic === dBirthTopic))
+
+    await host.unsubscribeAsync(dDataTopic)
+    await edge.session.deviceData(deviceId, [{ alias: 1, timestamp: 1001, datatype: SparkplugDataType.Double, value: 22 }])
+    await host.subscribeAsync(dDataTopic, { qos: 0 })
+    await edge.session.deviceData(deviceId, [{ alias: 1, timestamp: 1002, datatype: SparkplugDataType.Double, value: 23 }])
+    await waitFor(() => seen.some((message) => message.topic === dDataTopic))
+
+    const beforeRebirth = seen.map((message) => ({ topic: message.topic, seq: decodeSparkplugPayload(message.payload).seq }))
+    t.deepEqual(beforeRebirth, [
+        { topic: nBirthTopic, seq: 0 },
+        { topic: dBirthTopic, seq: 1 },
+        { topic: dDataTopic, seq: 3 }
+    ])
+
+    await host.publishAsync(nodeTopic('NCMD', { groupId, edgeNodeId }), Buffer.from(encodeSparkplugPayload(nodeRebirthCommandPayload(2000))), { qos: 0 })
+    await waitFor(() => seen.filter((message) => message.topic === dBirthTopic).length === 2)
+
+    const rebirth = decodeSparkplugPayload(seen.filter((message) => message.topic === dBirthTopic).at(-1)!.payload)
+    t.is(rebirth.seq, 5)
+    t.deepEqual(rebirth.metrics, [
+        {
+            name: 'State/Temperature',
+            alias: 1,
+            timestamp: 1002,
+            datatype: SparkplugDataType.Double,
+            properties: { 'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' } },
+            value: 23
+        }
+    ])
 
     await edge.close()
     await host.endAsync()

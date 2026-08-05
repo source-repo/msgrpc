@@ -229,7 +229,11 @@ function mergeMetricMap(latest: Map<string, SparkplugMetric>, changes: readonly 
                       ...definition,
                       ...metric,
                       ...(metric.name === undefined && definition.name !== undefined ? { name: definition.name } : {}),
-                      ...(metric.properties === undefined && definition.properties !== undefined ? { properties: definition.properties } : {})
+                      ...(metric.properties === undefined && definition.properties !== undefined
+                          ? { properties: definition.properties }
+                          : definition.properties === undefined
+                            ? {}
+                            : { properties: { ...definition.properties, ...metric.properties } })
                   }
                 : metric
         )

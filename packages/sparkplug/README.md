@@ -10,7 +10,7 @@ The commercial product and tools around this will be named Source Spark. This pa
 
 Early M1/M2 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, observe retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, and project read-only Source RPC component snapshots as Sparkplug Devices.
 
-The component runner publishes a complete `DBIRTH` from the first live snapshot, one changed-only `DDATA` for each projected snapshot commit, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. The committed projection contract supplies the stable Device ID, metric map, datatypes, nullability, units and bounds. Its compiler normalizes the file, allocates aliases across the entire Edge Node, and hashes the normalized contract together with the Source RPC schema fragments it reads.
+The component runner publishes a complete `DBIRTH` from the first live snapshot, changed-only `DDATA`, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. Under backpressure it holds one in-flight and one latest pending snapshot per Device, then computes the coalesced diff against the last successfully handed-off state. The committed projection contract supplies the stable Device ID, metric map, datatypes, nullability, units, bounds, deadbands and maximum publish rate. Its compiler normalizes the file, allocates aliases across the entire Edge Node, and hashes the normalized contract together with the Source RPC schema fragments it reads.
 
 ## First milestone
 
@@ -29,8 +29,11 @@ The component runner publishes a complete `DBIRTH` from the first live snapshot,
 - strict, versioned `sparkplug.projection.json` validation with a published JSON Schema
 - canonical SHA-256 projection hashes including selected Source RPC contract fragments
 - deterministic Edge-wide metric aliases, alias-only DATA metrics, per-metric timestamps and birth metadata properties
+- bounded latest-wins coalescing with per-Device `maxPublishHz`, accumulated per-metric deadband and retry of a failed latest snapshot
+- explicit per-value Sparkplug `Quality` mapping while a live channel still maps to Device lifecycle (`stale` remains `DDEATH`)
+- broker-backed sequence-gap/NCMD convergence and Source RPC owner-churn identity coverage
 
-No ingestion or command mapping exists yet. The remaining M2 work includes bounded update coalescing, stale-value quality behavior, owner-churn identity tests and broker-fault convergence tests.
+No ingestion or command mapping exists yet. Remaining M2 hardening includes packet-size estimation/refusal and controlled rebirth when a running projection hash changes.
 
 ## Projection contract
 
@@ -46,15 +49,18 @@ The contract is strict: unknown fields, unsafe topic/path segments, duplicate De
         {
             "deviceId": "pump-7",
             "source": { "peer": "pump-controller", "component": "pump" },
+            "maxPublishHz": 20,
             "metrics": [
                 { "name": "Properties/Tag", "path": "props.tag", "datatype": "String" },
                 {
                     "name": "State/Temperature",
                     "path": "state.temperature",
+                    "qualityPath": "state.temperatureQuality",
                     "datatype": "Double",
                     "unit": "degC",
                     "minimum": -40,
-                    "maximum": 180
+                    "maximum": 180,
+                    "deadband": 0.1
                 }
             ]
         }
@@ -70,6 +76,10 @@ const compiled = compileSparkplugProjectionContract(JSON.parse(await readFile('s
 })
 ```
 
+`qualityPath`, when present, must resolve to `0` (BAD), `192` (GOOD), or `500` (STALE). A quality-only transition publishes DDATA even when the metric value is unchanged. This is distinct from a Source RPC component channel becoming `stale`: loss of the serving peer publishes `DDEATH` because the whole Device is no longer known live.
+
+If the local MQTT handoff rejects, the runner keeps the latest failed snapshot without advancing its diff baseline. Call `await projection.retry()` after the transport is available again. A Host that misses a QoS 0 DATA packet detects the global sequence gap and restores complete current Node and Device births through `Node Control/Rebirth`.
+
 ## Source RPC component
 
 ```ts
@@ -83,7 +93,7 @@ import {
 
 interface Pump {
     readonly props: { tag: string }
-    readonly state: { running: boolean; temperature: number }
+    readonly state: { running: boolean; temperature: number; temperatureQuality: 0 | 192 | 500 }
 }
 
 const compiled = compileSparkplugProjectionContract(projectionContract, {

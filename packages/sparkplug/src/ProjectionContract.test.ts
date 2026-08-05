@@ -11,14 +11,17 @@ const contract = {
         {
             deviceId: 'pump-7',
             source: { peer: 'pump-controller', component: 'pump' },
+            maxPublishHz: 20,
             metrics: [
                 {
                     name: 'State/Temperature',
                     path: 'state.temperature',
                     datatype: 'Double',
+                    qualityPath: 'state.temperatureQuality',
                     unit: 'degC',
                     minimum: -40,
-                    maximum: 180
+                    maximum: 180,
+                    deadband: 0.1
                 },
                 { name: 'Properties/Tag', path: 'props.tag', datatype: 'String' }
             ]
@@ -51,6 +54,9 @@ test('projection contracts normalize order and allocate aliases across the Edge 
         ]
     )
     t.regex(compiled.hash, /^[a-f0-9]{64}$/)
+    t.is(compiled.devices[1]?.maxPublishHz, 20)
+    t.is(compiled.devices[1]?.mappings[1]?.deadband, 0.1)
+    t.is(compiled.devices[1]?.mappings[1]?.qualityPath, 'state.temperatureQuality')
 })
 
 test('projection hash and aliases do not depend on authoring order', (t) => {
@@ -129,5 +135,26 @@ test('projection contracts validate metric metadata combinations', (t) => {
                 ]
             }),
         { message: /less than or equal/ }
+    )
+    t.throws(
+        () =>
+            validateSparkplugProjectionContract({
+                ...contract,
+                devices: [{ ...contract.devices[0], maxPublishHz: 0 }]
+            }),
+        { message: /greater than zero/ }
+    )
+    t.throws(
+        () =>
+            validateSparkplugProjectionContract({
+                ...contract,
+                devices: [
+                    {
+                        ...contract.devices[0],
+                        metrics: [{ name: 'Count', path: 'state.count', datatype: 'Int32', deadband: 0.5 }]
+                    }
+                ]
+            }),
+        { message: /must be an integer/ }
     )
 })

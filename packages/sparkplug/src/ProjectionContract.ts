@@ -35,11 +35,13 @@ export interface SparkplugProjectionSource {
 export interface SparkplugProjectionContractMetric {
     readonly name: string
     readonly path: `props.${string}` | `state.${string}`
+    readonly qualityPath?: `props.${string}` | `state.${string}`
     readonly datatype: SparkplugProjectionDatatype
     readonly nullable?: boolean
     readonly unit?: string
     readonly minimum?: number
     readonly maximum?: number
+    readonly deadband?: number
     readonly historical?: boolean
     readonly transient?: boolean
 }
@@ -47,6 +49,7 @@ export interface SparkplugProjectionContractMetric {
 export interface SparkplugProjectionContractDevice {
     readonly deviceId: string
     readonly source: SparkplugProjectionSource
+    readonly maxPublishHz?: number
     readonly metrics: readonly SparkplugProjectionContractMetric[]
 }
 
@@ -60,6 +63,7 @@ export interface SparkplugProjectionContract {
 export interface SparkplugCompiledDeviceProjection {
     readonly deviceId: string
     readonly source: SparkplugProjectionSource
+    readonly maxPublishHz?: number
     readonly mappings: readonly SparkplugMetricMapping[]
 }
 
@@ -108,6 +112,8 @@ const NUMERIC_DATATYPES = new Set<SparkplugProjectionDatatype>([
     'Double'
 ])
 
+const INTEGER_DATATYPES = new Set<SparkplugProjectionDatatype>(['Int8', 'Int16', 'Int32', 'Int64', 'UInt8', 'UInt16', 'UInt32', 'UInt64'])
+
 const PATH_ROOTS = new Set(['props', 'state'])
 const UNSAFE_PATH_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor'])
 const textEncoder = new TextEncoder()
@@ -128,7 +134,7 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
     const devices = devicesInput.map((value, index) => {
         const path = `contract.devices[${index}]`
         const device = objectAt(value, path)
-        exactKeys(device, ['deviceId', 'source', 'metrics'], ['deviceId', 'source', 'metrics'], path)
+        exactKeys(device, ['deviceId', 'source', 'maxPublishHz', 'metrics'], ['deviceId', 'source', 'metrics'], path)
         const deviceId = topicSegment(device.deviceId, `${path}.deviceId`)
         if (deviceIds.has(deviceId)) throw new Error(`${path}.deviceId duplicates ${JSON.stringify(deviceId)}`)
         deviceIds.add(deviceId)
@@ -137,6 +143,8 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
         exactKeys(source, ['peer', 'component'], ['peer', 'component'], `${path}.source`)
         const peer = boundedText(source.peer, `${path}.source.peer`, 256)
         const component = boundedText(source.component, `${path}.source.component`, 256)
+        const maxPublishHz = optionalFiniteNumber(device.maxPublishHz, `${path}.maxPublishHz`)
+        if (maxPublishHz !== undefined && maxPublishHz <= 0) throw new Error(`${path}.maxPublishHz must be greater than zero`)
 
         const metricsInput = arrayAt(device.metrics, `${path}.metrics`)
         if (metricsInput.length === 0) throw new Error(`${path}.metrics must contain at least one metric`)
@@ -146,7 +154,7 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             const metric = objectAt(metricValue, metricPath)
             exactKeys(
                 metric,
-                ['name', 'path', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'historical', 'transient'],
+                ['name', 'path', 'qualityPath', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'deadband', 'historical', 'transient'],
                 ['name', 'path', 'datatype'],
                 metricPath
             )
@@ -154,31 +162,38 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             if (metricNames.has(name)) throw new Error(`${metricPath}.name duplicates ${JSON.stringify(name)} in Device ${JSON.stringify(deviceId)}`)
             metricNames.add(name)
             const projectionPath = metricPathValue(metric.path, `${metricPath}.path`)
+            const qualityPath = metric.qualityPath === undefined ? undefined : metricPathValue(metric.qualityPath, `${metricPath}.qualityPath`)
             const datatype = projectionDatatype(metric.datatype, `${metricPath}.datatype`)
             const nullable = optionalBoolean(metric.nullable, `${metricPath}.nullable`)
             const unit = optionalBoundedText(metric.unit, `${metricPath}.unit`, 128)
             const minimum = optionalFiniteNumber(metric.minimum, `${metricPath}.minimum`)
             const maximum = optionalFiniteNumber(metric.maximum, `${metricPath}.maximum`)
+            const deadband = optionalFiniteNumber(metric.deadband, `${metricPath}.deadband`)
             const historical = optionalBoolean(metric.historical, `${metricPath}.historical`)
             const transient = optionalBoolean(metric.transient, `${metricPath}.transient`)
-            if ((unit !== undefined || minimum !== undefined || maximum !== undefined) && !NUMERIC_DATATYPES.has(datatype))
-                throw new Error(`${metricPath} units and bounds require a numeric datatype`)
+            if ((unit !== undefined || minimum !== undefined || maximum !== undefined || deadband !== undefined) && !NUMERIC_DATATYPES.has(datatype))
+                throw new Error(`${metricPath} units, bounds and deadband require a numeric datatype`)
             if (minimum !== undefined && maximum !== undefined && minimum > maximum)
                 throw new Error(`${metricPath}.minimum must be less than or equal to maximum`)
+            if (deadband !== undefined && deadband < 0) throw new Error(`${metricPath}.deadband must not be negative`)
+            if (deadband !== undefined && INTEGER_DATATYPES.has(datatype) && !Number.isInteger(deadband))
+                throw new Error(`${metricPath}.deadband must be an integer for ${datatype}`)
             if (historical && transient) throw new Error(`${metricPath} cannot be both historical and transient`)
             return {
                 name,
                 path: projectionPath,
+                ...(qualityPath === undefined ? {} : { qualityPath }),
                 datatype,
                 ...(nullable === undefined ? {} : { nullable }),
                 ...(unit === undefined ? {} : { unit }),
                 ...(minimum === undefined ? {} : { minimum }),
                 ...(maximum === undefined ? {} : { maximum }),
+                ...(deadband === undefined ? {} : { deadband }),
                 ...(historical === undefined ? {} : { historical }),
                 ...(transient === undefined ? {} : { transient })
             }
         })
-        return { deviceId, source: { peer, component }, metrics }
+        return { deviceId, source: { peer, component }, ...(maxPublishHz === undefined ? {} : { maxPublishHz }), metrics }
     })
     return { schema: SPARKPLUG_PROJECTION_SCHEMA_VERSION, groupId, edgeNodeId, devices }
 }
@@ -213,14 +228,17 @@ export function compileSparkplugProjectionContract(
     const devices = contract.devices.map((device): SparkplugCompiledDeviceProjection => ({
         deviceId: device.deviceId,
         source: device.source,
+        ...(device.maxPublishHz === undefined ? {} : { maxPublishHz: device.maxPublishHz }),
         mappings: device.metrics.map((metric) => ({
             path: metric.path,
+            ...(metric.qualityPath === undefined ? {} : { qualityPath: metric.qualityPath }),
             name: metric.name,
             alias: aliases.get(`${device.deviceId}\0${metric.name}`),
             datatype: DATATYPES[metric.datatype],
             nullable: metric.nullable ?? false,
             ...(metric.minimum === undefined ? {} : { minimum: metric.minimum }),
             ...(metric.maximum === undefined ? {} : { maximum: metric.maximum }),
+            ...(metric.deadband === undefined ? {} : { deadband: metric.deadband }),
             ...(metric.historical ? { isHistorical: true } : {}),
             ...(metric.transient ? { isTransient: true } : {}),
             ...(!metric.unit && metric.minimum === undefined && metric.maximum === undefined
