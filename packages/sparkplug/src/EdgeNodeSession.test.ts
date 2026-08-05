@@ -111,6 +111,40 @@ test('Node Control/Rebirth republishes NBIRTH with the same bdSeq and next seq',
     t.deepEqual(published, [birth, rebirth])
 })
 
+test('Node Control/Rebirth retains Node definitions after alias-only NDATA', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+
+    await session.birth([
+        {
+            name: 'temperature',
+            alias: 1,
+            timestamp: 1000,
+            datatype: SparkplugDataType.Double,
+            properties: { 'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' } },
+            value: 21.5
+        }
+    ])
+    await session.data([{ alias: 1, timestamp: 1001, datatype: SparkplugDataType.Double, value: 22 }])
+    await session.handleNodeCommand(nodeRebirthCommandPayload(1002))
+
+    const rebirth = decodeSparkplugPayload(published.at(-1)!.payload).metrics[1]
+    t.deepEqual(rebirth, {
+        name: 'temperature',
+        alias: 1,
+        timestamp: 1001,
+        datatype: SparkplugDataType.Double,
+        properties: { 'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' } },
+        value: 22
+    })
+})
+
 test('non-rebirth NCMD payloads are ignored', async (t) => {
     const published: SparkplugPublishFrame[] = []
     const session = new SparkplugEdgeNodeSession({

@@ -28,11 +28,13 @@
             "types": "./dist/index.d.ts",
             "default": "./dist/index.js"
         },
+        "./sparkplug.projection.schema.json": "./sparkplug.projection.schema.json",
         "./package.json": "./package.json"
     },
     "files": [
         "dist",
         "proto",
+        "sparkplug.projection.schema.json",
         "NOTICE",
         "!dist/**/*.test.*"
     ],

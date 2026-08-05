@@ -125,9 +125,11 @@ export class SparkplugEdgeNodeSession {
         if (metrics.length === 0) return undefined
         return this.enqueue(async () => {
             if (!this.#birth) throw new Error('cannot publish NDATA before NBIRTH')
+            const latest = mergeMetricMap(metricMap(this.#birthMetrics), metrics)
             const payloadDescription = nodeDataPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics })
             const frame = this.frame('NDATA', nodeTopic('NDATA', this), payloadDescription)
             await this.#publish(frame)
+            this.#birthMetrics = [...latest.values()]
             return frame
         })
     }
@@ -150,8 +152,7 @@ export class SparkplugEdgeNodeSession {
         return this.enqueue(async () => {
             if (!this.#birth) throw new Error('cannot publish DDATA before NBIRTH')
             if (!this.#bornDevices.has(deviceId)) throw new Error(`cannot publish DDATA before DBIRTH for ${deviceId}`)
-            const latest = new Map(this.#deviceMetrics.get(deviceId) ?? [])
-            for (const metric of metrics) latest.set(metricKey(metric), metric)
+            const latest = mergeMetricMap(new Map(this.#deviceMetrics.get(deviceId) ?? []), metrics)
             const payloadDescription = deviceDataPayload({ timestamp: this.#now(), seq: this.#seq.next(), metrics })
             const frame = this.frame('DDATA', deviceTopic('DDATA', { groupId: this.groupId, edgeNodeId: this.edgeNodeId, deviceId }), payloadDescription)
             await this.#publish(frame)
@@ -208,11 +209,30 @@ export class SparkplugEdgeNodeSession {
 }
 
 function metricKey(metric: SparkplugMetric): string {
-    if (metric.name !== undefined) return `name:${metric.name}`
     if (metric.alias !== undefined) return `alias:${metric.alias}`
+    if (metric.name !== undefined) return `name:${metric.name}`
     throw new Error('Sparkplug metrics need a name or alias')
 }
 
 function metricMap(metrics: readonly SparkplugMetric[]): Map<string, SparkplugMetric> {
     return new Map(metrics.map((metric) => [metricKey(metric), metric]))
+}
+
+function mergeMetricMap(latest: Map<string, SparkplugMetric>, changes: readonly SparkplugMetric[]): Map<string, SparkplugMetric> {
+    for (const metric of changes) {
+        const key = metricKey(metric)
+        const definition = latest.get(key)
+        latest.set(
+            key,
+            definition
+                ? {
+                      ...definition,
+                      ...metric,
+                      ...(metric.name === undefined && definition.name !== undefined ? { name: definition.name } : {}),
+                      ...(metric.properties === undefined && definition.properties !== undefined ? { properties: definition.properties } : {})
+                  }
+                : metric
+        )
+    }
+    return latest
 }

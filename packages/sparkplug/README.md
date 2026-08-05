@@ -10,7 +10,7 @@ The commercial product and tools around this will be named Source Spark. This pa
 
 Early M1/M2 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, observe retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, and project read-only Source RPC component snapshots as Sparkplug Devices.
 
-The component runner publishes a complete `DBIRTH` from the first live snapshot, one changed-only `DDATA` for each projected snapshot commit, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. The Device ID is supplied explicitly and is therefore independent of Source RPC owner reassignment.
+The component runner publishes a complete `DBIRTH` from the first live snapshot, one changed-only `DDATA` for each projected snapshot commit, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. The committed projection contract supplies the stable Device ID, metric map, datatypes, nullability, units and bounds. Its compiler normalizes the file, allocates aliases across the entire Edge Node, and hashes the normalized contract together with the Source RPC schema fragments it reads.
 
 ## First milestone
 
@@ -26,38 +26,84 @@ The component runner publishes a complete `DBIRTH` from the first live snapshot,
 - a direct adapter from an `RpcComponentProxy` to the projection store
 - one global queued `seq` stream across NBIRTH, DBIRTH, NDATA, DDATA and DDEATH
 - Host-side validation of shared sequence order and Device birth/data/death ordering
+- strict, versioned `sparkplug.projection.json` validation with a published JSON Schema
+- canonical SHA-256 projection hashes including selected Source RPC contract fragments
+- deterministic Edge-wide metric aliases, alias-only DATA metrics, per-metric timestamps and birth metadata properties
 
-No ingestion or command mapping exists yet. The next M2 step is the committed `sparkplug.projection.json` contract format with validation, canonical hashing, deterministic aliases, units and bounds.
+No ingestion or command mapping exists yet. The remaining M2 work includes bounded update coalescing, stale-value quality behavior, owner-churn identity tests and broker-fault convergence tests.
+
+## Projection contract
+
+The contract is strict: unknown fields, unsafe topic/path segments, duplicate Device IDs or metric names, unsupported datatypes and inconsistent bounds are rejected. `sparkplug.projection.schema.json` is published with the package for editor validation; `compileSparkplugProjectionContract` performs the additional cross-field checks and must still be used before running a projection.
+
+```json
+{
+    "$schema": "./node_modules/@source-repo/sparkplug/sparkplug.projection.schema.json",
+    "schema": 1,
+    "groupId": "plant-a",
+    "edgeNodeId": "source-rpc-gateway",
+    "devices": [
+        {
+            "deviceId": "pump-7",
+            "source": { "peer": "pump-controller", "component": "pump" },
+            "metrics": [
+                { "name": "Properties/Tag", "path": "props.tag", "datatype": "String" },
+                {
+                    "name": "State/Temperature",
+                    "path": "state.temperature",
+                    "datatype": "Double",
+                    "unit": "degC",
+                    "minimum": -40,
+                    "maximum": 180
+                }
+            ]
+        }
+    ]
+}
+```
+
+Compile the loaded JSON with only the extracted Source RPC contract fragments referenced by its metric paths. The editor-only `$schema` field is accepted and excluded from the normalized contract and hash:
+
+```ts
+const compiled = compileSparkplugProjectionContract(JSON.parse(await readFile('sparkplug.projection.json', 'utf8')), {
+    sourceContractFragments: extractedPumpContract
+})
+```
 
 ## Source RPC component
 
 ```ts
 import { RpcClient } from '@source-repo/rpc'
-import { MqttSparkplugEdgeNodeSession, SparkplugComponentProjectionRunner, sourceRpcComponentStore } from '@source-repo/sparkplug'
+import {
+    compileSparkplugProjectionContract,
+    MqttSparkplugEdgeNodeSession,
+    SparkplugComponentProjectionRunner,
+    sourceRpcComponentStore
+} from '@source-repo/sparkplug'
 
 interface Pump {
     readonly props: { tag: string }
     readonly state: { running: boolean; temperature: number }
 }
 
+const compiled = compileSparkplugProjectionContract(projectionContract, {
+    sourceContractFragments: extractedPumpContract
+})
+const device = compiled.devices[0]!
+
 const client = new RpcClient('mqtt://localhost:1883', { name: 'sparkplug-gateway' })
 await client.ready()
-const pump = await client.component<Pump>('pump', 'pump-controller')
+const pump = await client.component<Pump>(device.source.component, device.source.peer)
 const edge = await MqttSparkplugEdgeNodeSession.connect({
     url: 'mqtt://localhost:1883',
-    groupId: 'plant-a',
-    edgeNodeId: 'source-rpc-gateway'
+    groupId: compiled.contract.groupId,
+    edgeNodeId: compiled.contract.edgeNodeId
 })
 
 const projection = new SparkplugComponentProjectionRunner({
     session: edge.session,
-    deviceId: 'pump-7',
     store: sourceRpcComponentStore(pump),
-    mappings: [
-        { path: 'props.tag', name: 'Properties/Tag' },
-        { path: 'state.running', name: 'State/Running' },
-        { path: 'state.temperature', name: 'State/Temperature' }
-    ]
+    definition: device
 })
 
 await projection.start()

@@ -1,11 +1,18 @@
 import { SparkplugEdgeNodeSession, type SparkplugPublishFrame } from './EdgeNodeSession.js'
 import { SparkplugDataType } from './Types.js'
-import type { SparkplugMetric, SparkplugMetricPrimitive } from './Payload.js'
+import type { SparkplugMetric, SparkplugMetricPrimitive, SparkplugPropertySet } from './Payload.js'
 
 export interface SparkplugMetricMapping {
     readonly path: string
     readonly name?: string
+    readonly alias?: number
     readonly datatype?: SparkplugDataType
+    readonly nullable?: boolean
+    readonly minimum?: number
+    readonly maximum?: number
+    readonly isHistorical?: boolean
+    readonly isTransient?: boolean
+    readonly properties?: SparkplugPropertySet
 }
 
 export type SparkplugNodeMetricMapping = SparkplugMetricMapping
@@ -41,7 +48,7 @@ function valueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unkno
     let value: unknown = snapshot
     for (const segment of path.split('.')) {
         if (!segment) throw new Error('projection metric path must not contain an empty segment')
-        if (!value || typeof value !== 'object' || !(segment in value)) return undefined
+        if (!value || typeof value !== 'object' || !Object.hasOwn(value, segment)) return undefined
         value = (value as Record<string, unknown>)[segment]
     }
     return value
@@ -78,12 +85,36 @@ function sameMetricValue(left: SparkplugMetricPrimitive | undefined, right: Spar
 }
 
 export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappings: readonly SparkplugMetricMapping[]): SparkplugProjectedMetric[] {
+    const timestamp = typeof snapshot.receivedAt === 'number' && Number.isFinite(snapshot.receivedAt) ? snapshot.receivedAt : Date.now()
     return mappings.map((mapping) => {
         const name = metricName(mapping)
         const value = valueAtPath(snapshot, mapping.path)
-        if (value === undefined) return { name, datatype: mapping.datatype ?? SparkplugDataType.Unknown, isNull: true }
+        const definition = {
+            name,
+            ...(mapping.alias === undefined ? {} : { alias: mapping.alias }),
+            timestamp,
+            datatype: mapping.datatype ?? SparkplugDataType.Unknown,
+            ...(mapping.isHistorical === undefined ? {} : { isHistorical: mapping.isHistorical }),
+            ...(mapping.isTransient === undefined ? {} : { isTransient: mapping.isTransient }),
+            ...(mapping.properties === undefined ? {} : { properties: mapping.properties })
+        }
+        if (value === undefined) {
+            if (mapping.nullable === false) throw new Error(`cannot project ${name}: required path ${mapping.path} is missing`)
+            return { ...definition, isNull: true }
+        }
         const metricValue = assertMetricValue(name, value)
-        return { name, datatype: mapping.datatype ?? inferDatatype(name, metricValue), value: metricValue }
+        if (typeof metricValue === 'number') {
+            if (mapping.minimum !== undefined && metricValue < mapping.minimum) throw new Error(`cannot project ${name}: value is below minimum ${mapping.minimum}`)
+            if (mapping.maximum !== undefined && metricValue > mapping.maximum) throw new Error(`cannot project ${name}: value is above maximum ${mapping.maximum}`)
+        }
+        return { ...definition, datatype: mapping.datatype ?? inferDatatype(name, metricValue), value: metricValue }
+    })
+}
+
+function dataMetrics(metrics: readonly SparkplugProjectedMetric[]): SparkplugMetric[] {
+    return metrics.map((metric) => {
+        const { name, properties: _properties, ...data } = metric
+        return metric.alias === undefined ? { name, ...data } : data
     })
 }
 
@@ -144,7 +175,7 @@ export class SparkplugNodeMetricProjection {
 
     async publishChanges(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame | undefined> {
         const metrics = this.#state.metrics(snapshot)
-        const frame = await this.session.data(this.#state.changed(metrics))
+        const frame = await this.session.data(dataMetrics(this.#state.changed(metrics)))
         if (frame) this.#state.published(metrics)
         return frame
     }
@@ -174,7 +205,7 @@ export class SparkplugDeviceMetricProjection {
 
     async publishChanges(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame | undefined> {
         const metrics = this.#state.metrics(snapshot)
-        const frame = await this.session.deviceData(this.deviceId, this.#state.changed(metrics))
+        const frame = await this.session.deviceData(this.deviceId, dataMetrics(this.#state.changed(metrics)))
         if (frame) this.#state.published(metrics)
         return frame
     }
@@ -186,12 +217,21 @@ export class SparkplugDeviceMetricProjection {
     }
 }
 
-export interface SparkplugComponentProjectionRunnerOptions {
+interface SparkplugComponentProjectionRunnerCommonOptions {
     readonly session: SparkplugEdgeNodeSession
-    readonly deviceId: string
     readonly store: SparkplugComponentProjectionStore
+}
+
+export interface SparkplugDeviceProjectionDefinition {
+    readonly deviceId: string
     readonly mappings: readonly SparkplugMetricMapping[]
 }
+
+export type SparkplugComponentProjectionRunnerOptions = SparkplugComponentProjectionRunnerCommonOptions &
+    (
+        | { readonly definition: SparkplugDeviceProjectionDefinition; readonly deviceId?: never; readonly mappings?: never }
+        | { readonly definition?: never; readonly deviceId: string; readonly mappings: readonly SparkplugMetricMapping[] }
+    )
 
 export class SparkplugComponentProjectionRunner {
     readonly projection: SparkplugDeviceMetricProjection
@@ -202,7 +242,8 @@ export class SparkplugComponentProjectionRunner {
     #queuedError?: unknown
 
     constructor(private readonly options: SparkplugComponentProjectionRunnerOptions) {
-        this.projection = new SparkplugDeviceMetricProjection(options.session, options.deviceId, options.mappings)
+        const definition = options.definition ?? options
+        this.projection = new SparkplugDeviceMetricProjection(options.session, definition.deviceId, definition.mappings)
     }
 
     async start(): Promise<SparkplugPublishFrame | undefined> {

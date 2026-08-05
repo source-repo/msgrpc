@@ -34,6 +34,41 @@ test('sequence zero survives protobuf encoding', (t) => {
     t.is(decoded.seq, 0)
 })
 
+test('metric aliases, zero timestamps and custom properties survive protobuf encoding', (t) => {
+    const decoded = decodeSparkplugPayload(
+        encodeSparkplugPayload({
+            timestamp: 0,
+            metrics: [
+                {
+                    name: 'State/Temperature',
+                    alias: 0,
+                    timestamp: 0,
+                    datatype: SparkplugDataType.Double,
+                    properties: {
+                        'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' },
+                        'source-rpc/minimum': { datatype: SparkplugDataType.Double, value: -40 }
+                    },
+                    value: 21.5
+                }
+            ]
+        })
+    )
+
+    t.deepEqual(decoded.metrics, [
+        {
+            name: 'State/Temperature',
+            alias: 0,
+            timestamp: 0,
+            datatype: SparkplugDataType.Double,
+            properties: {
+                'source-rpc/minimum': { datatype: SparkplugDataType.Double, value: -40 },
+                'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' }
+            },
+            value: 21.5
+        }
+    ])
+})
+
 test('the M1 encoder refuses datatypes it does not implement yet', (t) => {
     t.throws(
         () =>

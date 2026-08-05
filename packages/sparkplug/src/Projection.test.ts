@@ -8,6 +8,7 @@ import {
     type SparkplugComponentProjectionView
 } from './Projection.js'
 import { decodeSparkplugPayload } from './Protobuf.js'
+import { compileSparkplugProjectionContract } from './ProjectionContract.js'
 import { SparkplugDataType } from './Types.js'
 
 test('projection maps explicit paths to Sparkplug metrics', (t) => {
@@ -15,7 +16,8 @@ test('projection maps explicit paths to Sparkplug metrics', (t) => {
         projectNodeMetrics(
             {
                 props: { tag: 'pump-7' },
-                state: { running: true, temperature: 21.5 }
+                state: { running: true, temperature: 21.5 },
+                receivedAt: 1234
             },
             [
                 { path: 'props.tag', name: 'Properties/Tag' },
@@ -24,17 +26,95 @@ test('projection maps explicit paths to Sparkplug metrics', (t) => {
             ]
         ),
         [
-            { name: 'Properties/Tag', datatype: SparkplugDataType.String, value: 'pump-7' },
-            { name: 'State/Running', datatype: SparkplugDataType.Boolean, value: true },
-            { name: 'State/Temperature', datatype: SparkplugDataType.Double, value: 21.5 }
+            { name: 'Properties/Tag', timestamp: 1234, datatype: SparkplugDataType.String, value: 'pump-7' },
+            { name: 'State/Running', timestamp: 1234, datatype: SparkplugDataType.Boolean, value: true },
+            { name: 'State/Temperature', timestamp: 1234, datatype: SparkplugDataType.Double, value: 21.5 }
         ]
     )
 })
 
 test('projection emits null metrics for missing mapped paths', (t) => {
-    t.deepEqual(projectNodeMetrics({}, [{ path: 'state.temperature', name: 'State/Temperature', datatype: SparkplugDataType.Double }]), [
-        { name: 'State/Temperature', datatype: SparkplugDataType.Double, isNull: true }
+    t.deepEqual(projectNodeMetrics({ receivedAt: 1234 }, [{ path: 'state.temperature', name: 'State/Temperature', datatype: SparkplugDataType.Double }]), [
+        { name: 'State/Temperature', timestamp: 1234, datatype: SparkplugDataType.Double, isNull: true }
     ])
+})
+
+test('compiled contract definitions publish full DBIRTH metrics, alias-only DDATA and complete rebirth definitions', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        now: () => 2000,
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+    const compiled = compileSparkplugProjectionContract({
+        schema: 1,
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        devices: [
+            {
+                deviceId: 'pump-7',
+                source: { peer: 'pump-controller', component: 'pump' },
+                metrics: [
+                    { name: 'Properties/Tag', path: 'props.tag', datatype: 'String' },
+                    { name: 'State/Temperature', path: 'state.temperature', datatype: 'Double', unit: 'degC', minimum: -40, maximum: 180 }
+                ]
+            }
+        ]
+    })
+    const store = new FakeComponentStore({
+        epoch: 'e1',
+        revision: 0,
+        props: { tag: 'pump-7' },
+        state: { temperature: 21.5 },
+        status: 'live',
+        receivedAt: 1001
+    })
+    const definition = compiled.devices[0]
+    if (!definition) throw new Error('compiled Device is missing')
+    const runner = new SparkplugComponentProjectionRunner({ session, store, definition })
+
+    await session.birth()
+    const birth = await runner.start()
+    if (!birth) throw new Error('runner did not publish DBIRTH')
+    store.push({ ...store.getSnapshot(), revision: 1, state: { temperature: 22 }, receivedAt: 1002 })
+    await runner.flush()
+
+    const birthMetrics = decodeSparkplugPayload(birth.payload).metrics
+    const dataMetrics = decodeSparkplugPayload(published[2]!.payload).metrics
+    t.deepEqual(
+        birthMetrics.map((metric) => ({ name: metric.name, alias: metric.alias, timestamp: metric.timestamp })),
+        [
+            { name: 'Properties/Tag', alias: 1, timestamp: 1001 },
+            { name: 'State/Temperature', alias: 2, timestamp: 1001 }
+        ]
+    )
+    t.deepEqual(birthMetrics[1]?.properties, {
+        'source-rpc/maximum': { datatype: SparkplugDataType.Double, value: 180 },
+        'source-rpc/minimum': { datatype: SparkplugDataType.Double, value: -40 },
+        'source-rpc/unit': { datatype: SparkplugDataType.String, value: 'degC' }
+    })
+    t.deepEqual(
+        dataMetrics.map((metric) => ({ name: metric.name, alias: metric.alias, timestamp: metric.timestamp, properties: metric.properties, value: metric.value })),
+        [{ name: undefined, alias: 2, timestamp: 1002, properties: undefined, value: 22 }]
+    )
+
+    await session.handleNodeCommand({
+        timestamp: 2001,
+        metrics: [{ name: 'Node Control/Rebirth', datatype: SparkplugDataType.Boolean, value: true }]
+    })
+    const rebirth = decodeSparkplugPayload(published.at(-1)!.payload)
+    t.deepEqual(
+        rebirth.metrics.map((metric) => ({ name: metric.name, alias: metric.alias, value: metric.value, hasProperties: metric.properties !== undefined })),
+        [
+            { name: 'Properties/Tag', alias: 1, value: 'pump-7', hasProperties: false },
+            { name: 'State/Temperature', alias: 2, value: 22, hasProperties: true }
+        ]
+    )
+
+    await runner.close()
 })
 
 test('node metric projection publishes NDATA only for changed metrics', async (t) => {

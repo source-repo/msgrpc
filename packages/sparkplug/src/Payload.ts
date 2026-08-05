@@ -1,6 +1,15 @@
 import { SparkplugDataType } from './Types.js'
 
 export type SparkplugMetricPrimitive = boolean | number | string | bigint | Uint8Array
+export type SparkplugPropertyPrimitive = Exclude<SparkplugMetricPrimitive, Uint8Array>
+
+export interface SparkplugPropertyValue {
+    readonly datatype: SparkplugDataType
+    readonly isNull?: boolean
+    readonly value?: SparkplugPropertyPrimitive
+}
+
+export type SparkplugPropertySet = Readonly<Record<string, SparkplugPropertyValue>>
 
 export interface SparkplugMetric {
     readonly name?: string
@@ -10,6 +19,7 @@ export interface SparkplugMetric {
     readonly isHistorical?: boolean
     readonly isTransient?: boolean
     readonly isNull?: boolean
+    readonly properties?: SparkplugPropertySet
     readonly value?: SparkplugMetricPrimitive
 }
 

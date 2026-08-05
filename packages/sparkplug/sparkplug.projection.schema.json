@@ -1,0 +1,71 @@
+{
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "$id": "https://source-repo.github.io/rpc/schemas/sparkplug.projection.schema.json",
+    "title": "Source RPC Sparkplug projection",
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["schema", "groupId", "edgeNodeId", "devices"],
+    "properties": {
+        "$schema": { "type": "string" },
+        "schema": { "const": 1 },
+        "groupId": { "$ref": "#/$defs/topicSegment" },
+        "edgeNodeId": { "$ref": "#/$defs/topicSegment" },
+        "devices": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/$defs/device" }
+        }
+    },
+    "$defs": {
+        "topicSegment": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "^[^/+#\\u0000]+$"
+        },
+        "source": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["peer", "component"],
+            "properties": {
+                "peer": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "component": { "type": "string", "minLength": 1, "maxLength": 256 }
+            }
+        },
+        "metric": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "path", "datatype"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "path": { "type": "string", "pattern": "^(props|state)\\.[^.]+(?:\\.[^.]+)*$" },
+                "datatype": {
+                    "enum": [
+                        "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+                        "Float", "Double", "Boolean", "String", "DateTime", "Text", "UUID", "Bytes", "File"
+                    ]
+                },
+                "nullable": { "type": "boolean" },
+                "unit": { "type": "string", "minLength": 1, "maxLength": 128 },
+                "minimum": { "type": "number" },
+                "maximum": { "type": "number" },
+                "historical": { "type": "boolean" },
+                "transient": { "type": "boolean" }
+            }
+        },
+        "device": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["deviceId", "source", "metrics"],
+            "properties": {
+                "deviceId": { "$ref": "#/$defs/topicSegment" },
+                "source": { "$ref": "#/$defs/source" },
+                "metrics": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "$ref": "#/$defs/metric" }
+                }
+            }
+        }
+    }
+}
