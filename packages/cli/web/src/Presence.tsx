@@ -1,4 +1,5 @@
-import { PeerChange } from './types'
+import type { PeerChange } from './types'
+import { displayNameForId } from './displayName'
 
 /**
  * Who has come and gone.
@@ -34,7 +35,7 @@ export const Presence = ({ changes, onClear }: { changes: PeerChange[]; onClear:
                 <div className="flapping">
                     {flapping.map(([peer, count]) => (
                         <p key={peer}>
-                            <span className="mono">{peer}</span> has arrived {count} times
+                            <span>{displayNameForId(peer)}</span> <span className="mono small-id">{peer}</span> has arrived {count} times
                         </p>
                     ))}
                 </div>
@@ -45,7 +46,10 @@ export const Presence = ({ changes, onClear }: { changes: PeerChange[]; onClear:
                 <div key={`${change.at}-${index}`} className={`coming ${change.state}`}>
                     <time>{new Date(change.at).toLocaleTimeString()}</time>
                     <span className="mark">{change.state === 'online' ? '+' : '−'}</span>
-                    <span className="mono">{change.peer}</span>
+                    <span className="presence-peer">
+                        <span>{displayNameForId(change.peer)}</span>
+                        <span className="mono small-id">{change.peer}</span>
+                    </span>
                     {change.link && change.link !== 'this console' && <span className="muted link">{change.link}</span>}
                 </div>
             ))}

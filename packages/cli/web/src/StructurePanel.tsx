@@ -1,4 +1,5 @@
-import { DescribedNamespace, DescribedRef, ServerDescription } from './types'
+import type { DescribedNamespace, DescribedRef, ServerDescription } from './types'
+import { namespaceDisplayName } from './displayName'
 
 /**
  * The two structures, drawn from what describe() carries: the physical tree from the parent refs,
@@ -40,8 +41,10 @@ const Node = ({
 }) => (
     <li>
         <span className="node">
-            <span className="mono">{namespace.name}</span>
-            {namespace.topology?.label && <span className="node-label">{namespace.topology.label}</span>}
+            <span className="entity-title compact">
+                <span>{namespaceDisplayName(namespace)}</span>
+                <span className="entity-id mono">{namespace.name}</span>
+            </span>
             {namespace.topology?.owner && <OwnerChip owner={namespace.topology.owner} home={home} peers={peers} onSelectPeer={onSelectPeer} />}
         </span>
         {childrenOf(namespace.name).length > 0 && (

@@ -14,6 +14,7 @@ import { Traffic, TRAFFIC_KEPT } from './Traffic'
 import { Problems } from './Problems'
 import { Presence } from './Presence'
 import { ConsoleService, DescribedEvent, NetworkProblem, PeerChange, PeerRole, PeerStructure, ServerDescription, StreamedEvent, TappedFrame, fetchConsoleName, socketPath, typeText } from './types'
+import { displayNameForId, namespaceDisplayName, peerDisplayName } from './displayName'
 
 /**
  * The page talks to the CLI over msgrpc itself, and is a peer of the network in its own right.
@@ -331,9 +332,12 @@ export const App = () => {
                  */}
                 <div className="identity">
                     <span className="muted">this page is</span>
-                    <span className="mono name" title="the peer name this page serves and calls under">
-                        {me || '…'}
-                    </span>
+                    <span className="name">{me ? displayNameForId(me) : '…'}</span>
+                    {me && (
+                        <span className="mono small-id" title="the peer name this page serves and calls under">
+                            {me}
+                        </span>
+                    )}
                 </div>
                 <header>
                     <h1>Peers</h1>
@@ -361,8 +365,9 @@ export const App = () => {
                             >
                                 <span className={`dot${offline.has(name) ? ' off' : ''}`} />
                                 <span className="peer-lines">
-                                    <span>
-                                        {name}
+                                    <span className="peer-primary">
+                                        <span className="peer-display">{peerDisplayName(name, structure[name])}</span>
+                                        <span className="peer-id mono">{name}</span>
                                         {name === me && <span className="you">you</span>}
                                         {/* Which peer to select. The tab count says a message is
                                             waiting; without this you would have to click through
@@ -377,10 +382,9 @@ export const App = () => {
                                             thing worth knowing about a peer. */}
                                         {links[name] && links[name] !== 'this console' && <span className="link">{links[name]}</span>}
                                     </span>
-                                    {(structure[name]?.place || structure[name]?.label) && (
+                                    {structure[name]?.place && (
                                         <span className="peer-place">
                                             {structure[name]?.place?.join(' / ') ?? ''}
-                                            {structure[name]?.label ? `  ${structure[name].label}` : ''}
                                         </span>
                                     )}
                                 </span>
@@ -410,7 +414,10 @@ export const App = () => {
                 {description && (
                     <>
                         <header className="peer-head">
-                            <h1>{description.name}</h1>
+                            <h1>
+                                <span>{peerDisplayName(description.name, structure[description.name])}</span>
+                                <span className="entity-id mono">{description.name}</span>
+                            </h1>
                             <span className="muted">
                                 {description.version ? `contract ${description.version} · ` : ''}
                                 {description.validating ? 'arguments checked' : 'arguments not checked'}
@@ -420,7 +427,10 @@ export const App = () => {
                         {description.namespaces.map((namespace) => (
                             <section key={namespace.name} className="namespace">
                                 <h2>
-                                    {namespace.name}
+                                    <span className="entity-title">
+                                        <span>{namespaceDisplayName(namespace)}</span>
+                                        <span className="entity-id mono">{namespace.name}</span>
+                                    </span>
                                     {namespace.version && <span className="badge">@{namespace.version}</span>}
                                     <span className="muted mono">
                                         {namespace.className}
