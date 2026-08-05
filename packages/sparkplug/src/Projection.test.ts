@@ -1,6 +1,6 @@
 import test from 'ava'
 import { SparkplugEdgeNodeSession, type SparkplugPublishFrame } from './EdgeNodeSession.js'
-import { SparkplugNodeMetricProjection, projectNodeMetrics } from './Projection.js'
+import { SparkplugComponentProjectionRunner, SparkplugNodeMetricProjection, projectNodeMetrics, type SparkplugComponentProjectionView } from './Projection.js'
 import { decodeSparkplugPayload } from './Protobuf.js'
 import { SparkplugDataType } from './Types.js'
 
@@ -61,4 +61,89 @@ test('node metric projection publishes NDATA only for changed metrics', async (t
         [{ name: 'State/Temperature', datatype: SparkplugDataType.Double, value: 22 }]
     )
     t.deepEqual(published, [birth, changed])
+})
+
+class FakeComponentStore {
+    #snapshot: SparkplugComponentProjectionView
+    #listeners = new Set<() => void>()
+    closed = false
+
+    constructor(snapshot: SparkplugComponentProjectionView) {
+        this.#snapshot = snapshot
+    }
+
+    getSnapshot(): SparkplugComponentProjectionView {
+        return this.#snapshot
+    }
+
+    subscribe(listener: () => void): () => void {
+        this.#listeners.add(listener)
+        return () => this.#listeners.delete(listener)
+    }
+
+    async close(): Promise<void> {
+        this.closed = true
+    }
+
+    push(snapshot: SparkplugComponentProjectionView): void {
+        this.#snapshot = snapshot
+        for (const listener of this.#listeners) listener()
+    }
+}
+
+test('component projection runner births from the first snapshot and publishes one NDATA per changed revision', async (t) => {
+    const published: SparkplugPublishFrame[] = []
+    const session = new SparkplugEdgeNodeSession({
+        groupId: 'plant-a',
+        edgeNodeId: 'edge-01',
+        now: () => 1000,
+        publish: (frame) => {
+            published.push(frame)
+        }
+    })
+    const store = new FakeComponentStore({
+        epoch: 'e1',
+        revision: 0,
+        props: { tag: 'pump-7' },
+        state: { running: true, temperature: 21.5 },
+        status: 'live'
+    })
+    const runner = new SparkplugComponentProjectionRunner({
+        session,
+        store,
+        mappings: [
+            { path: 'props.tag', name: 'Properties/Tag' },
+            { path: 'state.running', name: 'State/Running' },
+            { path: 'state.temperature', name: 'State/Temperature' }
+        ]
+    })
+
+    const birth = await runner.start()
+    store.push({
+        epoch: 'e1',
+        revision: 1,
+        props: { tag: 'pump-7' },
+        state: { running: true, temperature: 22 },
+        status: 'live'
+    })
+    await runner.flush()
+
+    const data = published[1]
+    if (!data) throw new Error('runner did not publish NDATA')
+    const birthPayload = decodeSparkplugPayload(birth.payload)
+    const dataPayload = decodeSparkplugPayload(data.payload)
+
+    t.is(birth.type, 'NBIRTH')
+    t.is(data.type, 'NDATA')
+    t.deepEqual(
+        birthPayload.metrics.map((metric) => metric.name),
+        ['bdSeq', 'Properties/Tag', 'State/Running', 'State/Temperature']
+    )
+    t.deepEqual(
+        dataPayload.metrics.map((metric) => ({ name: metric.name, value: metric.value })),
+        [{ name: 'State/Temperature', value: 22 }]
+    )
+
+    await runner.close()
+    t.true(store.closed)
 })

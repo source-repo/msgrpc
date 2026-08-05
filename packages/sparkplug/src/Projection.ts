@@ -15,6 +15,24 @@ export interface SparkplugProjectedMetric extends SparkplugMetric {
 
 export type SparkplugProjectionSnapshot = Record<string, unknown>
 
+export type SparkplugComponentProjectionStatus = 'initializing' | 'live' | 'stale' | 'closed'
+
+export interface SparkplugComponentProjectionView {
+    readonly epoch: string
+    readonly revision: number
+    readonly props: Record<string, unknown>
+    readonly state: Record<string, unknown>
+    readonly status: SparkplugComponentProjectionStatus
+    readonly receivedAt?: number
+    readonly staleSince?: number
+}
+
+export interface SparkplugComponentProjectionStore {
+    getSnapshot(): SparkplugComponentProjectionView
+    subscribe(listener: () => void): () => void
+    close(): Promise<void>
+}
+
 const metricName = (mapping: SparkplugNodeMetricMapping) => mapping.name ?? mapping.path
 
 function valueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unknown {
@@ -101,5 +119,69 @@ export class SparkplugNodeMetricProjection {
 
     async publishChanges(snapshot: SparkplugProjectionSnapshot): Promise<SparkplugPublishFrame | undefined> {
         return this.session.data(this.changedMetrics(snapshot))
+    }
+}
+
+export interface SparkplugComponentProjectionRunnerOptions {
+    readonly session: SparkplugEdgeNodeSession
+    readonly store: SparkplugComponentProjectionStore
+    readonly mappings: readonly SparkplugNodeMetricMapping[]
+}
+
+export class SparkplugComponentProjectionRunner {
+    readonly projection: SparkplugNodeMetricProjection
+    #unsubscribe?: () => void
+    #latestKey?: string
+    #queue = Promise.resolve()
+
+    constructor(private readonly options: SparkplugComponentProjectionRunnerOptions) {
+        this.projection = new SparkplugNodeMetricProjection(options.session, options.mappings)
+    }
+
+    async start(): Promise<SparkplugPublishFrame> {
+        if (this.#unsubscribe) throw new Error('Sparkplug component projection is already started')
+        const snapshot = this.options.store.getSnapshot()
+        this.#latestKey = snapshotKey(snapshot)
+        const birth = await this.options.session.birth(this.projection.birthMetrics(snapshotProjectionView(snapshot)))
+        this.#unsubscribe = this.options.store.subscribe(() => {
+            this.#queue = this.#queue.then(() => this.publishCurrent()).then(() => undefined)
+        })
+        return birth
+    }
+
+    async flush(): Promise<void> {
+        await this.#queue
+    }
+
+    async close(): Promise<void> {
+        this.#unsubscribe?.()
+        this.#unsubscribe = undefined
+        await this.flush()
+        await this.options.store.close()
+    }
+
+    private async publishCurrent(): Promise<SparkplugPublishFrame | undefined> {
+        const snapshot = this.options.store.getSnapshot()
+        const key = snapshotKey(snapshot)
+        if (key === this.#latestKey) return undefined
+        this.#latestKey = key
+        if (snapshot.status === 'closed') return undefined
+        return this.projection.publishChanges(snapshotProjectionView(snapshot))
+    }
+}
+
+function snapshotKey(snapshot: SparkplugComponentProjectionView): string {
+    return `${snapshot.status}:${snapshot.epoch}:${snapshot.revision}`
+}
+
+function snapshotProjectionView(snapshot: SparkplugComponentProjectionView): SparkplugProjectionSnapshot {
+    return {
+        epoch: snapshot.epoch,
+        revision: snapshot.revision,
+        props: snapshot.props,
+        state: snapshot.state,
+        status: snapshot.status,
+        ...(snapshot.receivedAt === undefined ? {} : { receivedAt: snapshot.receivedAt }),
+        ...(snapshot.staleSince === undefined ? {} : { staleSince: snapshot.staleSince })
     }
 }

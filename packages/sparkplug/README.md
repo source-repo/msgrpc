@@ -8,7 +8,7 @@ The commercial product and tools around this will be named Source Spark. This pa
 
 ## Status
 
-Early M1/M2 substrate. It can encode Sparkplug payloads, publish a minimal Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD by republishing NBIRTH, observe retained/live Primary Host `STATE`, validate basic Host-side lifecycle rules and project a small read-only value shape into Node metrics with NDATA-by-diff. No live Source RPC component subscription yet, no ingestion yet, and no command mapping yet.
+Early M1/M2 substrate. It can encode Sparkplug payloads, publish a minimal Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD by republishing NBIRTH, observe retained/live Primary Host `STATE`, validate basic Host-side lifecycle rules and project read-only component snapshots into Node metrics with NDATA-by-diff. No Device-level projection yet, no ingestion yet, and no command mapping yet.
 
 ## First milestone
 
@@ -20,5 +20,6 @@ Early M1/M2 substrate. It can encode Sparkplug payloads, publish a minimal Edge 
 - tests for topic validation, `seq` wrap, `bdSeq` reuse, broker-backed NBIRTH/NDEATH delivery, broker-backed `Node Control/Rebirth`, retained/live Host `STATE`, graceful reconnect `bdSeq` advance and ungraceful Will delivery
 - first Host-side validator for NBIRTH/NDEATH ordering, `bdSeq`, rebirth `seq` and retained lifecycle message checks
 - first read-only Node metric projection helper: explicit paths to Sparkplug metrics, initial NBIRTH metrics and changed-only NDATA
+- component-store projection runner for Source RPC-style snapshots (`props`, `state`, `status`, `epoch`, `revision`)
 
-The next step is wiring the projection helper to a live Source RPC component channel, then adding Device-level DBIRTH/DDATA.
+The next step is adapting the runner to the concrete `@source-repo/rpc` component proxy surface, then adding Device-level DBIRTH/DDATA.
