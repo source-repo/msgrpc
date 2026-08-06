@@ -39,6 +39,8 @@ export interface NetworkOptions {
      * peer that exposes nothing into a peer that exposes something worth guarding.
      */
     authorize?: RpcAuthorizer
+    /** Publish `msgrpc.describe` for commands that expose a discoverable service. */
+    exposeIntrospection?: boolean
     /**
      * Given the server to expose things on, before `ready()` is awaited.
      *
@@ -115,6 +117,7 @@ export const connectNetwork = async (options: NetworkOptions): Promise<Connected
         callTimeout: options.callTimeout,
         readyTimeout: 15000,
         transports: networkTransports(options),
+        ...(options.exposeIntrospection ? { exposeIntrospection: true } : {}),
         ...(options.authorize ? { authorize: options.authorize } : {})
     })
     options.expose?.(network)

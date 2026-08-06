@@ -9,6 +9,7 @@ import { dirname, resolve } from 'node:path'
 import { connectAsync } from 'mqtt'
 import { writeFileSync } from 'node:fs'
 import { createDerivedAuthenticator, createHmacSigner, createHmacVerifier, createTokenAuthenticator, mintDerivedCredential, MqttTransport, RpcServer } from '@source-repo/rpc'
+import { startNode } from './node.js'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
 import { ScriptRunner, saveScript } from './scripts.js'
 
@@ -365,6 +366,36 @@ test('a node that names nobody offers no scripting namespace at all', async (t) 
     await bench.close()
     await bus.close()
     rmSync(nodeDirectory, { recursive: true, force: true })
+})
+
+test('a node publishes the scripting contract it offers', async (t) => {
+    const directory = scriptsDir()
+    const bus = new RpcServer({ name: peer('contractBus'), transports: [{ port: 7575, host: '127.0.0.1' }] })
+    await bus.ready()
+
+    const node = await startNode({
+        name: peer('contractNode'),
+        hub: 'http://127.0.0.1:7575',
+        callTimeout: 5000,
+        scripts: directory,
+        scriptableBy: [peer('contractBench')]
+    })
+    const bench = new RpcServer({
+        name: peer('contractBench'),
+        transports: [{ connect: 'http://127.0.0.1:7575' }],
+        readyTimeout: 10000
+    })
+    await bench.ready()
+    t.true(await bench.awaitPeer(peer('contractNode'), 10000))
+
+    const introspection = await bench.proxy<{ describe(): Promise<{ namespaces: { name: string }[] }> }>('msgrpc', peer('contractNode'))
+    const described = await introspection.describe()
+    t.true(described.namespaces.some((namespace) => namespace.name === 'scripting'))
+
+    await bench.close()
+    await node.close()
+    await bus.close()
+    rmSync(directory, { recursive: true, force: true })
 })
 
 test('a node command is scriptable and nothing else, and says so when it cannot be', async (t) => {

@@ -45,6 +45,7 @@ export const startNode = async (options: NodeOptions) => {
     const connected = await connectNetwork({
         ...options,
         authorize: scriptingAuthorizer({ directory: options.scripts, allow: options.scriptableBy }),
+        exposeIntrospection: true,
         // Before ready(), because a resumed MQTT session is handed its queue the moment it connects
         // and a request that arrives before the namespace exists is answered ClassNotFound by a peer
         // that serves it perfectly well a second later.
