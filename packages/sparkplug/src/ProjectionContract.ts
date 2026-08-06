@@ -35,6 +35,15 @@ export interface SparkplugProjectionSource {
     readonly component: string
 }
 
+export interface SparkplugProjectionWritableMetric {
+    /** The one Source RPC method this metric may invoke. */
+    readonly method: string
+    /** Total receive-to-confirm deadline for one command. */
+    readonly deadlineMs: number
+    /** Per-metric boundary limit. Commands above this rate are refused before RPC. */
+    readonly maxCommandsPerSecond: number
+}
+
 export interface SparkplugProjectionContractMetric {
     readonly name: string
     readonly path: `props.${string}` | `state.${string}`
@@ -48,6 +57,7 @@ export interface SparkplugProjectionContractMetric {
     readonly maxBytes?: number
     readonly historical?: boolean
     readonly transient?: boolean
+    readonly writable?: SparkplugProjectionWritableMetric
 }
 
 export interface SparkplugProjectionContractDevice {
@@ -70,6 +80,19 @@ export interface SparkplugCompiledDeviceProjection {
     readonly source: SparkplugProjectionSource
     readonly maxPublishHz?: number
     readonly mappings: readonly SparkplugMetricMapping[]
+    readonly writable: readonly SparkplugCompiledWritableMetric[]
+}
+
+export interface SparkplugCompiledWritableMetric extends SparkplugProjectionWritableMetric {
+    readonly name: string
+    readonly path: `state.${string}`
+    readonly alias: number
+    readonly datatype: SparkplugProjectionDatatype
+    readonly sparkplugDatatype: SparkplugDataType
+    readonly unit?: string
+    readonly minimum?: number
+    readonly maximum?: number
+    readonly maxBytes?: number
 }
 
 export interface SparkplugCompiledProjectionContract {
@@ -175,7 +198,7 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             const metric = objectAt(metricValue, metricPath)
             exactKeys(
                 metric,
-                ['name', 'path', 'qualityPath', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'deadband', 'maxBytes', 'historical', 'transient'],
+                ['name', 'path', 'qualityPath', 'datatype', 'nullable', 'unit', 'minimum', 'maximum', 'deadband', 'maxBytes', 'historical', 'transient', 'writable'],
                 ['name', 'path', 'datatype'],
                 metricPath
             )
@@ -208,6 +231,26 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
             if (maxBytes !== undefined && (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > maxPacketBytes))
                 throw new Error(`${metricPath}.maxBytes must be a positive safe integer no greater than maxPacketBytes`)
             if (historical && transient) throw new Error(`${metricPath} cannot be both historical and transient`)
+            let writable: SparkplugProjectionWritableMetric | undefined
+            if (metric.writable !== undefined) {
+                const command = objectAt(metric.writable, `${metricPath}.writable`)
+                exactKeys(command, ['method', 'deadlineMs', 'maxCommandsPerSecond'], ['method', 'deadlineMs', 'maxCommandsPerSecond'], `${metricPath}.writable`)
+                const method = rpcMethodName(command.method, `${metricPath}.writable.method`)
+                const deadlineMs = requiredFiniteNumber(command.deadlineMs, `${metricPath}.writable.deadlineMs`)
+                if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= 0 || deadlineMs > 60_000)
+                    throw new Error(`${metricPath}.writable.deadlineMs must be a positive safe integer no greater than 60000`)
+                const maxCommandsPerSecond = requiredFiniteNumber(command.maxCommandsPerSecond, `${metricPath}.writable.maxCommandsPerSecond`)
+                if (maxCommandsPerSecond <= 0 || maxCommandsPerSecond > 1000)
+                    throw new Error(`${metricPath}.writable.maxCommandsPerSecond must be greater than zero and no greater than 1000`)
+                if (!projectionPath.startsWith('state.')) throw new Error(`${metricPath}.writable requires a reported state.* path`)
+                if (nullable === true) throw new Error(`${metricPath}.writable cannot be nullable`)
+                if (datatype === 'DateTime') throw new Error(`${metricPath}.writable does not support DateTime commands in schema 1`)
+                if (NUMERIC_DATATYPES.has(datatype) && (minimum === undefined || maximum === undefined))
+                    throw new Error(`${metricPath}.writable numeric metrics require minimum and maximum bounds`)
+                if (NUMERIC_DATATYPES.has(datatype) && INTEGER_DATATYPES.has(datatype) && (!Number.isInteger(minimum) || !Number.isInteger(maximum)))
+                    throw new Error(`${metricPath}.writable integer bounds must be integers`)
+                writable = { method, deadlineMs, maxCommandsPerSecond }
+            }
             return {
                 name,
                 path: projectionPath,
@@ -220,9 +263,17 @@ export function validateSparkplugProjectionContract(input: unknown): SparkplugPr
                 ...(deadband === undefined ? {} : { deadband }),
                 ...(maxBytes === undefined ? {} : { maxBytes }),
                 ...(historical === undefined ? {} : { historical }),
-                ...(transient === undefined ? {} : { transient })
+                ...(transient === undefined ? {} : { transient }),
+                ...(writable === undefined ? {} : { writable })
             }
         })
+        const writableMethods = new Set<string>()
+        for (const [metricIndex, metric] of metrics.entries()) {
+            if (!metric.writable) continue
+            if (writableMethods.has(metric.writable.method))
+                throw new Error(`${path}.metrics[${metricIndex}].writable.method duplicates ${JSON.stringify(metric.writable.method)} in Device ${JSON.stringify(deviceId)}`)
+            writableMethods.add(metric.writable.method)
+        }
         return { deviceId, source: { peer, component }, ...(maxPublishHz === undefined ? {} : { maxPublishHz }), metrics }
     })
     return { schema: SPARKPLUG_PROJECTION_SCHEMA_VERSION, groupId, edgeNodeId, maxPacketBytes, devices }
@@ -255,11 +306,8 @@ export function compileSparkplugProjectionContract(
     for (const device of contract.devices) {
         for (const metric of device.metrics) aliases.set(`${device.deviceId}\0${metric.name}`, alias++)
     }
-    const devices = contract.devices.map((device): SparkplugCompiledDeviceProjection => ({
-        deviceId: device.deviceId,
-        source: device.source,
-        ...(device.maxPublishHz === undefined ? {} : { maxPublishHz: device.maxPublishHz }),
-        mappings: device.metrics.map((metric) => ({
+    const devices = contract.devices.map((device): SparkplugCompiledDeviceProjection => {
+        const mappings = device.metrics.map((metric): SparkplugMetricMapping => ({
             path: metric.path,
             ...(metric.qualityPath === undefined ? {} : { qualityPath: metric.qualityPath }),
             name: metric.name,
@@ -288,7 +336,32 @@ export function compileSparkplugProjectionContract(
                       }
                   })
         }))
-    }))
+        const writable = device.metrics.flatMap((metric): SparkplugCompiledWritableMetric[] =>
+            metric.writable
+                ? [
+                      {
+                          name: metric.name,
+                          path: metric.path as `state.${string}`,
+                          alias: aliases.get(`${device.deviceId}\0${metric.name}`)!,
+                          datatype: metric.datatype,
+                          sparkplugDatatype: DATATYPES[metric.datatype],
+                          ...(metric.unit === undefined ? {} : { unit: metric.unit }),
+                          ...(metric.minimum === undefined ? {} : { minimum: metric.minimum }),
+                          ...(metric.maximum === undefined ? {} : { maximum: metric.maximum }),
+                          ...(metric.maxBytes === undefined ? {} : { maxBytes: metric.maxBytes }),
+                          ...metric.writable
+                      }
+                  ]
+                : []
+        )
+        return {
+            deviceId: device.deviceId,
+            source: device.source,
+            ...(device.maxPublishHz === undefined ? {} : { maxPublishHz: device.maxPublishHz }),
+            mappings,
+            writable
+        }
+    })
     const packetEstimates = devices.map((device) => estimateDevicePackets(contract, device))
     for (const estimate of packetEstimates) {
         const largest = Math.max(estimate.dbirthBytes, estimate.ddataBytes)
@@ -441,6 +514,19 @@ function optionalFiniteNumber(value: unknown, path: string): number | undefined 
     if (value === undefined) return undefined
     if (typeof value !== 'number' || !Number.isFinite(value)) throw new Error(`${path} must be a finite number`)
     return value
+}
+
+function requiredFiniteNumber(value: unknown, path: string): number {
+    const parsed = optionalFiniteNumber(value, path)
+    if (parsed === undefined) throw new Error(`${path} is required`)
+    return parsed
+}
+
+function rpcMethodName(value: unknown, path: string): string {
+    const name = boundedText(value, path, 256)
+    if (!/^[A-Za-z_$][A-Za-z0-9_$]*$/u.test(name) || name === '$with' || UNSAFE_PATH_SEGMENTS.has(name))
+        throw new Error(`${path} must be a safe Source RPC method name`)
+    return name
 }
 
 function assertJsonValue(value: unknown, path: string): void {

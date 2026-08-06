@@ -178,6 +178,80 @@ test('projection contracts validate metric metadata combinations', (t) => {
     )
 })
 
+test('writable metrics compile into an explicit allowlist and read-only remains first class', (t) => {
+    const compiled = compileSparkplugProjectionContract({
+        ...contract,
+        devices: contract.devices.map((device) =>
+            device.deviceId === 'pump-7'
+                ? {
+                      ...device,
+                      metrics: device.metrics.map((metric) =>
+                          metric.name === 'State/Temperature'
+                              ? { ...metric, writable: { method: 'setTemperature', deadlineMs: 3000, maxCommandsPerSecond: 2 } }
+                              : metric
+                      )
+                  }
+                : device
+        )
+    })
+
+    t.deepEqual(compiled.devices[0]?.writable, [])
+    t.deepEqual(compiled.devices[1]?.writable, [
+        {
+            name: 'State/Temperature',
+            path: 'state.temperature',
+            alias: 3,
+            datatype: 'Double',
+            sparkplugDatatype: SparkplugDataType.Double,
+            unit: 'degC',
+            minimum: -40,
+            maximum: 180,
+            method: 'setTemperature',
+            deadlineMs: 3000,
+            maxCommandsPerSecond: 2
+        }
+    ])
+})
+
+test('writable metrics fail closed on unsafe mappings', (t) => {
+    const writableMetric = {
+        name: 'State/Temperature',
+        path: 'state.temperature',
+        datatype: 'Double',
+        minimum: -40,
+        maximum: 180,
+        writable: { method: 'setTemperature', deadlineMs: 3000, maxCommandsPerSecond: 2 }
+    }
+    const validateMetric = (metric: object) =>
+        validateSparkplugProjectionContract({
+            schema: 1,
+            groupId: 'plant-a',
+            edgeNodeId: 'edge-01',
+            devices: [{ deviceId: 'pump-7', source: { peer: 'pump-controller', component: 'pump' }, metrics: [metric] }]
+        })
+
+    t.throws(() => validateMetric({ ...writableMetric, path: 'props.temperature' }), { message: /reported state/ })
+    t.throws(() => validateMetric({ ...writableMetric, minimum: undefined }), { message: /require minimum and maximum/ })
+    t.throws(() => validateMetric({ ...writableMetric, nullable: true }), { message: /cannot be nullable/ })
+    t.throws(() => validateMetric({ ...writableMetric, writable: { ...writableMetric.writable, method: '$with' } }), { message: /safe Source RPC method/ })
+    t.throws(
+        () =>
+            validateSparkplugProjectionContract({
+                schema: 1,
+                groupId: 'plant-a',
+                edgeNodeId: 'edge-01',
+                devices: [
+                    {
+                        deviceId: 'pump-7',
+                        source: { peer: 'pump-controller', component: 'pump' },
+                        metrics: [writableMetric, { ...writableMetric, name: 'State/BackupTemperature', path: 'state.backupTemperature' }]
+                    }
+                ]
+            }),
+        { message: /duplicates "setTemperature"/ }
+    )
+})
+
 test('projection compilation refuses a Device whose complete snapshot cannot fit one packet', (t) => {
     t.throws(
         () =>

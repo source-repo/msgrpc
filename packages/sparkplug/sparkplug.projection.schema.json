@@ -48,6 +48,25 @@
                         "required": ["datatype"]
                     },
                     "then": { "not": { "required": ["maxBytes"] } }
+                },
+                {
+                    "if": { "required": ["writable"] },
+                    "then": {
+                        "properties": {
+                            "path": { "type": "string", "pattern": "^state\\.[^.]+(?:\\.[^.]+)*$" },
+                            "nullable": { "const": false },
+                            "datatype": { "not": { "const": "DateTime" } }
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "required": ["writable", "datatype"],
+                        "properties": {
+                            "datatype": { "enum": ["Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float", "Double"] }
+                        }
+                    },
+                    "then": { "required": ["minimum", "maximum"] }
                 }
             ],
             "properties": {
@@ -67,7 +86,23 @@
                 "deadband": { "type": "number", "minimum": 0 },
                 "maxBytes": { "type": "integer", "minimum": 1 },
                 "historical": { "type": "boolean" },
-                "transient": { "type": "boolean" }
+                "transient": { "type": "boolean" },
+                "writable": { "$ref": "#/$defs/writable" }
+            }
+        },
+        "writable": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["method", "deadlineMs", "maxCommandsPerSecond"],
+            "properties": {
+                "method": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "^(?!(?:\\$with|__proto__|prototype|constructor)$)[A-Za-z_$][A-Za-z0-9_$]*$"
+                },
+                "deadlineMs": { "type": "integer", "minimum": 1, "maximum": 60000 },
+                "maxCommandsPerSecond": { "type": "number", "exclusiveMinimum": 0, "maximum": 1000 }
             }
         },
         "device": {

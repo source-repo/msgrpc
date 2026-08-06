@@ -48,7 +48,7 @@ export interface SparkplugComponentProjectionStore {
 const metricName = (mapping: SparkplugMetricMapping) => mapping.name ?? mapping.path
 const textEncoder = new TextEncoder()
 
-function valueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unknown {
+export function sparkplugValueAtPath(snapshot: SparkplugProjectionSnapshot, path: string): unknown {
     let value: unknown = snapshot
     for (const segment of path.split('.')) {
         if (!segment) throw new Error('projection metric path must not contain an empty segment')
@@ -90,7 +90,7 @@ function sameMetricValue(left: SparkplugMetricPrimitive | undefined, right: Spar
 
 function metricProperties(snapshot: SparkplugProjectionSnapshot, mapping: SparkplugMetricMapping, name: string): SparkplugPropertySet | undefined {
     if (!mapping.qualityPath) return mapping.properties
-    const quality = valueAtPath(snapshot, mapping.qualityPath)
+    const quality = sparkplugValueAtPath(snapshot, mapping.qualityPath)
     if (quality !== SparkplugQuality.BAD && quality !== SparkplugQuality.GOOD && quality !== SparkplugQuality.STALE)
         throw new Error(`cannot project ${name}: ${mapping.qualityPath} must be Sparkplug Quality 0, 192 or 500`)
     return {
@@ -103,7 +103,7 @@ export function projectNodeMetrics(snapshot: SparkplugProjectionSnapshot, mappin
     const timestamp = typeof snapshot.receivedAt === 'number' && Number.isFinite(snapshot.receivedAt) ? snapshot.receivedAt : Date.now()
     return mappings.map((mapping) => {
         const name = metricName(mapping)
-        const value = valueAtPath(snapshot, mapping.path)
+        const value = sparkplugValueAtPath(snapshot, mapping.path)
         const properties = metricProperties(snapshot, mapping, name)
         const definition = {
             name,
@@ -169,6 +169,24 @@ class SparkplugMetricProjectionState {
     published(metrics: readonly SparkplugProjectedMetric[], replace = false): void {
         if (replace) this.#latest.clear()
         for (const metric of metrics) this.#latest.set(metric.name, metric)
+    }
+
+    current(snapshot: SparkplugProjectionSnapshot, name: string): SparkplugProjectedMetric {
+        const mapping = this.#mappingsByName.get(name)
+        if (!mapping) throw new Error(`Sparkplug projection has no metric ${JSON.stringify(name)}`)
+        return projectNodeMetrics(snapshot, [mapping])[0]!
+    }
+
+    isPublished(snapshot: SparkplugProjectionSnapshot, name: string): boolean {
+        const metric = this.current(snapshot, name)
+        const previous = this.#latest.get(name)
+        return (
+            previous !== undefined &&
+            previous.datatype === metric.datatype &&
+            previous.isNull === metric.isNull &&
+            sameMetricProperty(previous.properties?.Quality, metric.properties?.Quality) &&
+            sameMetricValue(previous.value, metric.value)
+        )
     }
 
     clear(): void {
@@ -265,6 +283,18 @@ export class SparkplugDeviceMetricProjection {
         return frame
     }
 
+    isPublished(snapshot: SparkplugProjectionSnapshot, name: string): boolean {
+        return this.#state.isPublished(snapshot, name)
+    }
+
+    async publishCurrent(snapshot: SparkplugProjectionSnapshot, name: string): Promise<SparkplugPublishFrame> {
+        const metric = this.#state.current(snapshot, name)
+        const frame = await this.session.deviceData(this.deviceId, dataMetrics([metric]))
+        if (!frame) throw new Error(`cannot confirm ${name}: Sparkplug Device data frame was empty`)
+        this.#state.published([metric])
+        return frame
+    }
+
     async death(): Promise<SparkplugPublishFrame> {
         const frame = await this.session.deviceDeath(this.deviceId)
         this.#state.clear()
@@ -335,6 +365,10 @@ export class SparkplugComponentProjectionRunner {
         this.#scheduler = options.scheduler ?? defaultScheduler
     }
 
+    get store(): SparkplugComponentProjectionStore {
+        return this.options.store
+    }
+
     async start(): Promise<SparkplugPublishFrame | undefined> {
         if (this.#unsubscribe) throw new Error('Sparkplug component projection is already started')
         this.#starting = true
@@ -372,6 +406,17 @@ export class SparkplugComponentProjectionRunner {
         this.#pending ??= this.options.store.getSnapshot()
         this.startDrain()
         await this.flush()
+    }
+
+    /** Ensure the current reported metric has reached MQTT; force republishes a same-value command. */
+    async confirmMetric(name: string, force = false): Promise<SparkplugPublishFrame | undefined> {
+        if (!this.#unsubscribe) throw new Error('Sparkplug component projection is not started')
+        await this.flush()
+        const snapshot = this.options.store.getSnapshot()
+        if (snapshot.status !== 'live' || snapshot.epoch !== this.#bornEpoch) throw new Error(`cannot confirm ${name}: projected Device is not live`)
+        const view = snapshotProjectionView(snapshot)
+        if (!force && this.projection.isPublished(view, name)) return undefined
+        return this.projection.publishCurrent(view, name)
     }
 
     async close(): Promise<void> {

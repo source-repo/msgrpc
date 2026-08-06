@@ -3,9 +3,20 @@ import type { IClientOptions, MqttClient } from 'mqtt'
 import { connectAsync } from 'mqtt'
 import { SparkplugEdgeNodeSession, type SparkplugPublishFrame } from './EdgeNodeSession.js'
 import { SparkplugBirthDeathSequence, SparkplugSequence } from './Sequence.js'
-import type { SparkplugMetric } from './Payload.js'
+import type { SparkplugMetric, SparkplugPayload } from './Payload.js'
 import { decodeSparkplugPayload } from './Protobuf.js'
-import { decodeHostStatePayload, deviceCommandTopicFilter, hostStateTopic, nodeTopic, type SparkplugHostState } from './Types.js'
+import { decodeHostStatePayload, deviceCommandTopicFilter, hostStateTopic, nodeTopic, parseSparkplugTopic, type SparkplugHostState } from './Types.js'
+
+export interface MqttSparkplugDeviceCommand {
+    readonly topic: string
+    readonly deviceId: string
+    readonly payload: SparkplugPayload
+    readonly payloadBytes: Uint8Array
+    readonly gatewayClientId: string
+    readonly receivedAt: number
+}
+
+export type MqttSparkplugDeviceCommandHandler = (command: MqttSparkplugDeviceCommand) => void | Promise<void>
 
 export interface MqttSparkplugEdgeNodeSessionOptions {
     readonly url: string
@@ -20,6 +31,7 @@ export interface MqttSparkplugEdgeNodeSessionOptions {
     readonly birthMetrics?: readonly SparkplugMetric[]
     readonly primaryHostId?: string
     readonly onPrimaryHostState?: (state: SparkplugHostState) => void | Promise<void>
+    readonly onDeviceCommand?: MqttSparkplugDeviceCommandHandler
 }
 
 export class MqttSparkplugEdgeNodeSession {
@@ -31,6 +43,8 @@ export class MqttSparkplugEdgeNodeSession {
     #primaryHostState?: SparkplugHostState
     #onPrimaryHostState?: (state: SparkplugHostState) => void | Promise<void>
     #primaryHostQueue = Promise.resolve()
+    #deviceCommandQueue = Promise.resolve()
+    #onDeviceCommand?: MqttSparkplugDeviceCommandHandler
 
     private constructor(
         client: MqttClient,
@@ -38,7 +52,8 @@ export class MqttSparkplugEdgeNodeSession {
         will: SparkplugPublishFrame,
         birthMetrics: readonly SparkplugMetric[],
         primaryHostTopic: string | undefined,
-        onPrimaryHostState: ((state: SparkplugHostState) => void | Promise<void>) | undefined
+        onPrimaryHostState: ((state: SparkplugHostState) => void | Promise<void>) | undefined,
+        onDeviceCommand: MqttSparkplugDeviceCommandHandler | undefined
     ) {
         this.client = client
         this.session = session
@@ -46,6 +61,7 @@ export class MqttSparkplugEdgeNodeSession {
         this.birthMetrics = birthMetrics
         this.primaryHostTopic = primaryHostTopic
         this.#onPrimaryHostState = onPrimaryHostState
+        this.#onDeviceCommand = onDeviceCommand
     }
 
     get primaryHostState(): SparkplugHostState | undefined {
@@ -84,10 +100,23 @@ export class MqttSparkplugEdgeNodeSession {
         const commandTopic = nodeTopic('NCMD', session)
         const deviceCommandTopic = deviceCommandTopicFilter(session)
         const primaryHostTopic = options.primaryHostId ? hostStateTopic(options.primaryHostId) : undefined
-        const edge = new MqttSparkplugEdgeNodeSession(client, session, will, options.birthMetrics ?? [], primaryHostTopic, options.onPrimaryHostState)
+        const edge = new MqttSparkplugEdgeNodeSession(
+            client,
+            session,
+            will,
+            options.birthMetrics ?? [],
+            primaryHostTopic,
+            options.onPrimaryHostState,
+            options.onDeviceCommand
+        )
         client.on('message', (topic, payload) => {
             if (topic === commandTopic) {
                 void edge.handleNodeCommand(new Uint8Array(payload)).catch((error: unknown) => edge.emitClientError(error))
+                return
+            }
+            const parsed = parseSparkplugTopic(topic)
+            if (parsed?.type === 'DCMD' && parsed.groupId === session.groupId && parsed.edgeNodeId === session.edgeNodeId && parsed.deviceId) {
+                void edge.queueDeviceCommand(topic, parsed.deviceId, new Uint8Array(payload), Date.now()).catch((error: unknown) => edge.emitClientError(error))
                 return
             }
             if (topic === primaryHostTopic) void edge.queuePrimaryHostState(new Uint8Array(payload)).catch((error: unknown) => edge.emitClientError(error))
@@ -131,13 +160,47 @@ export class MqttSparkplugEdgeNodeSession {
         return pending
     }
 
+    /** Register the one projection firewall allowed to consume DCMD. With no handler, DCMD is ignored. */
+    setDeviceCommandHandler(handler: MqttSparkplugDeviceCommandHandler): () => void {
+        if (this.#onDeviceCommand && this.#onDeviceCommand !== handler) throw new Error('a Sparkplug Device command handler is already registered')
+        this.#onDeviceCommand = handler
+        return () => {
+            if (this.#onDeviceCommand === handler) this.#onDeviceCommand = undefined
+        }
+    }
+
+    private queueDeviceCommand(topic: string, deviceId: string, payloadBytes: Uint8Array, receivedAt: number): Promise<void> {
+        const pending = this.#deviceCommandQueue.then(
+            () => this.handleDeviceCommand(topic, deviceId, payloadBytes, receivedAt),
+            () => this.handleDeviceCommand(topic, deviceId, payloadBytes, receivedAt)
+        )
+        this.#deviceCommandQueue = pending.then(
+            () => undefined,
+            () => undefined
+        )
+        return pending
+    }
+
+    private async handleDeviceCommand(topic: string, deviceId: string, payloadBytes: Uint8Array, receivedAt: number): Promise<void> {
+        const handler = this.#onDeviceCommand
+        if (!handler) return
+        await handler({
+            topic,
+            deviceId,
+            payload: decodeSparkplugPayload(payloadBytes),
+            payloadBytes,
+            gatewayClientId: this.client.options.clientId ?? 'unknown',
+            receivedAt
+        })
+    }
+
     private emitClientError(error: unknown): void {
         this.client.emit('error', error instanceof Error ? error : new Error(String(error)))
     }
 
     async close(): Promise<void> {
         try {
-            await this.#primaryHostQueue
+            await Promise.all([this.#primaryHostQueue, this.#deviceCommandQueue])
             if (this.session.born) await this.session.suspend()
         } finally {
             await this.client.endAsync()

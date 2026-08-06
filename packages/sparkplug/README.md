@@ -8,7 +8,7 @@ The commercial product and tools around this will be named Source Spark. This pa
 
 ## Status
 
-M1 and read-only M2 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, gate Node and Device lifecycle on retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, and project read-only Source RPC component snapshots as Sparkplug Devices.
+M1, read-only M2 and allowlisted-command M4 implementation. It can encode Sparkplug payloads, publish an Edge Node NBIRTH/NDEATH over MQTT, answer `Node Control/Rebirth` NCMD with a complete Node and Device rebirth sequence, gate Node and Device lifecycle on retained/live Primary Host `STATE`, validate Node and Device lifecycle rules, project Source RPC component snapshots as Sparkplug Devices, and map explicitly writable metrics to safe Source RPC commands.
 
 The component runner publishes a complete `DBIRTH` from the first live snapshot, changed-only `DDATA`, `DDEATH` when the channel becomes stale or closes, and a complete `DBIRTH` when the component returns. Under backpressure it holds one in-flight and one latest pending snapshot per Device, then computes the coalesced diff against the last successfully handed-off state. The committed projection contract supplies the stable Device ID, metric map, datatypes, nullability, units, bounds, deadbands and maximum publish rate. Its compiler normalizes the file, allocates aliases across the entire Edge Node, and hashes the normalized contract together with the Source RPC schema fragments it reads.
 
@@ -35,8 +35,10 @@ The component runner publishes a complete `DBIRTH` from the first live snapshot,
 - compile-time DBIRTH/DDATA packet estimates, runtime packet refusal and declared byte bounds for variable-length metrics
 - `peerShape`-triggered projection revalidation with canonical-hash-controlled complete rebirth
 - reproducible Eclipse Sparkplug TCK 3.0.0 Edge profile runner and committed baseline report
+- dual MQTT runtime identities and fail-closed broker ACL examples
+- explicit writable metric allowlists with startup semantics checks, pre-call validation, rate limits, deadlines, audit and confirmation by reported state
 
-The read-only M2 slice is complete. No ingestion or command mapping exists yet.
+M1, M2 and M4 are complete. Sparkplug ingestion into Source RPC does not exist yet.
 
 ## Dual MQTT sessions
 
@@ -95,7 +97,12 @@ The contract is strict: unknown fields, unsafe topic/path segments, duplicate De
                     "unit": "degC",
                     "minimum": -40,
                     "maximum": 180,
-                    "deadband": 0.1
+                    "deadband": 0.1,
+                    "writable": {
+                        "method": "setTemperature",
+                        "deadlineMs": 3000,
+                        "maxCommandsPerSecond": 2
+                    }
                 }
             ]
         }
@@ -117,6 +124,16 @@ const compiled = compileSparkplugProjectionContract(JSON.parse(await readFile('s
 
 If the local MQTT handoff rejects, the runner keeps the latest failed snapshot without advancing its diff baseline. Call `await projection.retry()` after the transport is available again. A Host that misses a QoS 0 DATA packet detects the global sequence gap and restores complete current Node and Device births through `Node Control/Rebirth`.
 
+## Writable commands
+
+A metric is read-only unless it has a `writable` block. Writable numeric metrics require `minimum` and `maximum`, cannot be nullable, and must project a reported `state.*` path. At startup `SparkplugSourceRpcCommandRunner` uses Source RPC introspection to prove that the named method exists, publishes a one-parameter schema, declares `idempotent-command`, and does not require component authority. A server that does not expose enough contract information cannot enable the mapping.
+
+Every DCMD is fully validated before any call is made. Name/alias, datatype, value shape, byte limit, numeric bounds, optional `source-rpc/unit` property, Source RPC parameter schema, deadline and per-metric rate limit must all pass. Multi-metric DCMDs are then applied sequentially and are explicitly non-atomic. A projection with no writable metrics starts without introspection and refuses all DCMDs.
+
+After a method returns, the runner waits for the mapped reported state and ensures it has reached DDATA. A successful same-value command republishes the current metric even when the component commits nothing. Refusal, call failure or missing confirmation does not create a private result metric; the audit callback records `refused`, `accepted`, `confirmed` or `unknown` while the standard Host sees only reported state.
+
+MQTT delivery does not carry the publisher Client ID. Audit therefore records the command topic, decoded metrics, raw payload, payload timestamp, local receive time and this gateway's broker identity. A self-asserted custom property is not authentication. On Source RPC the caller is always the gateway client, and methods requiring authority are refused rather than acquiring it on behalf of an unknown SCADA publisher.
+
 ## Source RPC component
 
 ```ts
@@ -125,6 +142,7 @@ import {
     compileSparkplugProjectionContract,
     MqttSparkplugEdgeNodeSession,
     SparkplugComponentProjectionRunner,
+    SparkplugSourceRpcCommandRunner,
     SparkplugSourceRpcProjectionRevalidator,
     sourceRpcComponentStore
 } from '@source-repo/sparkplug'
@@ -156,6 +174,14 @@ const projection = new SparkplugComponentProjectionRunner({
 })
 
 await projection.start()
+
+const commands = new SparkplugSourceRpcCommandRunner({
+    edge,
+    client,
+    devices: [{ definition: device, projection }],
+    onAudit: writeCommandAudit
+})
+await commands.start()
 
 const revalidator = new SparkplugSourceRpcProjectionRevalidator({
     client,
