@@ -33,6 +33,7 @@
     },
     "files": [
         "dist",
+        "docs",
         "proto",
         "tck",
         "sparkplug.projection.schema.json",
