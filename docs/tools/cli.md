@@ -602,7 +602,12 @@ A host often has more than one role. Starting its console, scriptable node and c
 
 ```
 source-rpc run host.tasks.json
+source-rpc run                  # the same, for ./source-rpc.tasks.json
 ```
+
+With no file named it runs `source-rpc.tasks.json` **from the working directory and nowhere else**. It does not walk up the tree the way `package.json` is found, and that is deliberate: a task file is an identity, so running this three directories deep must never quietly start the roles described somewhere above — with that file's signing secrets, under that file's peer names, on that file's bus. Which file ran should not depend on where the shell happened to be, and the line `run` prints names the file it started in full.
+
+The filename is defaulted; the command is not. Bare `source-rpc` prints the usage as it always has, and mentions a task file if it sees one. The bare word is what somebody types to find out what this is, and answering that by joining a bus, opening a console and possibly making the machine scriptable would be a great deal to have happen while reading the help.
 
 ```json
 {
@@ -641,9 +646,62 @@ source-rpc run host.tasks.json
 
 Every task is still a separate Source RPC peer. Its name comes from `name`, then from the optional name in its signing file, and finally from `id`. Duplicate peer names are refused before anything starts. Each signing file therefore remains an identity of its own; putting three roles in one process does not make them share authority.
 
-`sign`, `scripts`, `contract` and `script` paths are resolved relative to the task file, not the shell's working directory. The file is strict: unknown fields, duplicate ids, missing role settings and a network with no endpoint are startup errors. If the third task cannot start, the first two are closed before `run` fails. Ctrl-C and SIGTERM close tasks in reverse startup order.
+### Credentials in the file
 
-`console` accepts `host`, `port` and `basePath`. `node` requires `scripts` and a non-empty `scriptableBy`. `serve` requires `contract`, accepts `script`, and accepts `allowExec` only as an explicit boolean; it has the same development-machine warning and risk as the command-line flag.
+`sign` and `auth` each take a path or the thing the path would have pointed at, and the shape decides which. Written out, one host needs one file:
+
+```json
+{
+  "version": 1,
+  "network": {
+    "broker": "mqtts://bus.plant:8883",
+    "mqtt": { "username": "host-7", "password": "…" }
+  },
+  "tasks": [
+    {
+      "id": "console",
+      "type": "console",
+      "sign": { "name": "host-console", "secret": "…", "peers": { "host-node": "…", "bench": "…" } },
+      "auth": { "token": "…" }
+    },
+    {
+      "id": "node",
+      "type": "node",
+      "sign": { "name": "host-node", "secret": "…", "peers": { "bench": "…" } },
+      "auth": { "derive": "…" },
+      "scripts": "scripts",
+      "scriptableBy": ["bench"]
+    }
+  ]
+}
+```
+
+`sign` is this peer's own HMAC identity: `secret` signs what it sends, and `peers` is what it checks what it receives against — one entry per remote peer whose signature it should accept, which is how a host says which machines it will hear from. Its `name`, if present, names the peer, and contradicting `name` on the task is a startup error rather than a silent winner.
+
+`auth` is what a bus is shown. `token` is the bearer token presented to a hub that authenticates — never to a broker, which authenticates the connection instead and knows nothing about it, so a task with a token and no `hub` is told that nothing will read it. `derive` is the secret a node mints its scripts' credentials with, matching one entry in the bus's own `issuers`; without it a node's scripts start with no credential rather than borrowing the node's. `tokens` and `issuers` are refused here — they say what a *bus* accepts, and no task type is a bus. An `auth` **file** may carry them, because the same file is what `broker` reads; a host role simply ignores that half.
+
+`network.mqtt` is the broker account, which is not an identity: every task connecting with the same account is still a separate peer with its own signing secret. It replaces `SOURCE_RPC_MQTT_USERNAME` and `SOURCE_RPC_MQTT_PASSWORD` rather than merging with them, so a username from the file never pairs with a password from a variable somebody exported last week. A `mqtt` block with neither field is refused, since it would silently turn the environment off.
+
+**A file with secrets in it is a key file.** It gets the same warning a key file gets when its mode lets others read it, and it wants the same handling: not in the repository, not in an image layer, `chmod 600`. Pointing at separate files stays the better shape when the roles are deployed separately or the secrets are mounted; inline is for the host that is one unit anyway, where three files and one file are the same secret in a different number of places.
+
+### Starting from a generated one
+
+```
+source-rpc run --init host.tasks.json --broker mqtt://bus:1883 --scriptable-by bench
+source-rpc run --init                  # writes ./source-rpc.tasks.json
+```
+
+Writes a task file with the three roles in it, mode `600`, and refuses to write over a file that already exists — the one it would replace holds signing secrets, and losing those loses the identity every other machine was told to expect.
+
+The secrets in it are real, from the system generator, one per role, with each role's `peers` naming the others. That is most of the reason to generate one at all: the shape is easy to copy from this page, and a secret invented at a keyboard is the part that is reliably done badly. `--scriptable-by` names the peer that may script the node — it appears in every `peers` map, so the machine it names only needs the secret copied out of this file to be part of the network.
+
+What is left to fill in is what the command cannot know: the bus, a real contract for the simulator, and the scripts directory. It prints that list rather than writing comments, JSON having nowhere to put them.
+
+`sign`, `auth`, `scripts`, `contract` and `script` paths are resolved relative to the task file, not the shell's working directory. The file is strict: unknown fields, duplicate ids, missing role settings and a network with no endpoint are startup errors. If the third task cannot start, the first two are closed before `run` fails. Ctrl-C and SIGTERM close tasks in reverse startup order.
+
+`console` accepts `host`, `port`, `basePath`, and `cert` with `key` to serve HTTPS. `node` requires `scripts` and a non-empty `scriptableBy`. `serve` requires `contract`, accepts `script`, and accepts `allowExec` only as an explicit boolean; it has the same development-machine warning and risk as the command-line flag.
+
+`cert` and `key` behave exactly as the flags of the same name do: both together or neither, and a certificate moves the default port from 7844 to 8844, so a task file that names one and no port lands where a TLS peer looks. Both are read while the file is being checked, so a missing certificate is a startup error rather than a rollback halfway through starting the other roles.
 
 Broker and MCP roles are deliberately not task types. A broker is shared infrastructure with different authentication and relay ownership. MCP owns stdio and its client lifetime. Combining either with host roles would make one process responsible for unrelated failure domains rather than remove useful repetition.
 
@@ -708,3 +766,4 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--upstream <url>` | broker | — | join another broker; repeatable |
 | `--auth <file>` | broker, console, mcp, verbs, serve | — | bearer tokens: which to accept, and which to present. See [Authenticating the bus](#authenticating-the-bus) |
 | `--quiet` | broker | off | stop logging peers arriving and leaving |
+| `--init` | run | — | write a task file to start from, with three roles and fresh signing secrets, and refuse to overwrite. `--broker`, `--hub` and `--scriptable-by` fill in what they name. See [Task files](#task-files) |

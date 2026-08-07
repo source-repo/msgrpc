@@ -1,20 +1,18 @@
 #!/usr/bin/env node
-import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
 import {
     createDerivedAuthenticator,
     createTokenAuthenticator,
     firstAuthenticator,
-    mintDerivedCredential,
     defaultSecureWebPort,
     defaultSecureWebSocketPort,
     defaultWebPort,
     defaultWebSocketPort,
     namespaceProblems,
     readableNameFor,
-    type RpcSchema,
-    type TokenGrant
+    type RpcSchema
 } from '@source-repo/rpc'
 import { Diagnostic, extractSchema } from './extract.js'
 import { startConsole } from './console.js'
@@ -28,8 +26,8 @@ import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
 import { checkPeer, diffPeers } from './conform.js'
 import { bench, benchArguments } from './bench.js'
-import { loadSigningKeys } from './credentials.js'
-import { startTaskFile, type StartedTask } from './tasks.js'
+import { loadAuthFile, loadSigningKeys, loadTls, scriptCredentials, type AuthFile } from './credentials.js'
+import { defaultTaskFile, startTaskFile, taskFileSkeleton, taskFileSkeletonNotes, type StartedTask } from './tasks.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -50,6 +48,7 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   node      make this machine scriptable from another one, and nothing else, until Ctrl-C
   run       start console, node and serve roles together from one JSON task file, until Ctrl-C
+            with no file named it runs ./source-rpc.tasks.json; --init writes one to start from
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
             stdio carries the protocol, so it is not for interactive use; --port opens a second
             door over streamable HTTP, so two clients can share one node
@@ -187,9 +186,14 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 without it nothing can prove who a caller is and every call is
                                 refused
 
-  run <file.json>
+  run [<file.json>]             defaults to ./source-rpc.tasks.json, in this directory only
     shared network settings and console, node or serve tasks; relative paths are resolved from the
-    task file. Full format: https://source-repo.github.io/rpc/tools/cli#task-files
+    task file. Each task's credentials are its own: a key file under 'sign', an auth file under
+    'auth', or the same secrets written inline in either. Full format:
+    https://source-repo.github.io/rpc/tools/cli#task-files
+    --init                      write a task file to start from, with three roles and fresh signing
+                                secrets, and refuse to write over one that exists. --broker, --hub
+                                and --scriptable-by fill in what they name
 
   strip <file…>
     --out <dir>                 where each decorator-free twin lands, under the same file name.
@@ -326,55 +330,12 @@ const readSigningKeys = (path: string, command: string) => {
  * is now impossible either way. Lifetimes are short and renewal does not exist, so stopping the
  * node means its scripts' credentials expire on their own; immediate revocation is the grants
  * work, not this.
+ *
+ * The minting itself lives in credentials.ts, because `run` mints the same credentials from a task
+ * file and two implementations of a credential are two things to get subtly different.
  */
-const scriptCredentials = (auth: AuthFile, issuer: string, command: string) => {
-    if (!auth.derive) return undefined
-    if (!auth.token && !auth.tokens && !auth.issuers)
-        process.stderr.write(`source-rpc ${command}: 'derive' is set but nothing else in the auth file is - scripts will present credentials to a bus that may not be checking any.\n`)
-    return async (script: string) => {
-        const name = `${script}@${issuer}`
-        const issuedAt = Date.now()
-        return {
-            name,
-            token: await mintDerivedCredential(
-                {
-                    credentialId: `${script}-${issuedAt.toString(36)}`,
-                    subject: name,
-                    // The provenance the AI boundary reads. A script is a program this node started,
-                    // whoever wrote it - the honest claim, and never a claim about what wrote it.
-                    roles: ['ai-program'],
-                    issuer,
-                    generation: 2,
-                    issuedAt,
-                    expiresAt: issuedAt + SCRIPT_CREDENTIAL_MS
-                },
-                auth.derive!
-            )
-        }
-    }
-}
-
-/**
- * How long a script's credential lasts. Deliberately short of a working day: a credential that
- * outlives the run it was minted for is the failure this design exists to avoid, and a script that
- * needs longer should be a peer with a credential an operator issued.
- */
-const SCRIPT_CREDENTIAL_MS = 4 * 60 * 60 * 1000
-
-interface AuthFile {
-    token?: string
-    tokens?: { [token: string]: TokenGrant }
-    /**
-     * This node's own signing secret, for minting credentials for the scripts it starts. Present on
-     * a node; the bus that should accept those credentials lists the same secret under `issuers`.
-     */
-    derive?: string
-    /**
-     * Issuer peer name -> the secret it mints with. Present on a bus: it says which nodes this bus
-     * lets speak for the programs they start, which is a decision about nodes rather than programs.
-     */
-    issuers?: { [issuer: string]: string }
-}
+const scriptCredentialsFor = (auth: AuthFile, issuer: string, command: string) =>
+    scriptCredentials(auth, issuer, (message) => process.stderr.write(`source-rpc ${command}: ${message}\n`))
 
 /**
  * Certificate and key for a server this command opens, or undefined for plain HTTP.
@@ -394,9 +355,9 @@ const readTls = (argv: string[], command: string) => {
         process.exit(1)
     }
     try {
-        return { cert: readFileSync(cert), key: readFileSync(key) }
+        return loadTls(cert, key)
     } catch (e) {
-        process.stderr.write(`source-rpc ${command}: cannot read the certificate or key: ${(e as Error).message}\n`)
+        process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
         process.exit(1)
     }
 }
@@ -430,26 +391,15 @@ const readAuth = (argv: string[], command: string): AuthFile => {
         }
     }
 
-    let auth: AuthFile
     try {
-        auth = JSON.parse(readFileSync(path, 'utf8')) as AuthFile
-    } catch (e) {
-        process.stderr.write(`source-rpc ${command}: cannot read tokens from ${path}: ${(e as Error).message}\n`)
-        process.exit(1)
-    }
-    if (!auth.token && !auth.tokens) {
-        // An empty file is the failure that looks like success: the command starts, and the bus it
-        // meant to gate is open. Better to refuse than to run unauthenticated on request.
-        process.stderr.write(`source-rpc ${command}: ${path} has neither "token" nor "tokens"\n`)
-        process.exit(1)
-    }
-    try {
+        const loaded = loadAuthFile(path)
         // Worth saying out loud: whoever can read this file can be these peers.
-        if (statSync(path).mode & 0o077) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
-    } catch {
-        // Not worth failing over if the mode cannot be read.
+        if (loaded.readableByOthers) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
+        return loaded.auth
+    } catch (e) {
+        process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.exit(1)
     }
-    return auth
 }
 
 /**
@@ -973,7 +923,7 @@ const runMcp = async (argv: string[]) => {
             process.exit(1)
         }
     }
-    const credentialFor = scriptsDir ? scriptCredentials(readAuth(argv, 'mcp'), network.name, 'mcp') : undefined
+    const credentialFor = scriptsDir ? scriptCredentialsFor(readAuth(argv, 'mcp'), network.name, 'mcp') : undefined
     const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
         ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}),
         ...(credentialFor ? { credentialFor } : {}),
@@ -1006,7 +956,7 @@ const runNode = async (argv: string[]) => {
         process.exit(1)
     }
 
-    const credentialFor = scriptCredentials(readAuth(argv, 'node'), network.name, 'node')
+    const credentialFor = scriptCredentialsFor(readAuth(argv, 'node'), network.name, 'node')
     const running = await startNode({ ...network, scripts: resolve(scriptsDir), scriptableBy, ...(credentialFor ? { credentialFor } : {}) }).catch((e: Error) => {
         process.stderr.write(`source-rpc node: cannot start: ${e.message}\n`)
         process.exit(1)
@@ -1077,10 +1027,47 @@ const taskStartedLine = (task: StartedTask) => {
     return `${task.id}: serve ${task.name} answering ${task.namespaces?.join(', ')}`
 }
 
+/**
+ * Writes a task file to start from, and refuses to write over one that is already there.
+ *
+ * Refusing matters more here than it usually does: the file it would replace holds signing secrets,
+ * and overwriting it does not lose a configuration that can be typed again - it loses the identity
+ * every other machine on the network was told to expect, and does it silently.
+ */
+const initTaskFile = (argv: string[], file: string) => {
+    const skeleton = taskFileSkeleton({
+        ...(argument(argv, '--broker', '') ? { broker: argument(argv, '--broker', '') } : {}),
+        ...(argument(argv, '--hub', '') ? { hub: argument(argv, '--hub', '') } : {}),
+        ...(argument(argv, '--scriptable-by', '') ? { controller: argument(argv, '--scriptable-by', '') } : {})
+    })
+    try {
+        // wx rather than a check and a write: between the two there is a window, and the thing in it
+        // is a key file.
+        writeFileSync(file, `${JSON.stringify(skeleton, undefined, 4)}\n`, { flag: 'wx', mode: 0o600 })
+    } catch (e) {
+        const already = (e as NodeJS.ErrnoException).code === 'EEXIST'
+        process.stderr.write(
+            `source-rpc run: ${already ? `${file} already exists, and it may hold this host's signing secrets - name a new file or move that one aside` : `cannot write ${file}: ${(e as Error).message}`}\n`
+        )
+        process.exit(1)
+    }
+    for (const note of taskFileSkeletonNotes(file, argument(argv, '--scriptable-by', 'controller'))) process.stdout.write(`source-rpc run: ${note}\n`)
+}
+
 const runTasks = async (argv: string[]) => {
-    const [, file, ...extra] = positionals(argv)
-    if (!file || extra.length) {
-        process.stderr.write('source-rpc run: give it exactly one task file, e.g. source-rpc run host.tasks.json\n')
+    const [, named, ...extra] = positionals(argv)
+    if (extra.length) {
+        process.stderr.write(`source-rpc run: give it one task file, or none to use ./${defaultTaskFile}\n`)
+        process.exit(1)
+    }
+    const file = named ?? defaultTaskFile
+    if (argv.includes('--init')) return initTaskFile(argv, file)
+    // Checked before startTaskFile so that the answer to "run" with nothing set up is the thing to
+    // do next, rather than an ENOENT for a file the operator never mentioned.
+    if (!named && !existsSync(file)) {
+        process.stderr.write(
+            `source-rpc run: no ${defaultTaskFile} here, and no task file named. Write one with 'source-rpc run --init', or name one.\n`
+        )
         process.exit(1)
     }
 
@@ -1233,6 +1220,11 @@ const main = () => {
     }
     if (command !== 'extract' && command !== 'check') {
         process.stderr.write(usage)
+        // Pointed at rather than started. Typing the bare command is what someone does to see what
+        // this is, and answering that by joining a bus under whatever identities happen to be in
+        // this directory - and opening a console, and possibly making the machine scriptable -
+        // would be a great deal to have happen while reading the help.
+        if (!command && existsSync(defaultTaskFile)) process.stderr.write(`\nthere is a ${defaultTaskFile} here: 'source-rpc run' starts it\n`)
         process.exit(command ? 1 : 0)
     }
 

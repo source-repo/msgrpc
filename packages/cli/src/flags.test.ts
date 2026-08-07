@@ -1,7 +1,9 @@
 import test from 'ava'
 import { spawn } from 'node:child_process'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 
 /**
  * A flag given no value.
@@ -20,9 +22,9 @@ import { dirname, resolve } from 'node:path'
 
 const cli = resolve(dirname(fileURLToPath(import.meta.url)), 'index.js')
 
-const attempt = (args: string[]) =>
+const attempt = (args: string[], cwd?: string) =>
     new Promise<{ code: number | null; stderr: string; stdout: string }>((resolvePromise) => {
-        const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
+        const child = spawn(process.execPath, [cli, ...args], { stdio: ['ignore', 'pipe', 'pipe'], ...(cwd ? { cwd } : {}) })
         let stderr = ''
         let stdout = ''
         child.stderr.setEncoding('utf8')
@@ -64,6 +66,50 @@ test('the refusal is a line of text rather than a stack trace', async (t) => {
     t.false(stderr.includes('at '), stderr)
     t.false(stderr.includes('Error:'), stderr)
     t.is(stdout, '', 'nothing about a usage error belongs on stdout')
+})
+
+/**
+ * The default task file, and the line it is deliberately *not* allowed to cross.
+ *
+ * Defaulting the filename removes the part that varies. Defaulting the command would mean the bare
+ * word `source-rpc` - what someone types to read the help - joining a bus under whatever identities
+ * happen to be in this directory. So the empty command still prints usage, and mentions the file
+ * instead of running it.
+ */
+test('run with no file uses the default, and says what to do when there is none', async (t) => {
+    const empty = mkdtempSync(join(tmpdir(), 'source-rpc-default-'))
+    try {
+        const missing = await attempt(['run'], empty)
+        t.is(missing.code, 1)
+        t.regex(missing.stderr, /no source-rpc\.tasks\.json here, and no task file named/)
+        t.regex(missing.stderr, /--init/, 'the refusal has to name the thing to do next')
+
+        // --init with no filename writes the same default, so the pair needs no argument at all.
+        const written = await attempt(['run', '--init'], empty)
+        t.is(written.code, 0)
+        t.true(existsSync(join(empty, 'source-rpc.tasks.json')))
+
+        // And now `run` finds it. It fails on the broker rather than the file, which is the proof:
+        // it got as far as trying to join a network the skeleton points at and nothing is serving.
+        const found = await attempt(['run'], empty)
+        t.is(found.code, 1)
+        t.notRegex(found.stderr, /no source-rpc\.tasks\.json here/)
+    } finally {
+        rmSync(empty, { recursive: true, force: true })
+    }
+})
+
+test('the bare command prints usage and points at a task file rather than starting it', async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'source-rpc-bare-'))
+    try {
+        writeFileSync(join(directory, 'source-rpc.tasks.json'), '{}')
+        const { code, stderr } = await attempt([], directory)
+        t.is(code, 0)
+        t.regex(stderr, /source-rpc <command>/, 'the bare command still answers with the usage')
+        t.regex(stderr, /there is a source-rpc\.tasks\.json here: 'source-rpc run' starts it/)
+    } finally {
+        rmSync(directory, { recursive: true, force: true })
+    }
 })
 
 test('--version answers with both versions, before anything else is parsed', async (t) => {

@@ -1,6 +1,6 @@
 import test from 'ava'
 
-import { mqttAuthFromEnvironment } from './network.js'
+import { mqttAccountFor, mqttAuthFromEnvironment } from './network.js'
 
 const withMqttEnvironment = (environment: Record<string, string | undefined>, run: () => void) => {
     const names = ['SOURCE_RPC_MQTT_USERNAME', 'SOURCE_RPC_MQTT_PASSWORD']
@@ -30,5 +30,22 @@ test.serial('mqtt credentials can come from the environment', (t) => {
 test.serial('unset mqtt credential variables are not passed as empty options', (t) => {
     withMqttEnvironment({}, () => {
         t.deepEqual(mqttAuthFromEnvironment(), {})
+    })
+})
+
+/**
+ * Written down because the alternative - merging the two - is the tempting one. A username from a
+ * task file and a password from a stale variable is a credential nobody composed, and the broker
+ * refuses it with a message that names neither place.
+ */
+test.serial('a configured mqtt account replaces the environment rather than merging with it', (t) => {
+    withMqttEnvironment({ SOURCE_RPC_MQTT_USERNAME: 'stale', SOURCE_RPC_MQTT_PASSWORD: 'stale-secret' }, () => {
+        t.deepEqual(mqttAccountFor({ mqttAuth: { username: 'plant' } }), { username: 'plant' })
+    })
+})
+
+test.serial('with no account configured the environment is still what authenticates', (t) => {
+    withMqttEnvironment({ SOURCE_RPC_MQTT_USERNAME: 'plant', SOURCE_RPC_MQTT_PASSWORD: 'secret' }, () => {
+        t.deepEqual(mqttAccountFor({}), { username: 'plant', password: 'secret' })
     })
 })

@@ -34,6 +34,14 @@ export interface NetworkOptions {
     /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
     hubCredentials?: unknown
     /**
+     * The broker account, when it comes from a file rather than the environment.
+     *
+     * Present or absent as a pair, never merged with `SOURCE_RPC_MQTT_USERNAME` and
+     * `SOURCE_RPC_MQTT_PASSWORD`: half a username from one place and half a password from another is
+     * a credential nobody wrote down, and it fails at the broker with nothing to read that explains it.
+     */
+    mqttAuth?: { username?: string; password?: string }
+    /**
      * Decides what callers may reach on this peer. Only meaningful for a window that has been given
      * something to offer - see `--scriptable-by`, which is the one thing that turns this from a
      * peer that exposes nothing into a peer that exposes something worth guarding.
@@ -67,12 +75,20 @@ export const mqttAuthFromEnvironment = () => ({
     ...(hasEnvironmentValue('SOURCE_RPC_MQTT_PASSWORD') ? { password: process.env.SOURCE_RPC_MQTT_PASSWORD } : {})
 })
 
+/**
+ * The broker account to connect with: what was configured, or what the environment says.
+ *
+ * One or the other, never halves of both - see `mqttAuth`. A configured account of `{ username }`
+ * alone is a deliberate account with no password, not an invitation to find one in the environment.
+ */
+export const mqttAccountFor = (options: Pick<NetworkOptions, 'mqttAuth'>) => options.mqttAuth ?? mqttAuthFromEnvironment()
+
 /** The links a set of options asks for, in the order the commands have always built them. */
 export const networkTransports = (options: NetworkOptions): Transport[] => [
     ...(options.broker
         ? [
               new MqttTransport(options.name, options.broker, {
-                  mqtt: mqttAuthFromEnvironment(),
+                  mqtt: mqttAccountFor(options),
                   ...(options.prefix ? { prefix: options.prefix } : {}),
                   ...(options.sign ? { sign: options.sign } : {}),
                   ...(options.verify ? { verify: options.verify } : {}),

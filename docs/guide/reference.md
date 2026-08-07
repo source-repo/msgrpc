@@ -141,6 +141,6 @@ The MQTT tests need a broker on `localhost:1883` and skip themselves when none i
 docker compose -f docker-compose/docker-compose.yml up -d
 ```
 
-Point them at a different broker with `MSGRPC_TEST_BROKER=mqtt://host:1883`.
+Point them at a different broker with `MSGRPC_TEST_BROKER=mqtt://host:1883`. The tests connect anonymously, as the broker in that compose file allows; against one that authenticates, put the account in the URL — `MSGRPC_TEST_BROKER=mqtt://user:password@host:1883`.
 
 [`examples/`](https://github.com/source-repo/rpc/tree/main/packages/rpc/examples) is a small plant service showing the 2.0 idioms: `@rpcNamespace` and `@rpc`, an extracted contract, and a server that validates against it and exposes introspection.
