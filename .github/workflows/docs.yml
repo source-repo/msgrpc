@@ -32,6 +32,15 @@ jobs:
                   node-version: 22
                   cache: npm
 
+            # A lock file is a function of the npm that wrote it, and this one is written by npm 12.
+            # npm 10 - what Node 22 bundles - resolves `@docsearch/react`'s peer range of react
+            # `>= 16.8.0 < 19.0.0` against this workspace's React 19 by wanting a nested React 18
+            # that an npm 12 lock does not record, and `npm ci` then refuses the whole install with
+            # "Missing: react@18.3.1 from lock file" - which is where every workflow died for two
+            # days. Node stays at 22 because that is what the packages claim to support; only the
+            # installer is pinned, and npm 12 runs on 22.22.2 and up.
+            - run: npm i -g npm@12
+
             - run: npm ci
 
             - run: npm run docs:build

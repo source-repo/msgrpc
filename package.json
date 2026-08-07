@@ -1,6 +1,9 @@
 {
     "name": "source-rpc-workspace",
     "private": true,
+    "engines": {
+        "npm": ">=12"
+    },
     "description": "Source RPC and its contract-extraction CLI",
     "type": "module",
     "license": "MIT",

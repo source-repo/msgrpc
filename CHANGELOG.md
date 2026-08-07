@@ -12,11 +12,33 @@ The properties that matter: **closed is the default everywhere** — a node with
 
 Behaviour note for anyone who adopted 4.6.0's derived credentials: scripts carry `ai-program`, so their state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression, and observation is unaffected.
 
+### The grants document, reachable from the command line
+
+`aiGrants` was enforced by the library and offered by nothing the CLI had, so `source-rpc node` — the command whose entire purpose is running scripts, and whose scripts carry `ai-program` — had no way to be given one. `node` and `mcp` now take `--grants <file>`, and a `node` task takes `grants` as a path.
+
+A path rather than flags, because the document is data with a revision: a console can render it and a reviewer can diff it, which is why it is a document and not somebody's `authorize`. It is also not a secret, so unlike `sign` and `auth` it is never written inline in a task file — the revision exists so policy can be replaced on its own cadence.
+
+A document that cannot be read refuses the node rather than starting with nothing granted. Startup prints what is open whether or not one was given, since closed-by-default means "it is running" and "it can do something" are separately true. Refusals are printed as they happen, with the sentence explaining them; permitted calls are not, because burying a refusal is the way to make it useless.
+
+`SIGHUP` re-reads the document on `node`, on `mcp` and on every node a task file started, so a grant can be closed without stopping a node in the middle of something. A failed reload keeps the document already in force; a revision that goes backwards is applied and said out loud.
+
 ### One host process from a task file
 
 `source-rpc run host.tasks.json` starts console, node and contract-backed serve roles in one process. Shared network settings remove the repeated broker URL while every task keeps a distinct peer name and signing file, so combining supervision does not combine authority. Paths are relative to the task file, unknown fields and duplicate identities are refused before startup, a later failure closes roles that already started, and SIGINT/SIGTERM closes them in reverse order.
 
 Console startup now reports listener errors such as `EADDRINUSE` to its caller and closes the network connection it had already opened. Previously that error escaped as an uncaught server event, which made reliable multi-role rollback impossible and left an announced peer behind after the listener failed.
+
+### Credentials a task file can carry, and a generated one to start from
+
+`sign` and `auth` each take a path or the secrets themselves, so a host whose roles are deployed as one unit can keep one file instead of four. `sign` inline is the peer's own HMAC identity and the `peers` it verifies; `auth` inline is the `token` a hub is shown and the `derive` secret a node mints its scripts' credentials with. `tokens` and `issuers` are refused inline, because they say what a bus accepts and no task type is a bus — an `auth` file may still carry them, since that file is what `broker` reads. `network.mqtt` gives the broker account a place in the file, replacing `SOURCE_RPC_MQTT_USERNAME` and `SOURCE_RPC_MQTT_PASSWORD` rather than merging with them, so half a credential can never come from each. A task file that carries secrets gets the mode warning key files have always had.
+
+Two things a task file could not do before this, both of which looked configured and were not: a node started from one now mints derived credentials for its scripts, where previously `derive` had nowhere to go and every script started unauthenticated; and a task can present a bearer token to a hub that authenticates, where previously there was no way to give it one.
+
+`source-rpc run --init host.tasks.json` writes a task file with the three roles, fresh signing secrets from the system generator, each role's `peers` naming the others, and `--scriptable-by` in all of them. Mode `600`, and it refuses to overwrite — the file it would replace holds the identities every other machine on the network was told to expect.
+
+With no file named, `run` and `run --init` both use `source-rpc.tasks.json` in the working directory — so a set-up host is `source-rpc run` and nothing else. The working directory and nowhere else: this does not walk up the tree the way `package.json` is found, because a task file is an identity and which one ran must not depend on where the shell happened to be. The filename is defaulted and the command is not; bare `source-rpc` still prints usage, and now mentions a task file when it sees one rather than starting it.
+
+A `console` task also takes `cert` and `key` now, so a host already serving an HTTPS console can move to a task file without quietly becoming plain HTTP — which it would have, since a file that says nothing about certificates is a valid file. Both together or neither, and a certificate moves the default port to 8844 exactly as `--cert` does.
 
 ## Source RPC 4.6.0
 

@@ -19,7 +19,7 @@ A second thread emerged in review: the pieces keep meeting in the middle. The co
 | [Execution tiers](#execution-tiers-and-the-real-time-boundary) | how far down toward the metal this goes | positioning |
 | [Authorization](#authorization) | seven rules, held rigidly | held through every build |
 | [A business: assessment first](#a-business-assessment-first) | why any of it gets maintained | direction |
-| [Where things belong](#where-things-belong) | what is core, what is a package | held; queue landed as placed |
+| [Where things belong](#where-things-belong) | what is core, what is a package, and what is paid | held; queue landed as placed |
 | [What to build first](#what-to-build-first) | the two features everything else waited on | **all of it built** |
 | [Considered and dropped](#considered-and-dropped) | with the reasons, so they stay dropped | standing |
 
@@ -294,6 +294,38 @@ Core versus ecosystem is the wrong axis. The repo already has a sharper one, fro
 | `@source-repo/rpc` | the observable-component machinery and the spec's §2.1 prerequisites; command authority; capability capture's runtime half; owner and the place/system paths as peer identity, carried in presence and `describe()`; `resubscribeFailed` naming what failed; the schema version as an exported constant with a compatibility policy |
 | `@source-repo/rpc-cli` | `extract` reading property declarations and heritage clauses; the discovery cache; console UI for discovery, actions, wiring and the structure tree; the MCP surface for the same. No widgets — a widget library is where a diagnostic tool becomes a dashboard monolith |
 | separate packages | the work-queue tool node, as `packages/queue` — a workspace in this repository with its own version; the contract-only capability packages, sector-standard and project-local, where the process-value domain classes live; `ui_compiler`; the operator-screen composer and its document format; `FlowRunner` and `TsFlowRunner`; everything WebAssembly and embedded |
+
+### And which product: the test for state
+
+The section above answers which package. [The business section](#a-business-assessment-first) answers which *layers* are commercial. Neither answers the question that actually gets asked, which is about one feature at a time — and it is hardest for **state**, because a console that remembers things is a better console right up until it is quietly an inventory system.
+
+**Can the store be deleted with nothing lost but time?** If it can, it is a cache of what this console observed: it belongs in the public package and it makes that package more useful. If it cannot, it is a system of record, and a system of record brings backup, schema migration, multi-user access and a support obligation that does not end. That is the paid product.
+
+The version to apply while reading a diff is narrower. **Does anything in the store describe a node that is not on this bus?** The moment something does, this is inventory. A console that knows only what announced itself can never report that something is *missing* — and missing is the word that gives it away, because absence is only visible against a declared expectation of what should be there. That expectation is the whole of fleet management; everything else in it follows.
+
+Of the two, the delete test is the one to weigh, because it predicts cost rather than category. A cache has no migration story. A system of record has one forever, and a day when somebody's file is corrupt and they want it back.
+
+So the free side, which is mostly what [the tooling roadmap](https://github.com/source-repo/rpc/blob/main/notes/tooling-roadmap.md) already wants from the console: a presence timeline, cached descriptions per peer, saved argument presets, call history, per-method latency, and persisting the problems and traffic history that is bounded in memory today. The enabling piece is already built — presence carries a peer's description hash *when it announced one or changed it*, which exists so that a cache can notice a peer changed shape rather than serve a stale answer confidently.
+
+And the paid side: a declared list of what should exist, and with it absence detection; anything spanning buses or naming a site; credentials or grant documents held for nodes that are not present; audit retained across restarts for compliance; and anything at all that needs accounts, since the moment a feature needs a login it has left this package.
+
+Acting on a *connected* node stays open — calling it, tapping it, scripting it are all just using the network. Acting on an absent one does not, because "apply this when that node next appears" needs a desired state to compare against, which is the declared expectation again under another name.
+
+**Let the storage be the tripwire.** A JSON file rather than a database, and not for the dependency: SQLite quietly tells a reader that what it holds is important, which is the wrong thing to say about a cache and makes the wrong thing easy to reach for. A file that can be deleted says the opposite, and it polices itself — the day the store wants indexes, transactions or migrations is the day it has become something that belongs in the paid product, and that day announces itself somewhere impossible to miss.
+
+Two reasons to keep something out, worth not conflating, because the remedies differ. **Large** means somebody has to be paid to maintain it, which is a commercial question. **Opinionated** means it should be out of the core whether or not anyone pays, because the cost is imposing the opinion on every consumer rather than the money. Charging for a cheap opinionated thing reads as rent-seeking; adopting an expensive neutral thing into the core is how a core stops being maintainable.
+
+#### The worked example: two consoles, one contract
+
+Settled as: a slim console here with everything that makes the public package worth adopting, and a dedicated web app in the paid product with the styling and navigation that entails.
+
+They are separate apps, and that costs less than it sounds. The page is already a peer rather than a viewer — it reaches its backend entirely through `server.proxy<ConsoleService>('console', …)`, one namespace whose contract is committed and checked. Anything that speaks it is a console. The whole web app is about 2,200 lines, of which the chrome is the cheap half.
+
+So share the behaviour, not the pixels: the connection and subscription lifecycle, contract-driven argument coercion, display naming. Each product owns its own chrome, which is the part that should differ. Do **not** build a plugin architecture for it — an extension API earns its keep at three consumers or more, and at two it would ossify the public console around extension points guessed in advance.
+
+The invariant to protect is not the code. It is that there stays **one backend contract**: the paid product extends by adding namespaces beside `ConsoleService`, never by forking it. Two front ends over one contract is mildly annoying, and `check` keeps it honest. One front end over two contracts that have drifted is where this goes wrong.
+
+One consequence to plan for: `app.css` is global today, so anything genuinely shared between two products has to become scoped or headless first, or the paid app inherits a diagnostic tool's styling along with its logic.
 
 Three placement notes. **Components span both packages** — the runtime in `rpc`, the extraction in `rpc-cli` — so that feature is a coupled release across both, which the versions-together rule absorbs but the plan should state. **A workspace is not the versions-together rule**: rpc and rpc-cli version together because the CLI depends on the library's exact shape; `packages/queue` shares the repository for its CI and HEAD-parity tests and versions on its own — worth a line in `CLAUDE.md` the day the workspace appears, so nobody generalizes the rule by accident. And **the contract-only packages are the interoperability crown jewels**: they can live in separate repositories, but which packages exist is governed centrally, while role naming inside a sector package defers to that sector's standards body.
 

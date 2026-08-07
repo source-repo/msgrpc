@@ -5,6 +5,7 @@ import {
     TransportEvent,
     type MessageSigner,
     type MessageVerifier,
+    type RpcAiGrants,
     type RpcAuthorizer,
     type Transport
 } from '@source-repo/rpc'
@@ -34,6 +35,14 @@ export interface NetworkOptions {
     /** Handshake credentials for a hub that authenticates. No flag: a secret does not belong in `ps`. */
     hubCredentials?: unknown
     /**
+     * The broker account, when it comes from a file rather than the environment.
+     *
+     * Present or absent as a pair, never merged with `SOURCE_RPC_MQTT_USERNAME` and
+     * `SOURCE_RPC_MQTT_PASSWORD`: half a username from one place and half a password from another is
+     * a credential nobody wrote down, and it fails at the broker with nothing to read that explains it.
+     */
+    mqttAuth?: { username?: string; password?: string }
+    /**
      * Decides what callers may reach on this peer. Only meaningful for a window that has been given
      * something to offer - see `--scriptable-by`, which is the one thing that turns this from a
      * peer that exposes nothing into a peer that exposes something worth guarding.
@@ -41,6 +50,17 @@ export interface NetworkOptions {
     authorize?: RpcAuthorizer
     /** Publish `msgrpc.describe` for commands that expose a discoverable service. */
     exposeIntrospection?: boolean
+    /**
+     * What an AI principal may do here. Absent is closed: observation only, which is the default
+     * everywhere and the reason there is nothing to switch on to be safe.
+     *
+     * On the node that bears the consequence, never on the thing making the call - which is why the
+     * console does not take one. Enforced before `authorize` runs, so this decides whether the class
+     * of power is open and `authorize` remains the veto on the particular call.
+     */
+    aiGrants?: RpcAiGrants
+    /** Every gated decision, with the sentence explaining it. The open half of the audit story. */
+    onAiDecision?: (record: { source: string; path: string; method: string; effect: string; allowed: boolean; grant?: string; reason: string }) => void
     /**
      * Given the server to expose things on, before `ready()` is awaited.
      *
@@ -67,12 +87,20 @@ export const mqttAuthFromEnvironment = () => ({
     ...(hasEnvironmentValue('SOURCE_RPC_MQTT_PASSWORD') ? { password: process.env.SOURCE_RPC_MQTT_PASSWORD } : {})
 })
 
+/**
+ * The broker account to connect with: what was configured, or what the environment says.
+ *
+ * One or the other, never halves of both - see `mqttAuth`. A configured account of `{ username }`
+ * alone is a deliberate account with no password, not an invitation to find one in the environment.
+ */
+export const mqttAccountFor = (options: Pick<NetworkOptions, 'mqttAuth'>) => options.mqttAuth ?? mqttAuthFromEnvironment()
+
 /** The links a set of options asks for, in the order the commands have always built them. */
 export const networkTransports = (options: NetworkOptions): Transport[] => [
     ...(options.broker
         ? [
               new MqttTransport(options.name, options.broker, {
-                  mqtt: mqttAuthFromEnvironment(),
+                  mqtt: mqttAccountFor(options),
                   ...(options.prefix ? { prefix: options.prefix } : {}),
                   ...(options.sign ? { sign: options.sign } : {}),
                   ...(options.verify ? { verify: options.verify } : {}),
@@ -118,7 +146,9 @@ export const connectNetwork = async (options: NetworkOptions): Promise<Connected
         readyTimeout: 15000,
         transports: networkTransports(options),
         ...(options.exposeIntrospection ? { exposeIntrospection: true } : {}),
-        ...(options.authorize ? { authorize: options.authorize } : {})
+        ...(options.authorize ? { authorize: options.authorize } : {}),
+        ...(options.aiGrants ? { aiGrants: options.aiGrants } : {}),
+        ...(options.onAiDecision ? { onAiDecision: options.onAiDecision } : {})
     })
     options.expose?.(network)
     await network.ready()

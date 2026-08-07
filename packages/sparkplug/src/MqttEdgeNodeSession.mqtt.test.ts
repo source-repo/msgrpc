@@ -274,8 +274,11 @@ test.serial('mqtt: Primary Host STATE gates birth, ignores old timestamps and re
     await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: false, timestamp: 2000 })), { qos: 1, retain: true })
     await waitFor(() => edge.primaryHostState?.online === false && !edge.session.born)
     t.deepEqual(edge.primaryHostState, { hostId, online: false, timestamp: 2000 })
-    t.true(seen.some((topic) => topic.includes('/DDEATH/')))
-    t.true(seen.some((topic) => topic.includes('/NDEATH/')))
+    // Waited for rather than asserted: `born` turns false when this session has finished publishing,
+    // which is a round trip earlier than the host subscribing to it has the frames. Every other
+    // arrival in this file is waited for, and these two were the ones that read as immediate.
+    await waitFor(() => seen.some((topic) => topic.includes('/DDEATH/')))
+    await waitFor(() => seen.some((topic) => topic.includes('/NDEATH/')))
 
     await host.publishAsync(stateTopic, Buffer.from(encodeHostStatePayload({ online: true, timestamp: 1500 })), { qos: 1, retain: true })
     await new Promise((resolve) => setTimeout(resolve, 50))
