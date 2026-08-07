@@ -440,6 +440,72 @@ test('a console task given a certificate serves https', async (t) => {
     }
 })
 
+/**
+ * The gap this closed: the grants document was enforced by the library and reachable from nothing
+ * the CLI offered, so the command that exists to run scripts - which carry `ai-program` - had no way
+ * to be given one.
+ */
+test('a node task takes a grants document, reports it, and re-reads it on demand', async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'source-rpc-task-grants-'))
+    mkdirSync(join(directory, 'scripts'))
+    const grantsPath = join(directory, 'grants.json')
+    writeFileSync(grantsPath, JSON.stringify({ grants: 1, revision: 1, open: { 'ai.tool.write': { to: [peer('controller')] } } }))
+    const file = join(directory, 'grants.tasks.json')
+    writeFileSync(
+        file,
+        JSON.stringify({
+            version: 1,
+            network: { hub: 'http://127.0.0.1:7598' },
+            tasks: [{ id: 'node', type: 'node', name: peer('grantNode'), scripts: './scripts', scriptableBy: [peer('controller')], grants: './grants.json' }]
+        })
+    )
+
+    const hub = new RpcServer({ name: peer('grantHub'), transports: [{ port: 7598, host: '127.0.0.1' }] })
+    await hub.ready()
+    const said: string[] = []
+    const tasks = await startTaskFile(file, { warning: (warning) => said.push(warning) })
+
+    try {
+        t.true(said.some((line) => line.includes('grants revision 1')))
+        t.true(said.some((line) => line.includes('ai.tool.write') && line.includes(peer('controller'))))
+
+        // Closing a grant without stopping the node is the whole reason the document has a revision.
+        said.length = 0
+        writeFileSync(grantsPath, JSON.stringify({ grants: 1, revision: 2 }))
+        tasks.reloadGrants()
+        t.true(said.some((line) => line.includes('grants revision 2: nothing open')))
+        t.false(said.some((line) => line.includes('ai.tool.write')), 'the closed grant must stop being reported')
+
+        // A document that cannot be read leaves the one in force alone rather than falling back to
+        // nothing, which would look like "closed, therefore safe" while disagreeing with the operator.
+        said.length = 0
+        writeFileSync(grantsPath, '{ truncated')
+        tasks.reloadGrants()
+        t.true(said.some((line) => line.includes('grants unchanged')))
+    } finally {
+        await tasks.close()
+        await hub.close()
+        rmSync(directory, { recursive: true, force: true })
+    }
+})
+
+test('a node task whose grants document is unreadable refuses before anything starts', async (t) => {
+    const directory = mkdtempSync(join(tmpdir(), 'source-rpc-task-badgrants-'))
+    writeFileSync(join(directory, 'grants.json'), JSON.stringify({ grants: 1, revision: 'soon' }))
+    const file = join(directory, 'bad.tasks.json')
+    writeFileSync(
+        file,
+        JSON.stringify({
+            version: 1,
+            network: { hub: 'http://127.0.0.1:7598' },
+            tasks: [{ id: 'node', type: 'node', scripts: '.', scriptableBy: ['controller'], grants: './grants.json' }]
+        })
+    )
+    const failure = await t.throwsAsync(startTaskFile(file))
+    t.regex(failure.message, /revision must be a number/)
+    rmSync(directory, { recursive: true, force: true })
+})
+
 test('a later startup failure closes roles that already started', async (t) => {
     const directory = mkdtempSync(join(tmpdir(), 'source-rpc-task-rollback-'))
     const file = join(directory, 'rollback.tasks.json')

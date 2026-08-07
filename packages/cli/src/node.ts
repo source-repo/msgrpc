@@ -1,3 +1,4 @@
+import type { RpcAiGrants } from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { environmentFor } from './scripts.js'
 import { ScriptingService, scriptingAuthorizer } from './scripting.js'
@@ -55,6 +56,17 @@ export const startNode = async (options: NodeOptions) => {
     return {
         name: options.name,
         scripting,
+        /**
+         * Replace the grants document on a running node.
+         *
+         * The handler reads `aiGrants` at every decision rather than compiling it once, so swapping
+         * it takes effect on the next call and needs no restart. That is what the document's
+         * `revision` is for, and it is the difference between closing a grant in a hurry and
+         * restarting a node that is in the middle of something.
+         */
+        setAiGrants: (grants: RpcAiGrants | undefined) => {
+            connected.network.rpc.aiGrants = grants
+        },
         close: async () => {
             // The scripts go with the node. A process left holding a peer name after the thing that
             // started it has gone is the sort of debris that is only noticed much later.

@@ -5,6 +5,7 @@ import {
     TransportEvent,
     type MessageSigner,
     type MessageVerifier,
+    type RpcAiGrants,
     type RpcAuthorizer,
     type Transport
 } from '@source-repo/rpc'
@@ -49,6 +50,17 @@ export interface NetworkOptions {
     authorize?: RpcAuthorizer
     /** Publish `msgrpc.describe` for commands that expose a discoverable service. */
     exposeIntrospection?: boolean
+    /**
+     * What an AI principal may do here. Absent is closed: observation only, which is the default
+     * everywhere and the reason there is nothing to switch on to be safe.
+     *
+     * On the node that bears the consequence, never on the thing making the call - which is why the
+     * console does not take one. Enforced before `authorize` runs, so this decides whether the class
+     * of power is open and `authorize` remains the veto on the particular call.
+     */
+    aiGrants?: RpcAiGrants
+    /** Every gated decision, with the sentence explaining it. The open half of the audit story. */
+    onAiDecision?: (record: { source: string; path: string; method: string; effect: string; allowed: boolean; grant?: string; reason: string }) => void
     /**
      * Given the server to expose things on, before `ready()` is awaited.
      *
@@ -134,7 +146,9 @@ export const connectNetwork = async (options: NetworkOptions): Promise<Connected
         readyTimeout: 15000,
         transports: networkTransports(options),
         ...(options.exposeIntrospection ? { exposeIntrospection: true } : {}),
-        ...(options.authorize ? { authorize: options.authorize } : {})
+        ...(options.authorize ? { authorize: options.authorize } : {}),
+        ...(options.aiGrants ? { aiGrants: options.aiGrants } : {}),
+        ...(options.onAiDecision ? { onAiDecision: options.onAiDecision } : {})
     })
     options.expose?.(network)
     await network.ready()

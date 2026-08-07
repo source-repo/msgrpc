@@ -12,6 +12,16 @@ The properties that matter: **closed is the default everywhere** — a node with
 
 Behaviour note for anyone who adopted 4.6.0's derived credentials: scripts carry `ai-program`, so their state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression, and observation is unaffected.
 
+### The grants document, reachable from the command line
+
+`aiGrants` was enforced by the library and offered by nothing the CLI had, so `source-rpc node` — the command whose entire purpose is running scripts, and whose scripts carry `ai-program` — had no way to be given one. `node` and `mcp` now take `--grants <file>`, and a `node` task takes `grants` as a path.
+
+A path rather than flags, because the document is data with a revision: a console can render it and a reviewer can diff it, which is why it is a document and not somebody's `authorize`. It is also not a secret, so unlike `sign` and `auth` it is never written inline in a task file — the revision exists so policy can be replaced on its own cadence.
+
+A document that cannot be read refuses the node rather than starting with nothing granted. Startup prints what is open whether or not one was given, since closed-by-default means "it is running" and "it can do something" are separately true. Refusals are printed as they happen, with the sentence explaining them; permitted calls are not, because burying a refusal is the way to make it useless.
+
+`SIGHUP` re-reads the document on `node`, on `mcp` and on every node a task file started, so a grant can be closed without stopping a node in the middle of something. A failed reload keeps the document already in force; a revision that goes backwards is applied and said out loud.
+
 ### One host process from a task file
 
 `source-rpc run host.tasks.json` starts console, node and contract-backed serve roles in one process. Shared network settings remove the repeated broker URL while every task keeps a distinct peer name and signing file, so combining supervision does not combine authority. Paths are relative to the task file, unknown fields and duplicate identities are refused before startup, a later failure closes roles that already started, and SIGINT/SIGTERM closes them in reverse order.

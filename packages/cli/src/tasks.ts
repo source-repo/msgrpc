@@ -2,10 +2,11 @@ import { randomBytes } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import type { ServerOptions as TlsServerOptions } from 'node:https'
 import { dirname, resolve } from 'node:path'
-import { defaultSecureWebPort, defaultWebPort, type RpcSchema } from '@source-repo/rpc'
+import { defaultSecureWebPort, defaultWebPort, type RpcAiGrants, type RpcSchema } from '@source-repo/rpc'
 import { startConsole } from './console.js'
 import { loadAuthFile, loadSigningKeys, loadTls, readableByOthers, scriptCredentials, signingFrom, type Signing, type SigningKeys } from './credentials.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
+import { grantLines, loadAiGrants } from './grants.js'
 import type { NetworkOptions } from './network.js'
 import { startNode } from './node.js'
 
@@ -72,6 +73,13 @@ export interface NodeTask extends CommonTask {
     type: 'node'
     scripts: string
     scriptableBy: string[]
+    /**
+     * Path to the AI grants document. A path only, never inline: the document carries its own
+     * revision so that policy can be replaced on its own cadence, and burying it in a file that
+     * changes for unrelated reasons takes that away. It is policy rather than a secret, so the
+     * argument that put `sign` and `auth` inline does not apply to it.
+     */
+    grants?: string
 }
 
 export interface ServeTask extends CommonTask {
@@ -101,6 +109,14 @@ export interface TaskFileRun {
     file: string
     tasks: StartedTask[]
     close: () => Promise<void>
+    /**
+     * Re-read every node task's grants document and apply it, reporting through `warning`.
+     *
+     * Here as well as on `node` because `run` is how a host is meant to be started, and a grant that
+     * can only be closed by restarting the process is one that cannot be closed while something is
+     * going wrong. A document that fails to re-read leaves the one in force alone.
+     */
+    reloadGrants: () => void
 }
 
 export interface TaskFileCallbacks {
@@ -259,8 +275,15 @@ const parseTask = (value: unknown, index: number): SourceRpcTask => {
     }
 
     if (type === 'node') {
-        rejectUnknown(object, [...COMMON_FIELDS, 'scripts', 'scriptableBy'], where)
-        return { ...common, type, scripts: requiredString(object, 'scripts', where), scriptableBy: stringList(object, 'scriptableBy', where) }
+        rejectUnknown(object, [...COMMON_FIELDS, 'scripts', 'scriptableBy', 'grants'], where)
+        const grants = optionalString(object, 'grants', where)
+        return {
+            ...common,
+            type,
+            scripts: requiredString(object, 'scripts', where),
+            scriptableBy: stringList(object, 'scriptableBy', where),
+            ...(grants ? { grants } : {})
+        }
     }
 
     rejectUnknown(object, [...COMMON_FIELDS, 'contract', 'script', 'allowExec'], where)
@@ -303,6 +326,7 @@ interface PreparedTask {
     script?: FakeScript
     /** Mints a node's scripts their own credentials, when it holds a `derive` secret to mint with. */
     credentialFor?: (script: string) => Promise<{ name: string; token: string }>
+    aiGrants?: RpcAiGrants
     tls?: TlsServerOptions
 }
 
@@ -368,6 +392,9 @@ const prepareTasks = (file: string, config: SourceRpcTaskFile, callbacks: TaskFi
         // the file rather than a rollback halfway through starting it.
         const tls =
             task.type === 'console' && task.cert && task.key ? loadTls(resolve(directory, task.cert), resolve(directory, task.key)) : undefined
+        // Read with everything else, so an unreadable security policy is one of the things wrong
+        // with the file rather than a node that starts and then disagrees with its operator.
+        const aiGrants = task.type === 'node' && task.grants ? loadAiGrants(resolve(directory, task.grants)) : undefined
 
         if (task.type === 'serve') {
             const contractPath = resolve(directory, task.contract)
@@ -377,7 +404,7 @@ const prepareTasks = (file: string, config: SourceRpcTaskFile, callbacks: TaskFi
             const script = scriptPath ? (readJson(scriptPath, 'script') as FakeScript) : undefined
             return { task, network, schema, ...(script ? { script } : {}) }
         }
-        return { task, network, ...(credentialFor ? { credentialFor } : {}), ...(tls ? { tls } : {}) }
+        return { task, network, ...(credentialFor ? { credentialFor } : {}), ...(tls ? { tls } : {}), ...(aiGrants ? { aiGrants } : {}) }
     })
 
     const duplicate = prepared.find((entry, index) => prepared.findIndex((candidate) => candidate.network.name === entry.network.name) !== index)
@@ -421,7 +448,7 @@ export const startTaskFile = async (path: string, callbacks: TaskFileCallbacks =
     const config = parseTaskFile(readJson(file, 'task file'))
     if (carriesSecrets(config) && readableByOthers(file)) callbacks.warning?.(`${file} carries secrets and is readable by other users`)
     const prepared = prepareTasks(file, config, callbacks)
-    const running: { info: StartedTask; close: () => Promise<void> }[] = []
+    const running: { info: StartedTask; close: () => Promise<void>; reloadGrants?: () => void }[] = []
 
     for (const entry of prepared) {
         const { task, network } = entry
@@ -442,9 +469,32 @@ export const startTaskFile = async (path: string, callbacks: TaskFileCallbacks =
                     ...network,
                     scripts: resolve(dirname(file), task.scripts),
                     scriptableBy: task.scriptableBy,
-                    ...(entry.credentialFor ? { credentialFor: entry.credentialFor } : {})
+                    ...(entry.credentialFor ? { credentialFor: entry.credentialFor } : {}),
+                    ...(entry.aiGrants ? { aiGrants: entry.aiGrants } : {})
                 })
-                running.push({ info: { id: task.id, type: task.type, name: network.name }, close: node.close })
+                running.push({
+                    info: { id: task.id, type: task.type, name: network.name },
+                    close: node.close,
+                    ...(task.grants
+                        ? {
+                              reloadGrants: () => {
+                                  const path = resolve(dirname(file), task.grants!)
+                                  let next
+                                  try {
+                                      next = loadAiGrants(path)
+                                  } catch (e) {
+                                      callbacks.warning?.(`task "${task.id}": grants unchanged, ${e instanceof Error ? e.message : String(e)}`)
+                                      return
+                                  }
+                                  node.setAiGrants(next)
+                                  for (const line of grantLines(next)) callbacks.warning?.(`task "${task.id}": ${line}`)
+                              }
+                          }
+                        : {})
+                })
+                // Said whether or not a document was given: this node's scripts carry `ai-program`,
+                // so what is open is part of what an operator has just started.
+                for (const line of grantLines(entry.aiGrants)) callbacks.warning?.(`task "${task.id}": ${line}`)
                 if (network.broker && !network.sign)
                     callbacks.warning?.(`task "${task.id}": unsigned MQTT cannot prove a scripting caller's identity; scripting calls will be refused`)
             } else {
@@ -477,6 +527,9 @@ export const startTaskFile = async (path: string, callbacks: TaskFileCallbacks =
             if (closed) return
             closed = true
             await closeStarted(running)
+        },
+        reloadGrants: () => {
+            for (const task of running) task.reloadGrants?.()
         }
     }
 }

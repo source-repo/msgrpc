@@ -12,6 +12,7 @@ import {
     defaultWebSocketPort,
     namespaceProblems,
     readableNameFor,
+    type RpcAiGrants,
     type RpcSchema
 } from '@source-repo/rpc'
 import { Diagnostic, extractSchema } from './extract.js'
@@ -27,6 +28,7 @@ import { replaySession, startRecording } from './record.js'
 import { checkPeer, diffPeers } from './conform.js'
 import { bench, benchArguments } from './bench.js'
 import { loadAuthFile, loadSigningKeys, loadTls, scriptCredentials, type AuthFile } from './credentials.js'
+import { grantLines, loadAiGrants } from './grants.js'
 import { defaultTaskFile, startTaskFile, taskFileSkeleton, taskFileSkeletonNotes, type StartedTask } from './tasks.js'
 
 /**
@@ -145,6 +147,7 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 nothing can script it. The peer must authenticate as that name,
                                 so the key it presents reaches it out of band - deliberately not
                                 something this bus can hand over
+    --grants <file>             what an AI principal may do here; see node --grants above
     --port <n>                  serve streamable HTTP here as a second door beside stdio, so a
                                 second client shares this node's scripts, fakes and watches
                                 rather than forking them. No default: absent means stdio only
@@ -185,6 +188,10 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 on a broker, --sign at both ends is what makes the grant work:
                                 without it nothing can prove who a caller is and every call is
                                 refused
+    --grants <file>             what an AI principal may do here, as a grants document. Without one
+                                a badged principal may observe and nothing else, which is the
+                                default everywhere. SIGHUP re-reads it, so a grant can be closed
+                                without stopping the node
 
   run [<file.json>]             defaults to ./source-rpc.tasks.json, in this directory only
     shared network settings and console, node or serve tasks; relative paths are resolved from the
@@ -336,6 +343,61 @@ const readSigningKeys = (path: string, command: string) => {
  */
 const scriptCredentialsFor = (auth: AuthFile, issuer: string, command: string) =>
     scriptCredentials(auth, issuer, (message) => process.stderr.write(`source-rpc ${command}: ${message}\n`))
+
+const readAiGrants = (path: string, command: string) => {
+    try {
+        return loadAiGrants(path)
+    } catch (e) {
+        process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
+        process.exit(1)
+    }
+}
+
+/**
+ * Refusals reach the operator; permitted calls do not.
+ *
+ * Both are audit, and both belong in the fleet-side sink rather than here - but of the two, a
+ * refusal is the one somebody is standing at a terminal wondering about, and printing every allowed
+ * call would bury it. The sentence the library supplies is the whole line: it already says which
+ * grant was wanted and why the answer was no.
+ */
+const aiDecisionReporter = (command: string) => (record: { source: string; method: string; allowed: boolean; reason: string }) => {
+    if (!record.allowed) process.stderr.write(`source-rpc ${command}: refused ${record.source} calling ${record.method}: ${record.reason}\n`)
+}
+
+/**
+ * Re-read the grants document on SIGHUP, so a grant can be closed without restarting the node.
+ *
+ * A signal rather than a file watcher, deliberately. A watcher fires on a half-written file and
+ * has to be taught what an atomic replace looks like on three platforms; a signal is an operator
+ * saying *now*, which is the same instinct as everything else here - a change in what is permitted
+ * is something somebody states rather than something that happens when a file is touched.
+ *
+ * A failed reload keeps the document that was already in force. The alternative - falling back to
+ * no document - reads as "closed, therefore safe" and is in fact the node quietly disagreeing with
+ * the policy its operator believes is loaded.
+ */
+const reloadGrantsOnHangUp = (path: string, initial: RpcAiGrants | undefined, apply: (grants: RpcAiGrants) => void, command: string) => {
+    // Not every platform has SIGHUP, and Windows has none of this. Nothing else is affected.
+    if (process.platform === 'win32') return
+    let current = initial
+    process.on('SIGHUP', () => {
+        let next: RpcAiGrants
+        try {
+            next = loadAiGrants(path)
+        } catch (e) {
+            process.stderr.write(`source-rpc ${command}: grants unchanged, ${e instanceof Error ? e.message : String(e)}\n`)
+            return
+        }
+        // The revision exists so a rollback is visible. Applied anyway - an operator may be
+        // deliberately reverting - but never silently, since the other cause is a stale file.
+        if (current && next.revision < current.revision)
+            process.stderr.write(`source-rpc ${command}: grants revision went backwards, ${current.revision} to ${next.revision}\n`)
+        current = next
+        apply(next)
+        for (const line of grantLines(next)) process.stderr.write(`source-rpc ${command}: ${line}\n`)
+    })
+}
 
 /**
  * Certificate and key for a server this command opens, or undefined for plain HTTP.
@@ -924,16 +986,21 @@ const runMcp = async (argv: string[]) => {
         }
     }
     const credentialFor = scriptsDir ? scriptCredentialsFor(readAuth(argv, 'mcp'), network.name, 'mcp') : undefined
+    const grantsPath = argument(argv, '--grants', '')
+    const aiGrants = grantsPath ? readAiGrants(grantsPath, 'mcp') : undefined
     const running = await startMcp({ ...network, ...(contracts ? { contracts: resolve(contracts) } : {}), ...(argv.includes('--allow-exec') ? { allowExec: true } : {}),
         ...(scriptsDir ? { scripts: resolve(scriptsDir) } : {}),
         ...(credentialFor ? { credentialFor } : {}),
         ...(scriptableBy.length ? { scriptableBy } : {}),
+        ...(aiGrants ? { aiGrants } : {}),
+        onAiDecision: aiDecisionReporter('mcp'),
         ...(doorPort ? { port: doorPort, host: doorHost, ...(doorToken ? { doorToken } : {}) } : {}) }).catch((e: Error) => {
         // The refusal a wide bind without a token earns arrives here, with its sentence intact.
         process.stderr.write(`source-rpc ${e.message}\n`)
         process.exit(1)
     })
     // Nothing is written to stdout here: it carries the protocol. See mcp.ts.
+    if (scriptsDir || aiGrants) for (const line of grantLines(aiGrants)) process.stderr.write(`source-rpc mcp: ${line}\n`)
     const stop = () =>
         void running
             .close()
@@ -957,7 +1024,16 @@ const runNode = async (argv: string[]) => {
     }
 
     const credentialFor = scriptCredentialsFor(readAuth(argv, 'node'), network.name, 'node')
-    const running = await startNode({ ...network, scripts: resolve(scriptsDir), scriptableBy, ...(credentialFor ? { credentialFor } : {}) }).catch((e: Error) => {
+    const grantsPath = argument(argv, '--grants', '')
+    const aiGrants = grantsPath ? readAiGrants(grantsPath, 'node') : undefined
+    const running = await startNode({
+        ...network,
+        scripts: resolve(scriptsDir),
+        scriptableBy,
+        ...(credentialFor ? { credentialFor } : {}),
+        ...(aiGrants ? { aiGrants } : {}),
+        onAiDecision: aiDecisionReporter('node')
+    }).catch((e: Error) => {
         process.stderr.write(`source-rpc node: cannot start: ${e.message}\n`)
         process.exit(1)
     })
@@ -977,6 +1053,12 @@ const runNode = async (argv: string[]) => {
         process.stderr.write(
             'source-rpc node: on a broker without --sign nothing can prove who a caller is, so every scripting call will be refused. Give both ends keys.\n'
         )
+    // Said whether or not a document was given, because closed-by-default means "it is running" and
+    // "it can do something" are separately true, and this node's scripts carry `ai-program`.
+    for (const line of grantLines(aiGrants)) process.stderr.write(`source-rpc node: ${line}\n`)
+
+    if (grantsPath) reloadGrantsOnHangUp(grantsPath, aiGrants, running.setAiGrants, 'node')
+
     const stop = () =>
         void running
             .close()
@@ -1091,6 +1173,8 @@ const runTasks = async (argv: string[]) => {
     }
     process.on('SIGINT', stop)
     process.on('SIGTERM', stop)
+    // The same hang-up that re-reads a node's grants, for every node this file started.
+    if (process.platform !== 'win32') process.on('SIGHUP', () => running.reloadGrants())
     await new Promise(() => {})
 }
 

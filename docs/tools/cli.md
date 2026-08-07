@@ -596,6 +596,35 @@ Both flags are required there. A node with no directory has nothing to offer and
 
 The two arrangements that work — this one, and a bench connected directly to the node — each have a test. The secret in those key files is what has to reach the far machine out of band: a remote desktop, a phone call, paper. Deliberately not something the bus can hand over, since a bus able to distribute the key to script a node is a bus able to script the node.
 
+### What an AI principal may do here
+
+A script this node starts carries `ai-program`, so its state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression — closed is the default everywhere and there is nothing to switch on to be safe — but it means a node running AI-authored programs needs a grants document before those programs can do anything but observe.
+
+```
+source-rpc node --scripts ./scripts --scriptable-by bench --grants ./grants.json --broker mqtt://bus:1883 --sign plc.json
+```
+
+```json
+{
+  "grants": 1,
+  "revision": 3,
+  "open": {
+    "ai.tool.write": { "to": ["bench"], "expiresAt": 1786000000000 },
+    "ai.program.write": { "roles": ["commissioning"], "maxGeneration": 2 }
+  }
+}
+```
+
+A path and never a set of flags, because the document is the point: a console can render data and cannot render a callback, and a reviewer can diff a file and cannot diff a decision made inside somebody's `authorize`. A grant that is absent is closed, which is the whole default. `mcp` takes the same flag, and a `node` task takes `grants` as a path — a path there too, and not inline the way `sign` and `auth` may be, because the document carries its own `revision` so that policy can be replaced on its own cadence.
+
+**A document that cannot be read refuses the node.** Not a warning and not "carry on with nothing granted": the operator meant to grant something, and a node that quietly disagrees with the policy its operator believes is loaded is the failure this exists to prevent.
+
+Startup prints what is open, whether or not a document was given, because closed-by-default means *it is running* and *it can do something* are separately true. An expired grant is simply not listed, which is not the same as it having been taken out of the file — the file is what a reviewer diffs.
+
+**`SIGHUP` re-reads it**, on `node`, on `mcp`, and on every node a task file started. A grant that can only be closed by restarting is a grant that cannot be closed while something is going wrong. A signal rather than a file watcher, deliberately: a watcher fires on a half-written file and has to be taught what an atomic replace looks like on three platforms, while a signal is an operator saying *now* — which is the same instinct as everything else here. A reload that fails leaves the document already in force alone, and a revision that goes backwards is applied but said out loud, since the other cause of that is a stale file.
+
+Refusals are printed as they happen — who called what, and the sentence explaining the answer. Permitted calls are not: both are audit and both belong in a fleet-side sink, but of the two it is the refusal somebody is standing at a terminal wondering about, and printing every allowed call would bury it.
+
 ## Task files
 
 A host often has more than one role. Starting its console, scriptable node and contract-backed test peer as three services repeats the broker URL and leaves three processes to supervise. `run` starts those compatible roles in one process and closes them together:
@@ -766,4 +795,5 @@ Every flag of every command, for when you know what you want and need the spelli
 | `--upstream <url>` | broker | — | join another broker; repeatable |
 | `--auth <file>` | broker, console, mcp, verbs, serve | — | bearer tokens: which to accept, and which to present. See [Authenticating the bus](#authenticating-the-bus) |
 | `--quiet` | broker | off | stop logging peers arriving and leaving |
+| `--grants <file>` | node, mcp | — | the AI grants document; without one a badged principal may observe and nothing else. SIGHUP re-reads it. See [What an AI principal may do here](#what-an-ai-principal-may-do-here) |
 | `--init` | run | — | write a task file to start from, with three roles and fresh signing secrets, and refuse to overwrite. `--broker`, `--hub` and `--scriptable-by` fill in what they name. See [Task files](#task-files) |
