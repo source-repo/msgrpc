@@ -43,10 +43,16 @@ export interface RpcInvocationHandle {
  * Strips a trailing RpcInvocation from a method type - the caller-visible signature is the method
  * without it. The check is deliberately bidirectional: a trailing `unknown` accepts a
  * handle but is not one, and stripping it would silently shorten an honest signature.
+ *
+ * `NonNullable` is what admits the handle when it is declared optional, which it has to be on any
+ * method whose last real parameter is optional - TypeScript refuses a required parameter after one,
+ * so `tap(filter?: Filter, invocation?: RpcInvocationHandle)` is the only spelling available there.
+ * It does not widen the trap: `NonNullable<unknown>` is `{}`, which is not a handle, so a trailing
+ * `unknown` is still left alone in both its required and its optional form.
  */
 export type WithoutInvocation<F> = F extends (...args: [...infer Args, infer Last]) => infer Returns
-    ? [Last] extends [RpcInvocationHandle]
-        ? [RpcInvocationHandle] extends [Last]
+    ? [NonNullable<Last>] extends [RpcInvocationHandle]
+        ? [RpcInvocationHandle] extends [NonNullable<Last>]
             ? (...args: Args) => Returns
             : F
         : F

@@ -12,6 +12,14 @@ The properties that matter: **closed is the default everywhere** — a node with
 
 Behaviour note for anyone who adopted 4.6.0's derived credentials: scripts carry `ai-program`, so their state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression, and observation is unaffected.
 
+### A tap ends with the page that opened it
+
+A console tap was released only by `untap` or its five-minute ttl, so every page that closed left one running — and a debugging session is mostly reloads. A tap now records the peer that opened it, taken from the invocation handle rather than a parameter, since a caller-supplied name would be a claim and what this decides is whose tap to stop. A page is a peer on the console's own listener, so a closed tab takes its tap with it. The ttl stays as the backstop for an opener that left without a goodbye, and `taps()` now reports the owner — which answers *who is tapping what* rather than only what is being tapped.
+
+`injectInvocation` could not be used on a method whose last real parameter is optional, which `tap(filter?)` is. TypeScript refuses a required parameter after an optional one, and both the extractor and `WithoutInvocation` demanded exactly `RpcInvocationHandle` rather than the `| undefined` that an optional declaration produces. Both now admit the optional form, and neither admits a trailing `unknown` — the trap the bidirectional check exists for, since `unknown` accepts a handle without being one and stripping it would silently shorten an honest signature. `NonNullable<unknown>` is `{}`, which is not a handle, so that stays true. There is a type-level test, because a regression here does not throw: it publishes a handle in somebody's proxy signature.
+
+The wire contract is unchanged — the handle never reaches callers — and `ConsoleTap` gains `owner`.
+
 ### The grants document, reachable from the command line
 
 `aiGrants` was enforced by the library and offered by nothing the CLI had, so `source-rpc node` — the command whose entire purpose is running scripts, and whose scripts carry `ai-program` — had no way to be given one. `node` and `mcp` now take `--grants <file>`, and a `node` task takes `grants` as a path.

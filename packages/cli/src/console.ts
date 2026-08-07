@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { extname, join, resolve as resolvePath, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { EventEmitter } from 'events'
-import { MqttTransport, RpcServer, SCHEMA_VERSION, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import { MqttTransport, RpcServer, SCHEMA_VERSION, TransportEvent, rpc, rpcNamespace, type RelayedFrame, type RpcInvocationHandle, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
 import { networkTransports, type NetworkOptions } from './network.js'
 import { BusService, DEFAULT_TAP_TTL, type TapFilter, type TappedFrame } from './bus.js'
 // The tap's own contract, merged with the console's below: one server, and a schema has to describe
@@ -125,6 +125,11 @@ export interface ConsoleTap {
     token: string
     /** The peers doing the watching: a broker's `bus`, this console's own MQTT tap, or both. */
     sources: string[]
+    /**
+     * The peer that opened it - which answers "who is tapping what" rather than only "what is being
+     * tapped", and is what lets a tap end when its opener does.
+     */
+    owner: string
 }
 
 /**
@@ -263,7 +268,7 @@ export class ConsoleService extends EventEmitter {
     }
 
     /** Console-side token -> the taps it opened, here and on other peers, and when they lapse. */
-    private readonly held = new Map<string, { expires: number; opened: { peer: string; token: string }[] }>()
+    private readonly held = new Map<string, { expires: number; owner: string; opened: { peer: string; token: string }[] }>()
     /** Peers whose `frame` event this console has already subscribed to, so it subscribes once. */
     private readonly forwarding = new Map<string, (...args: unknown[]) => void>()
     private tapCounter = 0
@@ -417,8 +422,8 @@ export class ConsoleService extends EventEmitter {
      * no broker of ours there to ask. A console holding both links turns on both, and the frames
      * arrive on one event either way - which is what keeps the page from having to know any of this.
      */
-    @rpc
-    async tap(filter?: TapFilter): Promise<ConsoleTap> {
+    @rpc({ injectInvocation: true })
+    async tap(filter?: TapFilter, invocation?: RpcInvocationHandle): Promise<ConsoleTap> {
         const token = `console-tap-${++this.tapCounter}`
         const opened: { peer: string; token: string }[] = []
         // Asked before anything starts watching, since describing every peer is itself traffic and
@@ -450,8 +455,13 @@ export class ConsoleService extends EventEmitter {
         // Given the same life as the taps it stands for, so a page that closed without untapping -
         // a reload is enough - takes its entry with it rather than leaving one here for the life of
         // the console. The taps themselves expire on their own; this is the console's side of that.
-        this.held.set(token, { expires: Date.now() + (filter?.ttl ?? DEFAULT_TAP_TTL) * 1000, opened })
-        return { token, sources: opened.map((entry) => entry.peer) }
+        // Taken from the invocation rather than a parameter: a caller-supplied name would be a
+        // claim, and what this decides is whose tap to stop. A page is a peer here - it arrives on
+        // the console's own listener - so a closed tab now takes its tap with it instead of leaving
+        // one watching for up to five minutes.
+        const owner = invocation?.context.source ?? 'unknown'
+        this.held.set(token, { expires: Date.now() + (filter?.ttl ?? DEFAULT_TAP_TTL) * 1000, owner, opened })
+        return { token, owner, sources: opened.map((entry) => entry.peer) }
     }
 
     @rpc
@@ -481,9 +491,20 @@ export class ConsoleService extends EventEmitter {
     async taps(): Promise<{ taps: ConsoleTap[]; sources: string[] }> {
         await this.expireTaps()
         return {
-            taps: [...this.held.entries()].map(([token, entry]) => ({ token, sources: entry.opened.map((source) => source.peer) })),
+            taps: [...this.held.entries()].map(([token, entry]) => ({ token, owner: entry.owner, sources: entry.opened.map((source) => source.peer) })),
             sources: [...(this.localBus ? ['this console'] : []), ...(await this.busPeers())]
         }
+    }
+
+    /**
+     * Drops every tap a departed peer opened.
+     *
+     * A page is a peer here, so this is what a closed tab does to its own tap. The ttl stays as the
+     * backstop for an opener the console never saw leave - a one-shot script, a link that died
+     * without a goodbye - which is why both exist rather than either alone.
+     */
+    async releaseTapsFor(peer: string) {
+        for (const [token, entry] of [...this.held]) if (entry.owner === peer) await this.untap(token).catch(() => undefined)
     }
 
     /**
@@ -742,6 +763,8 @@ export const startConsole = async (options: ConsoleOptions) => {
         transport.on(TransportEvent.peerGone, (peer: string) => {
             // Asked again if it returns: a broker restarted with a tap is a different answer.
             service.forgetBus(peer)
+            // Whatever it was watching goes with it, rather than waiting out a ttl on a broker.
+            void service.releaseTapsFor(peer)
             service.links.delete(peer)
             if (!online.delete(peer)) return
             service.notePresence({ peer, state: 'offline', at: Date.now(), link })
