@@ -10,7 +10,8 @@ export default tseslint.config(
             '**/node_modules/**',
             '**/src/fixture/**',
             '**/src/generated/**',
-            'docs/.vitepress/cache/**'
+            'docs/.vitepress/cache/**',
+            'docs/.vitepress/.temp/**'
         ]
     },
     js.configs.recommended,

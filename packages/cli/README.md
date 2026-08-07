@@ -51,6 +51,7 @@ source-rpc diff      compare what two live peers expose
 source-rpc console   browse it in a browser: peers, what they expose, calls and events
 source-rpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 source-rpc node      make this machine scriptable from another one, and nothing else
+source-rpc run       start console, node and serve roles together from one JSON task file
 source-rpc mcp       serve the network to an MCP client over stdio
 source-rpc peers     who is on the network right now
 source-rpc find      who implements a qualified capability

@@ -773,19 +773,33 @@ export const startConsole = async (options: ConsoleOptions) => {
         )
     })
 
-    await new Promise<void>((resolve) => http.listen(options.port, options.host, resolve))
+    const close = async () => {
+        await service.releaseAll()
+        // After releaseAll, which is what drops the last tap and closes this with it. Closed
+        // again here in case a tap expired mid-flight and left the link behind.
+        await localBus?.releaseAll()
+        await tapLink?.close().catch(() => undefined)
+        await network.close()
+        if (http.listening) await new Promise<void>((resolve) => http.close(() => resolve()))
+    }
+
+    try {
+        await new Promise<void>((resolve, reject) => {
+            const failed = (error: Error) => reject(error)
+            http.once('error', failed)
+            http.listen(options.port, options.host, () => {
+                http.off('error', failed)
+                resolve()
+            })
+        })
+    } catch (e) {
+        await close()
+        throw e
+    }
 
     return {
         url: `${options.tls ? 'https' : 'http'}://${options.host}:${options.port}${base === '/' ? '' : base}`,
         service,
-        close: async () => {
-            await service.releaseAll()
-            // After releaseAll, which is what drops the last tap and closes this with it. Closed
-            // again here in case a tap expired mid-flight and left the link behind.
-            await localBus?.releaseAll()
-            await tapLink?.close().catch(() => undefined)
-            await network.close()
-            await new Promise<void>((resolve) => http.close(() => resolve()))
-        }
+        close
     }
 }

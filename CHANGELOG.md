@@ -12,6 +12,12 @@ The properties that matter: **closed is the default everywhere** — a node with
 
 Behaviour note for anyone who adopted 4.6.0's derived credentials: scripts carry `ai-program`, so their state-changing calls are refused until a grant opens that rung. That is the intended shape rather than a regression, and observation is unaffected.
 
+### One host process from a task file
+
+`source-rpc run host.tasks.json` starts console, node and contract-backed serve roles in one process. Shared network settings remove the repeated broker URL while every task keeps a distinct peer name and signing file, so combining supervision does not combine authority. Paths are relative to the task file, unknown fields and duplicate identities are refused before startup, a later failure closes roles that already started, and SIGINT/SIGTERM closes them in reverse order.
+
+Console startup now reports listener errors such as `EADDRINUSE` to its caller and closes the network connection it had already opened. Previously that error escaped as an uncaught server event, which made reliable multi-role rollback impossible and left an announced peer behind after the listener failed.
+
 ## Source RPC 4.6.0
 
 Two pieces of the AI boundary's foundation, both prerequisites rather than the boundary itself, and one behaviour change worth reading before upgrading a node that runs scripts.

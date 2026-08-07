@@ -16,6 +16,7 @@ source-rpc diff      compare what two live peers expose
 source-rpc console   browse it in a browser: peers, what they expose, calls and events
 source-rpc broker    run a WebSocket bus for peers with no MQTT broker to share, with a traffic tap
 source-rpc node      make this machine scriptable from another one, and nothing else
+source-rpc run       start console, node and serve roles together from one JSON task file
 source-rpc mcp       serve the network to an MCP client over stdio
 source-rpc peers     who is on the network right now
 source-rpc describe  what one peer exposes
@@ -594,6 +595,57 @@ source-rpc node --scripts ./scripts --scriptable-by bench --broker mqtt://bus:18
 Both flags are required there. A node with no directory has nothing to offer and one that names nobody offers it to nobody; either way it would join the bus, take a peer name and do nothing, which is a configuration that reads as though it works.
 
 The two arrangements that work — this one, and a bench connected directly to the node — each have a test. The secret in those key files is what has to reach the far machine out of band: a remote desktop, a phone call, paper. Deliberately not something the bus can hand over, since a bus able to distribute the key to script a node is a bus able to script the node.
+
+## Task files
+
+A host often has more than one role. Starting its console, scriptable node and contract-backed test peer as three services repeats the broker URL and leaves three processes to supervise. `run` starts those compatible roles in one process and closes them together:
+
+```
+source-rpc run host.tasks.json
+```
+
+```json
+{
+  "version": 1,
+  "network": {
+    "broker": "mqtt://127.0.0.1:1883",
+    "timeout": 10000
+  },
+  "tasks": [
+    {
+      "id": "console",
+      "type": "console",
+      "sign": "controller-keys.json",
+      "host": "127.0.0.1",
+      "port": 7844
+    },
+    {
+      "id": "node",
+      "type": "node",
+      "sign": "node-keys.json",
+      "scripts": "scripts",
+      "scriptableBy": ["controller"]
+    },
+    {
+      "id": "simulator",
+      "type": "serve",
+      "sign": "simulator-keys.json",
+      "contract": "contracts/host.types.json",
+      "script": "contracts/host.script.json"
+    }
+  ]
+}
+```
+
+`network` carries the shared `broker`, `hub`, `prefix`, `timeout` and `insecureTls` settings. A task can carry its own `network` object to override any of them. `SOURCE_RPC_MQTT_USERNAME` and `SOURCE_RPC_MQTT_PASSWORD` authenticate every MQTT connection exactly as they do for the individual commands.
+
+Every task is still a separate Source RPC peer. Its name comes from `name`, then from the optional name in its signing file, and finally from `id`. Duplicate peer names are refused before anything starts. Each signing file therefore remains an identity of its own; putting three roles in one process does not make them share authority.
+
+`sign`, `scripts`, `contract` and `script` paths are resolved relative to the task file, not the shell's working directory. The file is strict: unknown fields, duplicate ids, missing role settings and a network with no endpoint are startup errors. If the third task cannot start, the first two are closed before `run` fails. Ctrl-C and SIGTERM close tasks in reverse startup order.
+
+`console` accepts `host`, `port` and `basePath`. `node` requires `scripts` and a non-empty `scriptableBy`. `serve` requires `contract`, accepts `script`, and accepts `allowExec` only as an explicit boolean; it has the same development-machine warning and risk as the command-line flag.
+
+Broker and MCP roles are deliberately not task types. A broker is shared infrastructure with different authentication and relay ownership. MCP owns stdio and its client lifetime. Combining either with host roles would make one process responsible for unrelated failure domains rather than remove useful repetition.
 
 ## Ports
 

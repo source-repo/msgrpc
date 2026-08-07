@@ -4,8 +4,6 @@ import { createRequire } from 'node:module'
 import { basename, resolve } from 'node:path'
 import {
     createDerivedAuthenticator,
-    createHmacSigner,
-    createHmacVerifier,
     createTokenAuthenticator,
     firstAuthenticator,
     mintDerivedCredential,
@@ -15,8 +13,6 @@ import {
     defaultWebSocketPort,
     namespaceProblems,
     readableNameFor,
-    type MessageSigner,
-    type MessageVerifier,
     type RpcSchema,
     type TokenGrant
 } from '@source-repo/rpc'
@@ -32,6 +28,8 @@ import { startFake, type FakeScript } from './fake.js'
 import { replaySession, startRecording } from './record.js'
 import { checkPeer, diffPeers } from './conform.js'
 import { bench, benchArguments } from './bench.js'
+import { loadSigningKeys } from './credentials.js'
+import { startTaskFile, type StartedTask } from './tasks.js'
 
 /**
  * msgrpc extract  - read the contract out of TypeScript source and write it to a file
@@ -51,6 +49,7 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
   console   browse a live network in a browser: peers, what they expose, calls and events
   broker    run a WebSocket bus: relays between the peers that connect to it, until Ctrl-C
   node      make this machine scriptable from another one, and nothing else, until Ctrl-C
+  run       start console, node and serve roles together from one JSON task file, until Ctrl-C
   mcp       serve the network to an MCP client over stdio: list peers, describe them, call them
             stdio carries the protocol, so it is not for interactive use; --port opens a second
             door over streamable HTTP, so two clients can share one node
@@ -188,6 +187,10 @@ const usage = `source-rpc <command> [options]          --version prints the CLI 
                                 without it nothing can prove who a caller is and every call is
                                 refused
 
+  run <file.json>
+    shared network settings and console, node or serve tasks; relative paths are resolved from the
+    task file. Full format: https://source-repo.github.io/rpc/tools/cli#task-files
+
   strip <file…>
     --out <dir>                 where each decorator-free twin lands, under the same file name.
                                 Required, and refused when it would overwrite the input: the
@@ -290,33 +293,15 @@ const withHistory = (next: RpcSchema, previous: RpcSchema | undefined): RpcSchem
  * `peers` is optional. Supplying it makes the console check signatures on what it receives too,
  * which means an unsigned peer's frames are then dropped.
  */
-interface SigningKeys {
-    name?: string
-    secret: string
-    peers?: { [peer: string]: string }
-}
-
 const readSigningKeys = (path: string, command: string) => {
-    let keys: SigningKeys
     try {
-        keys = JSON.parse(readFileSync(path, 'utf8')) as SigningKeys
+        const signing = loadSigningKeys(path)
+        if (signing.readableByOthers) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
+        return signing
     } catch (e) {
-        process.stderr.write(`source-rpc ${command}: cannot read keys from ${path}: ${(e as Error).message}\n`)
+        process.stderr.write(`source-rpc ${command}: ${e instanceof Error ? e.message : String(e)}\n`)
         process.exit(1)
     }
-    if (typeof keys.secret !== 'string' || !keys.secret) {
-        process.stderr.write(`source-rpc ${command}: ${path} has no "secret"\n`)
-        process.exit(1)
-    }
-    try {
-        // Worth saying out loud: this file is the console's identity on the network.
-        if (statSync(path).mode & 0o077) process.stderr.write(`source-rpc ${command}: ${path} is readable by other users\n`)
-    } catch {
-        // Not worth failing over if the mode cannot be read.
-    }
-    const sign: MessageSigner = createHmacSigner(keys.secret)
-    const verify: MessageVerifier | undefined = keys.peers ? createHmacVerifier((peer) => keys.peers?.[peer]) : undefined
-    return { keys, sign, verify }
 }
 
 /**
@@ -1086,6 +1071,42 @@ const runConsole = async (argv: string[]) => {
     process.on('SIGTERM', stop)
 }
 
+const taskStartedLine = (task: StartedTask) => {
+    if (task.type === 'console') return `${task.id}: console ${task.name} on ${task.url}`
+    if (task.type === 'node') return `${task.id}: node ${task.name}`
+    return `${task.id}: serve ${task.name} answering ${task.namespaces?.join(', ')}`
+}
+
+const runTasks = async (argv: string[]) => {
+    const [, file, ...extra] = positionals(argv)
+    if (!file || extra.length) {
+        process.stderr.write('source-rpc run: give it exactly one task file, e.g. source-rpc run host.tasks.json\n')
+        process.exit(1)
+    }
+
+    const running = await startTaskFile(file, {
+        started: (task) => process.stdout.write(`source-rpc run: started ${taskStartedLine(task)}\n`),
+        warning: (message) => process.stderr.write(`source-rpc run: ${message}\n`)
+    })
+    process.stdout.write(`source-rpc run: ${running.tasks.length} tasks running from ${running.file}\n`)
+
+    let stopping = false
+    const stop = () => {
+        if (stopping) return
+        stopping = true
+        void running
+            .close()
+            .then(() => process.exit(0))
+            .catch((e: unknown) => {
+                process.stderr.write(`source-rpc run: shutdown failed: ${e instanceof Error ? e.message : String(e)}\n`)
+                process.exit(1)
+            })
+    }
+    process.on('SIGINT', stop)
+    process.on('SIGTERM', stop)
+    await new Promise(() => {})
+}
+
 const main = () => {
     // `source-rpc describe plantServer | head -4` closes stdout while there is still output to
     // write, and Node turns that into an unhandled 'error' event: a stack trace where a command
@@ -1156,6 +1177,10 @@ const main = () => {
     }
     if (command === 'node') {
         void runNode(argv).catch(fail)
+        return
+    }
+    if (command === 'run') {
+        void runTasks(argv).catch(fail)
         return
     }
     if (command === 'console') {
