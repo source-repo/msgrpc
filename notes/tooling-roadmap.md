@@ -36,7 +36,9 @@ The MQTT-monitor feature, and the one thing the console genuinely cannot do. **T
 
 Shipped: `bus.tap/untap/taps` on the broker, `TransportEvent.relayed` in the library, call/reply pairing with latency, filters by peer/namespace/kind, payloads off by default, taps that expire. Both backends are built — the broker hook for socket.io, the wildcard subscription for MQTT (on its own connection, so overlapping subscriptions can never double-deliver a request). The console exposes `tap`/`untap`/`taps` over both and the page has a Traffic tab.
 
-Still open here: a tap is released only by `untap` or its ttl, so a page that closes leaves one running for up to five minutes. Tying a tap to the peer that opened it would need the caller's identity inside the method, which the RPC layer does not hand over today.
+Closed since: a tap now records the peer that opened it, and the console releases it when that peer goes — a page is a peer on the console's own listener, so a closed tab takes its tap with it instead of leaving one running for up to five minutes. The ttl remains the backstop for an opener that left without a goodbye.
+
+The blocker this section used to record — *"tying a tap to the peer that opened it would need the caller's identity inside the method, which the RPC layer does not hand over today"* — stopped being true when the invocation handle shipped: `RpcInvocationContext` carries `source` and `identity`. What actually stood in the way was narrower and took a while to find. `tap(filter?)` ends in an optional parameter, TypeScript refuses a required parameter after one, and both the extractor and `WithoutInvocation` demanded the handle be exactly `RpcInvocationHandle` rather than the `| undefined` an optional declaration produces. Widening the filter to `TapFilter | undefined` instead is the tempting way out and a breaking contract change — `check` says so, and it is right, since a caller that sent nothing would suddenly be one argument short. Both places now admit the optional form without admitting a trailing `unknown`, which is what the bidirectional test was there to keep out.
 
 ### Shape
 

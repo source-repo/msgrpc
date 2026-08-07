@@ -2094,6 +2094,11 @@
               "kind": "string"
             }
           }
+        },
+        "owner": {
+          "type": {
+            "kind": "string"
+          }
         }
       }
     },

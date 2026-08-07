@@ -19,6 +19,17 @@ export class FastRenderer implements AdvancedRenderer {
     async audit(layout: string, invocation: RpcInvocationHandle) {
         return `${layout} audited for ${invocation.context.source}`
     }
+
+    /**
+     * The same, after an optional parameter - where the handle has to be optional too, since
+     * TypeScript refuses a required parameter following one. `since` must stay optional in the
+     * contract: widening it to `number | undefined` is what a caller sending nothing would be
+     * refused for.
+     */
+    @rpc({ semantics: 'query', injectInvocation: true })
+    async history(since?: number, invocation?: RpcInvocationHandle) {
+        return `${since ?? 0} for ${invocation?.context.source ?? 'nobody'}`
+    }
 }
 
 /** Declared here, in the same package as the class: precisely what a capability must not be. */

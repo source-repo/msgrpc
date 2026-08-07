@@ -47,9 +47,9 @@ const run = randomUUID().slice(0, 8)
 const peer = (name: string) => `${name}-${run}`
 const prefixFor = (name: string) => `msgrpc/${name}-${run}`
 
-const waitFor = async (condition: () => boolean, timeout = 8000) => {
+const waitFor = async (condition: () => boolean | Promise<boolean>, timeout = 8000) => {
     const deadline = Date.now() + timeout
-    while (!condition()) {
+    while (!(await condition())) {
         if (Date.now() > deadline) throw new Error('waitFor timed out')
         await new Promise((resolve) => setTimeout(resolve, 25))
     }
@@ -234,6 +234,48 @@ test('the console describes its own service with argument types', async (t) => {
         kind: 'record',
         values: { kind: 'ref', name: 'TypeNode' }
     })
+
+    await onlooker.close()
+    await running.close()
+    await hub.close()
+})
+
+/**
+ * The leak this closes: a tap was released only by `untap` or its five-minute ttl, so every page
+ * that closed left one running - and a debugging session is mostly reloads. A page is a peer on the
+ * console's own listener, so the console can see it go and take its tap with it.
+ *
+ * The owner comes from the invocation handle rather than a parameter, which is what makes it
+ * evidence instead of a claim: a caller could name anyone, and what this decides is whose tap to
+ * stop. That handle could not be added to `tap` at all until the extractor and `WithoutInvocation`
+ * learned to accept one declared optional, `tap`'s filter being optional before it.
+ */
+test('a tap ends when the peer that opened it does, and says whose it was', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-taps'), transports: [{ port: 3937 }] })
+    await hub.ready()
+    const running = await startConsole({ hub: 'http://localhost:3937', port: 7401, host: '127.0.0.1', name: peer('console-taps'), callTimeout: 5000 })
+
+    const page = new RpcServer({ name: peer('page'), transports: [{ connect: 'http://localhost:3937' }] })
+    await page.ready()
+    await waitFor(() => page.peers.names().includes(peer('console-taps')))
+    const consoleProxy = await page.proxy<{
+        tap(filter?: unknown): Promise<{ token: string; owner: string }>
+        taps(): Promise<{ taps: { token: string; owner: string }[] }>
+    }>('console', peer('console-taps'))
+
+    const opened = await consoleProxy.tap()
+    t.is(opened.owner, peer('page'), 'the opener is recorded from the invocation, not from anything the caller said')
+    t.is((await consoleProxy.taps()).taps.length, 1)
+
+    // Closing the page is what a closed tab does. The console sees the peer go and releases what it
+    // was holding, rather than forwarding frames for it until a ttl nobody is waiting on runs out.
+    await page.close()
+    const onlooker = new RpcServer({ name: peer('onlooker-taps'), transports: [{ connect: 'http://localhost:3937' }] })
+    await onlooker.ready()
+    await waitFor(() => onlooker.peers.names().includes(peer('console-taps')))
+    const after = await onlooker.proxy<{ taps(): Promise<{ taps: unknown[] }> }>('console', peer('console-taps'))
+    await waitFor(async () => (await after.taps()).taps.length === 0)
+    t.pass('the tap went with the page')
 
     await onlooker.close()
     await running.close()

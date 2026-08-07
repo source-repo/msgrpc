@@ -253,7 +253,11 @@ const methodToSchema = (method: MethodDeclaration, context: Context): MethodSche
     // the declaration - is diagnosed, because each half alone is a handler reading undefined.
     let parameters = method.getParameters()
     const last = parameters[parameters.length - 1]
-    const lastIsHandle = last?.getType().getSymbol()?.getName() === 'RpcInvocationHandle'
+    // Non-nullable, because the handle has to be declared optional on any method whose last real
+    // parameter is optional - TypeScript refuses a required parameter after one. The alternative
+    // was widening that parameter to `T | undefined`, which compiles and is a breaking contract
+    // change: a caller that sent nothing is suddenly one argument short.
+    const lastIsHandle = last?.getType().getNonNullableType().getSymbol()?.getName() === 'RpcInvocationHandle'
     const injecting = declaresInjection(method)
     if (injecting && lastIsHandle) parameters = parameters.slice(0, -1)
     else if (injecting) fail({ ...context, node: method }, 'declares injectInvocation, but its final parameter is not an RpcInvocationHandle - the handle arrives last, or not at all')
