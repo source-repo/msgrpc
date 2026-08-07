@@ -227,6 +227,15 @@ test('an injected invocation handle never reaches the contract, and the half-dec
     t.is(audit.params.length, 1)
     t.deepEqual(audit.paramNames, ['layout'])
 
+    // Declared optional, which is the only spelling available when the parameter before it is
+    // optional - TypeScript refuses a required parameter after one. The handle still goes, and the
+    // parameter before it keeps its optionality: narrowing that is a breaking change to every
+    // caller who sent nothing.
+    const history = schema.namespaces.renderer.methods.history
+    t.is(history.params.length, 1)
+    t.deepEqual(history.paramNames, ['since'])
+    t.deepEqual(history.params[0], { kind: 'union', options: [{ kind: 'number' }, { kind: 'literal', value: null }] })
+
     // Present without the declaration: nothing will inject it, and silence would ship a handler
     // reading undefined - so it is a diagnostic, in the extractor's usual loud tradition.
     t.true(
