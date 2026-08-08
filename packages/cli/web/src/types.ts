@@ -26,6 +26,12 @@ export interface DescribedMethod {
     rest?: TypeNode
     returns?: TypeNode
     semantics?: RpcMethodSemantics
+    /**
+     * Which path in the component's state calling this sets, when the method declares it - a field,
+     * a dot path, or `*` for a method that takes the path as an argument. This is what the state
+     * tree draws its editors from; a method that claims nothing gets none.
+     */
+    sets?: string
 }
 
 export interface DescribedEvent {

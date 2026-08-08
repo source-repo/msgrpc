@@ -64,6 +64,41 @@ test('effect is read off the decorator, independently of semantics', (t) => {
 })
 
 
+test('what a method sets is declared, not inferred from its name', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('component-tsconfig.json'))
+    const oven = schema.namespaces.oven
+
+    t.is(oven.methods.setMode.sets, 'mode')
+    // The nested path is the case the old naming rule could never reach: nothing about
+    // `setTopSetpoint` says it lands on `zones.top.setpoint`, and the declaration does.
+    t.is(oven.methods.setTopSetpoint.sets, 'zones.top.setpoint')
+    // Claimed by nothing, so a consumer draws no editor on it. This is the assertion that matters:
+    // the whole point is that a measured value beside a commanded one is distinguishable.
+    t.is(oven.methods.readTemperature.sets, undefined)
+
+    // Only the class's own methods, as for semantics and effect: extract reads the decorators it
+    // can see on the declaration. Inheritance is the runtime's business, where the prototype chain
+    // is walked and a subclass answers with what it inherited.
+    t.deepEqual(Object.keys(schema.namespaces.grill.methods), ['peek'])
+
+    t.true(
+        diagnostics.every((diagnostic) => !/sets/.test(diagnostic.reason)),
+        `the component fixture should declare cleanly, got: ${JSON.stringify(diagnostics)}`
+    )
+})
+
+test('a sets path that reaches nothing is named rather than published', (t) => {
+    const { schema, diagnostics } = extractSchema(fixture('capability-tsconfig.json'))
+
+    t.true(
+        diagnostics.some((diagnostic) => /declares sets 'zones\.\.setpoint'/.test(diagnostic.reason)),
+        `expected the unusable-path diagnostic, got: ${JSON.stringify(diagnostics)}`
+    )
+    // Absent rather than repaired. A guess at what the author meant would put an invention in a
+    // committed file, and a console would draw an editor from it.
+    t.is(schema.namespaces.local_spinner.methods.unreachable.sets, undefined)
+})
+
 test('parameters, optionals and rest arguments are described', (t) => {
     const { schema } = extractSchema(fixture('tsconfig.json'))
     const write = schema.namespaces.plant.methods.writeSetpoint
