@@ -2011,6 +2011,12 @@
           },
           "optional": true
         },
+        "sets": {
+          "type": {
+            "kind": "string"
+          },
+          "optional": true
+        },
         "requiresAuthority": {
           "type": {
             "kind": "boolean"

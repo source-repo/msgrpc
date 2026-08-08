@@ -126,6 +126,33 @@ export class ContextResolver {
         return chain.storeFor(token)
     }
 
+    /**
+     * What some *other* peer's node resolves, watched the same way a local one is.
+     *
+     * store() answers for a node this peer holds, which is what code that acts on context needs.
+     * An operator's console is the other case: it asks about a node it does not own, and it has no
+     * business grafting itself into the topology to do so - a page is not working on the oven's
+     * behalf, and saying otherwise in the records to read a value is a lie every other peer can
+     * see. Physical edges cross hosts only root to root, so there is no honest graft available
+     * anyway.
+     *
+     * The chain machinery does not care where a chain starts: a hop is a hop, the origin's own
+     * host answers the first one, and continuations are followed from there exactly as they are
+     * for a local node - including the cycle and depth checks, which only the origin can make.
+     * So this is the same resolution, the same lifecycle vocabulary and the same store, begun one
+     * step further out. It is not a second implementation of any of that, deliberately: a console
+     * that quietly disagreed with the library about what a node sees would be worse than one that
+     * could not show it at all.
+     */
+    storeAt(ref: RpcRef, token: RpcContextToken): RpcContextStore {
+        if (ref.peer === this.peer) return this.store(ref.instance, token)
+        /** Key `${peer}\u0000${instance}` - NUL because neither part can contain it. Escaped, never the byte. */
+        const key = `${ref.peer}\u0000${ref.instance}`
+        let chain = this.chains.get(key)
+        if (!chain) this.chains.set(key, (chain = new NodeChain(this, ref.instance, () => this.chains.delete(key), ref)))
+        return chain.storeFor(token)
+    }
+
     /** The policy gate: what code that *depends* on context calls, and what fails closed. */
     require(node: string, token: RpcContextToken): unknown {
         const view = this.store(node, token).getSnapshot()
@@ -186,7 +213,12 @@ class NodeChain {
     constructor(
         private readonly resolver: ContextResolver,
         private readonly node: string,
-        private readonly release: () => void
+        private readonly release: () => void,
+        /**
+         * Where the chain starts, when that is not a node on this host. Absent is the ordinary
+         * case: the local tables answer first and the chain continues outwards from there.
+         */
+        private readonly origin?: RpcRef
     ) {}
 
     storeFor(token: RpcContextToken): RpcContextStore {
@@ -225,7 +257,9 @@ class NodeChain {
 
     /** The local host's part changed - providers, topology, or the token set - so everything re-derives. */
     localChanged() {
-        this.localSnapshot = this.resolver.local.snapshotFor(this.node, [...this.tokens.keys()], 0, false)
+        // A chain that begins elsewhere has no local part to recompute. Its hops still re-open
+        // below when the token set widens, which is the other thing this method is for.
+        if (!this.origin) this.localSnapshot = this.resolver.local.snapshotFor(this.node, [...this.tokens.keys()], 0, false)
         this.rebuild('physical')
         this.rebuild('logical')
         for (const axis of ['physical', 'logical'] as const)
@@ -272,7 +306,9 @@ class NodeChain {
         // the continuation that led to it has been cleared, or every normal chain would read as a
         // ring closing on its own next hop.
         let prefix = [...(this.localSnapshot?.walked[axis] ?? [])]
-        let expected = this.localSnapshot?.continues[axis]
+        // A remote origin is simply the first continuation: nothing has been walked before it, so
+        // the ring check starts clean and the first hop is the origin's own host.
+        let expected = this.origin ?? this.localSnapshot?.continues[axis]
         let index = 0
         while (expected) {
             const target = expected

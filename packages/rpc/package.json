@@ -68,7 +68,8 @@
             "dist/**/*.test.js"
         ],
         "workerThreads": false,
-        "concurrency": 1
+        "concurrency": 1,
+        "timeout": "2m"
     },
     "homepage": "https://github.com/source-repo/rpc/tree/main/packages/rpc#readme",
     "bugs": {

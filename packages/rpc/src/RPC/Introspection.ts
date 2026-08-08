@@ -38,6 +38,17 @@ export interface DescribedMethod {
      * AI principal may call should not have to reimplement the defaulting rule.
      */
     effect?: RpcEffect
+    /**
+     * Which path in the component's `state` calling this sets, when the method says - a field, a
+     * dot path, or `*` for a method that takes the path as an argument. This is what lets a console
+     * offer to change a value without inferring from a method's name which value that is; absent
+     * means nothing should be drawn from it.
+     *
+     * What the server will honour, not merely what the source declared: `*` appears only on a host
+     * that opted in with `allowStatePathWrites`, since a claim the next call would refuse is not a
+     * claim. A per-field declaration is never gated and always appears.
+     */
+    sets?: string
     /** True when only the peer holding the component's authority may call it. */
     requiresAuthority?: boolean
 }
@@ -273,11 +284,13 @@ export class Introspection {
             const methods: DescribedMethod[] = methodNames.map((method) => {
                 const signature = described?.methods[method]
                 const semantics = this.handler.semanticsOf({ path: name, method })
+                const sets = this.handler.publishedSetsOf({ path: name, method })
                 return {
                     name: method,
                     ...(signature ? { params: signature.params, paramNames: signature.paramNames, rest: signature.rest, returns: signature.returns } : {}),
                     ...(semantics ? { semantics } : {}),
                     effect: this.handler.effectOf({ path: name, method }),
+                    ...(sets !== undefined ? { sets } : {}),
                     ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
                 }
             })
@@ -393,11 +406,16 @@ export const surfaceShape = (handler: RpcServerHandler): string => {
             const described = schema?.namespaces[name]
             const methods = [...(manage.findNameSpaceMethodMap(name)?.keys() ?? [])].sort().map((method) => {
                 const semantics = handler.semanticsOf({ path: name, method })
+                // In the hash because a console caches descriptions and draws editors from `sets`:
+                // a peer that redeploys having moved which field a method commands must invalidate
+                // that cache, or the page offers to write somewhere the device no longer writes.
+                const sets = handler.publishedSetsOf({ path: name, method })
                 return {
                     name: method,
                     ...(described?.methods[method] ? { signature: described.methods[method] } : {}),
                     ...(semantics ? { semantics } : {}),
                     effect: handler.effectOf({ path: name, method }),
+                    ...(sets !== undefined ? { sets } : {}),
                     ...(manage.exposedAuthority[name]?.has(method) ? { requiresAuthority: true } : {})
                 }
             })

@@ -325,3 +325,57 @@ test.serial('a local-only value is filtered from remote answers silently - absen
     await client.close()
     await plant.close()
 })
+
+test.serial('contextAt watches what another peer\'s node sees, following the chain past that host', async (t) => {
+    // Three peers: a plant that provides, an edge whose node inherits across both axes, and an
+    // observer that owns neither and grafts itself onto neither.
+    const plantName = peer('plant3894')
+    const edgeName = peer('edge3894')
+    const plant = new RpcServer({ name: plantName, transports: [{ port: 3894 }], topology: { place: ['site-7'] } })
+    await plant.ready()
+    await plant.topology.declare('line')
+
+    const site = plantToken()
+    const work = workOrderToken()
+    plant.provideContext(HOST_ROOT, site, { plantId: 'site-7', pressureUnit: 'bar' })
+    plant.provideContext('line', work, { workOrder: 'WO-17' })
+
+    const edge = new RpcServer({ name: edgeName, transports: [{ connect: 'http://localhost:3894' }] })
+    await edge.ready()
+    await edge.topology.updateHost({ parent: { peer: plantName, instance: HOST_ROOT } }, { expectedVersion: edge.topology.get(HOST_ROOT)!.version })
+    // Nothing is provided on the edge at all: everything its line sees is inherited, which is
+    // what makes this a test of the chain rather than of one hop.
+    await edge.topology.declare('line', { owner: { peer: plantName, instance: 'line' } })
+
+    const observer = new RpcServer({ name: peer('console3894'), transports: [{ connect: 'http://localhost:3894' }] })
+    await observer.ready()
+
+    const physical = observer.contextAt({ peer: edgeName, instance: 'line' }, site)
+    const logical = observer.contextAt({ peer: edgeName, instance: 'line' }, work)
+    await waitFor(() => physical.getSnapshot().status === 'live' && logical.getSnapshot().status === 'live')
+
+    t.is((physical.getSnapshot().entry?.value as { plantId: string }).plantId, 'site-7', 'the physical chain was followed edge root to plant root')
+    t.is((logical.getSnapshot().entry?.value as { workOrder: string }).workOrder, 'WO-17', 'the logical chain was followed through the remote owner')
+    t.deepEqual(physical.getSnapshot().entry?.provider, { peer: plantName, instance: HOST_ROOT }, 'provenance names the provider, not the peer that was asked')
+
+    // Live, not a snapshot taken once: a provider two hosts away moves and the observer sees it.
+    const second = plant.provideContext('line', defineRpcContext({ id: `acme.moves.${run}`, schemaVersion: '1', axis: 'logical' }), 'first')
+    const moving = observer.contextAt({ peer: edgeName, instance: 'line' }, defineRpcContext({ id: `acme.moves.${run}`, schemaVersion: '1', axis: 'logical' }))
+    await waitFor(() => moving.getSnapshot().status === 'live')
+    second.set('second')
+    await waitFor(() => moving.getSnapshot().entry?.value === 'second')
+
+    // A ref on this host is the ordinary local chain, not a hop out and back.
+    observer.provideContext(HOST_ROOT, site, { plantId: 'here', pressureUnit: 'psi' })
+    const mine = observer.contextAt({ peer: observer.options.name, instance: HOST_ROOT }, site)
+    await waitFor(() => mine.getSnapshot().status === 'live')
+    t.is((mine.getSnapshot().entry?.value as { plantId: string }).plantId, 'here')
+
+    physical.close()
+    logical.close()
+    moving.close()
+    mine.close()
+    await observer.close()
+    await edge.close()
+    await plant.close()
+})

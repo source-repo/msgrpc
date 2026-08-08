@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
 import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
-import { HostTopology, type HostTopologyOptions } from './RPC/Topology.js'
+import { HostTopology, type HostTopologyOptions, type RpcRef } from './RPC/Topology.js'
 import { contextEvent, contextNamespace, HostContext, type RpcCapturedContext, type RpcContextProviderHandle, type RpcContextToken } from './RPC/Context.js'
 import { ContextResolver, type RpcContextStore } from './RPC/ContextResolver.js'
 import { RpcAuthenticator, RpcAuthorizer, type TrustedCertificateAuthority } from './RPC/Auth.js'
@@ -110,6 +110,21 @@ export interface RpcServerOptions {
      * snapshot stays current.
      */
     validateComponentSnapshots?: boolean
+    /**
+     * Honour methods that declare `sets: '*'` - the generic setters, which take a path and a value
+     * and write wherever the caller names.
+     *
+     * Off by default, and the state-write sibling of `topology.allowRemoteMutation`: a deployment
+     * that never enables it has no such surface at all, however its classes are written. A generic
+     * setter is a development affordance - it is what makes a console usable against a component
+     * carrying three hundred tags, where declaring a marker per field would be absurd - and on a
+     * plant the answer is the per-field `sets` declarations, whose methods carry the interlocks.
+     *
+     * Enabling it is not the same as opening the state. Every call still passes authorize() with
+     * the path in params and the caller resolved, so a policy can rule on *which* path rather than
+     * only on the method, and the method's own body still decides what it will accept.
+     */
+    allowStatePathWrites?: boolean
     /** Refuse to expose a class that marks no @rpc methods, rather than publishing all of them. */
     requireExplicitExposure?: boolean
     /** Refuse a caller declaring a contract version the schema has no history for. Default 'allow'. */
@@ -230,6 +245,7 @@ export class RpcServerBase implements IManageRpc {
         this.topology = new HostTopology(this.options.name, this.options.topology)
         this.rpc.hostTopology = this.topology
         this.rpc.allowTopologyMutation = this.options.topology?.allowRemoteMutation ?? false
+        this.rpc.allowStatePathWrites = this.options.allowStatePathWrites ?? false
         this.context = new HostContext(this.topology)
         this.topology.onCommitted = () => this.context.changed()
         this.rpc.hostContext = this.context
@@ -442,6 +458,22 @@ export class RpcServerBase implements IManageRpc {
     /** The resolved, cached view of one token at one local node, live across every host it crosses. */
     contextOf(instance: string, token: RpcContextToken): RpcContextStore {
         return this.contextResolver.store(instance, token)
+    }
+
+    /**
+     * The same view, for a node on another peer: what *it* sees, not what this host would.
+     *
+     * For observing rather than acting - a console, a diagnostic, an operator asking why a machine
+     * is behaving as though it were on the night shift. Code that *depends* on context should ask
+     * about its own node with contextOf(), because a decision taken from another node's ambient
+     * data is a decision taken on the wrong node's behalf.
+     *
+     * The alternative a console would otherwise reach for is grafting itself into the topology
+     * next to the node it wants to read, which is a claim about the plant that happens to be
+     * false, and which physical edges refuse anyway - they cross hosts only root to root.
+     */
+    contextAt(node: RpcRef, token: RpcContextToken): RpcContextStore {
+        return this.contextResolver.storeAt(node, token)
     }
 
     /** The policy gate: throws on invalid and missing, and on stale where the token rejects it. */

@@ -74,6 +74,18 @@ export interface MethodSchema {
      * means the source declared nothing and the server applies its conservative default.
      */
     effect?: RpcEffect
+    /**
+     * Which path in the component's `state` calling this sets - a field, a dot path, or `*` for a
+     * method that takes the path as an argument. Absent means the method claims nothing, which is
+     * the honest reading of most methods.
+     *
+     * In the contract because it is what makes a state field editable *by declaration* rather than
+     * by a consumer guessing from the method's name - see `sets` in Expose.ts for why that guess is
+     * the wrong mechanism. Unlike `semantics` and `effect` it carries no compatibility rule: a
+     * method that stops claiming a path removes an affordance from a console, which is a change to
+     * what tooling can offer and not a promise to callers that has been broken.
+     */
+    sets?: string
 }
 
 /**
