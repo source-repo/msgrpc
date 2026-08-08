@@ -61,6 +61,45 @@ Optional arguments have a checkbox that decides whether they are sent at all, so
 
 JSON has no date and no byte string, so what is typed into a JSON box is walked against the type before it is sent: an ISO string where the schema says `date` becomes a `Date`. Otherwise every object with a timestamp in it would be rejected by the server that asked for one.
 
+### State, and what it is drawn from
+
+Press **observe** on a component and the panel fills with its props and state — not as a JSON blob, but as a tree built from the interfaces the contract publishes. `extract` reads a component's `Props` and `State` from the source, `describe()` carries them over, and the console has never seen the file: it knows `zones.top.setpoint` is a number and `door` is one of two words because the contract says so.
+
+That is also why a field currently `null` is **labelled rather than omitted**. A tree drawn from the values alone cannot tell "this oven has no work order" from "this oven does not have work orders", and on a plant those are different facts.
+
+The status sits beside the values and keeps its meaning: a dropped link marks the picture stale and **keeps it readable**, with the revision and "last known 14:03" next to it. Nothing blanks.
+
+**Every leaf subscribes to its own path.** A component carrying 300 tags, one of which moves five times a second, would otherwise re-render 300 rows to move one number — so each leaf reads its own value through `useSyncExternalStore`, and a primitive that did not change bails out before React does any work. Branches subscribe to as little as they need to know their shape; the panel header reads only the status and whether data has arrived. Observing a 300-tag component for fifteen seconds, measured in headless Chrome:
+
+| | script | layout |
+| --- | --- | --- |
+| re-render the tree from the snapshot | 312 ms | 34 ms |
+| each leaf subscribes to its own value | 39 ms | 35 ms |
+
+Layout is unchanged, which is the point worth keeping: React's diffing already kept the *DOM* work to the row that moved. What the arrangement saves is the render pass — the JS spent deciding that 299 rows still say what they said.
+
+### Changing a value is calling a method
+
+A state row is never written. Where the contract offers a way to change a field, the row **proposes a call** and shows it in full — `setSetpoint(180)` — and what the operator commits is that call, not a value.
+
+**Which method is read from the contract, never guessed from a name.** A row gets an editor when some method declares [`@rpc({ sets: 'setpoint' })`](../guide/components.md#saying-what-a-method-sets) for that path, and gets none otherwise. A peer that declares nothing offers no editors at all, which is the honest answer rather than a guess.
+
+The panel used to look for a one-argument `set<Field>`, which is right almost always — the residue being methods like `setMode`, which may begin a transition with an interlock behind it rather than assign `state.mode`, or `setPressure` sitting beside a measured `state.pressure`. A guess that is wrong is wrong *silently*, in the direction of commanding a plant, and nothing on the row shows it. Reading the declaration instead also reaches where a naming rule never could: `zones.top.setpoint` gets an editor two levels down, and the `zones.top.temperature` beside it — same shape, same type — correctly gets none.
+
+A component carrying a few hundred tags declares one [generic setter](../guide/components.md#the-generic-setter-and-its-gate) instead of a marker per field, and then every leaf gets an editor — the path travels as an argument. That is coarser on purpose: the contract cannot say which of those paths the method will actually accept, so some attempts are refused by the component and the refusal arrives where the value would have been. A host that did not opt in publishes no such claim at all, and the panel offers nothing.
+
+Nothing is written locally on success. The number on screen moves when the plant publishes its next snapshot, which is the only report that the plant agrees — an optimistic row would show a setpoint the oven refused. A refusal arrives where the value would have been.
+
+### Context
+
+Each node's panel can also show what it **inherits**: the site it stands in, the work order it is running, the maintenance window that applies to it. Type a token id — `acme.site` — pick the axis, and the console watches it; what it watches is remembered per peer.
+
+The answer comes from the node's own host, over [`contextAt()`](../guide/context.md#asking-about-another-peers-node). The console does not resolve chains itself and does not graft itself into the topology next to whatever it wants to read, which would be a claim about the plant that is false. A `collect` token shows the whole chain, nearest first, each entry naming where it was provided.
+
+**There is no list of tokens to pick from, and that is deliberate.** Context has no enumeration surface: listing what ambient data a plant carries is reconnaissance, and a token whose provider declares `exposure: 'local'` is filtered from remote answers silently rather than refused — a refusal would confirm it exists. So an operator types the ids they are entitled to know.
+
+The axis is picked rather than guessed for the same reason it is elsewhere: it belongs to the token's definition, the console has not seen that definition, and there is no fallback between the two.
+
 ### The console describes itself
 
 Both services this package runs — the CLI's `console` namespace and the `chat` namespace the page hosts — ship a contract extracted from their own source, so pointing one console at another gives argument fields rather than `call(…)` and `say(…)`:

@@ -29,9 +29,12 @@ export default defineConfig({
                     { text: 'Getting started', link: '/guide/getting-started' },
                     { text: 'Connecting', link: '/guide/connecting' },
                     { text: 'Exposing methods', link: '/guide/exposing' },
+                    // State sits beside methods rather than after the machinery, because it is the
+                    // other half of what a peer offers - a device is as much what it holds as what
+                    // it can be told to do, and a reader who stops early should have met both.
+                    { text: 'State and observable components', link: '/guide/components' },
                     { text: 'Commands', link: '/guide/commands' },
                     { text: 'Events and reconnection', link: '/guide/events' },
-                    { text: 'Observable components', link: '/guide/components' },
                     { text: 'Command authority', link: '/guide/authority' },
                     { text: 'Topology', link: '/guide/topology' },
                     { text: 'Structural context', link: '/guide/context' },

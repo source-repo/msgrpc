@@ -72,13 +72,52 @@ Three things worth noticing:
 
 **`proxy()` hands back the instance**, so calling a remote method reads like calling a local one. Two names are reserved on a proxy: `$with` attaches per-call options — an idempotency key, a timeout, an owner fence — and `then` answers `undefined` so `await` does not adopt the proxy as a promise.
 
+## The other half: state
+
+Methods are what a peer can be *told*. State is what it *is*, and it is first-class rather than a `getStatus()` you have to remember to call. Extend `RpcComponent<Props, State>` and the instance publishes a snapshot every time it changes:
+
+```typescript
+// oven.ts
+import { RpcComponent, rpc, rpcNamespace } from '@source-repo/rpc'
+
+type OvenProps = { unit: string; maximum: number }
+type OvenState = { celsius: number; mode: string }
+
+@rpcNamespace('oven')
+export class Oven extends RpcComponent<OvenProps, OvenState> {
+    constructor() {
+        super({ unit: '°C', maximum: 300 }, { celsius: 20, mode: 'idle' })
+    }
+
+    @rpc({ semantics: 'idempotent-command' })
+    async setMode(mode: string) {
+        this.setState({ mode })
+        return mode
+    }
+}
+```
+
+Observers get it as a local cache:
+
+```typescript
+const oven = await client.component<Oven>('oven', 'ovenServer')
+
+oven.state.celsius              // synchronous, no network hop, always the last published value
+oven.props.maximum              // the host's inputs, beside the state they bound
+await oven.setMode('heating')   // changing it is a call, exactly as before
+```
+
+**Reading is a property access; changing is a method call**, and the asymmetry is deliberate. `oven.state.celsius` costs nothing and never blocks, because the snapshot is already here — twenty screens watching one oven cost one subscription. An assignment back the other way would have nowhere to put a refusal, a timeout, or a plant that said no, so writing stays a call with an `await` on it.
+
+Every view also carries a status, so a cache that has stopped being current says so instead of quietly lying — see [State and observable components](./components.md).
+
 ## Where to go next
 
 This page is deliberately the ten-minute version.
 
+- [State and observable components](./components.md) — snapshot ordering, statuses that tell the truth, publishing bounds, React integration.
 - [Connecting](./connecting.md) — what a network of these looks like: ports, buses, discovery, serving over a connection you open.
 - [Commands](./commands.md) — semantics, idempotency, serialised execution, the bounded mailbox.
-- [Observable components](./components.md) — cached props and state, statuses that tell the truth, React integration.
 - [Command authority](./authority.md) and [Topology](./topology.md) — the plant's arbitration concept, and where everything sits.
 - [Contracts and validation](./contracts.md) — schemas, runtime checking, serving older callers, `describe()`.
 - [The command line](../tools/cli.md), [the console](../tools/console.md) and [the MCP server](../tools/mcp.md).

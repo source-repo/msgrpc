@@ -39,6 +39,22 @@ The status vocabulary is `initializing | live | stale | missing | invalid | clos
 
 Twenty tokens inherited over one upstream host cost one subscription; two stores of one token share everything.
 
+## Asking about another peer's node
+
+`contextOf()` answers for a node this host holds, which is what code that *acts* on context needs. An operator's console is the other case: it asks about a node it does not own.
+
+```typescript
+const store = server.contextAt({ peer: 'bakery', instance: 'oven' }, PlantContext)
+```
+
+Same store, same statuses, same `close()`. What differs is only where the chain begins — and that is all it needs to differ, because the chain machinery does not care: a hop is a hop, the origin's own host answers the first one, and continuations are followed from there exactly as they are for a local node, including the cycle and depth checks that only the origin can make.
+
+**It is for observing, never for deciding.** Code that depends on context should ask about its own node with `contextOf()`, because a decision taken from another node's ambient data is a decision taken on the wrong node's behalf.
+
+The alternative a console would otherwise reach for is grafting itself into the topology beside the node it wants to read — which is a claim about the plant that happens to be false, visible to every other peer, and which physical edges refuse anyway, since they cross hosts only root to root. This is that need met honestly instead.
+
+Both the console's context panel and the MCP server's [`read_context`](../tools/mcp.md#what-a-node-inherits) are this call and nothing more. A tool that quietly disagreed with the library about what a node sees would be worse than one that could not show it at all.
+
 ## Capture
 
 A caller may deliberately package what a node currently sees, for a payload:
