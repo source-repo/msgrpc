@@ -59,6 +59,32 @@ Every view carries `status: 'initializing' | 'live' | 'stale' | 'closed'`. A dro
 
 Two observers of one component share one channel and one remote subscription; one leaving does not blind the other.
 
+## Asking for less than the whole state
+
+A snapshot travels whole on every change. For a mode, a health and a handful of reported values that is free and buys a great deal. It stops being free when a component carries a few hundred tags: three hundred values cross the wire so that one number can change, and on a 1200 baud link a 12 kB snapshot is **eighty seconds** — a screen showing twenty of those values cannot be drawn at all.
+
+Name the paths and ask for those:
+
+```typescript
+const state = rpcRoot<FieldState>()
+
+const oven = await client.component<Field>('field', 'bakery', {
+    paths: [['state', ...rpcPath(state.zones.top.setpoint)], ['state', ...rpcPath(state.mode)]]
+})
+```
+
+A path is spelled from the root it starts at, so the first segment is `props` or `state` — the same two roots a reader sees.
+
+**What arrives is still a whole snapshot** — of the projection. That is the property worth protecting: duplicate delivery stays harmless, a reconnect is still repaired by one targeted frame rather than a replay, and the epoch and revision rules are untouched. Only how much of the state is in it changes, which is why this needs no base tracking, no keyframe schedule and no new counter, and why it is the thing to reach for before any delta encoding.
+
+**A partial snapshot says that it is partial.** The view carries `projection`, the list of paths it contains. Without it a narrowed subscription and a component that had dropped half its state would be the same bytes, and anything merging them would be inventing. A whole snapshot carries no `projection` at all, so nothing reads it as partial.
+
+A path that reaches nothing is simply absent rather than an error — state is data, and a tag that has not appeared yet is a legitimate thing to watch for. An empty path list *is* refused, because subscribing to nothing looks exactly like a component that has gone quiet, and that is the wrong thing to spend a night on.
+
+**One peer holds one subscription per component.** The server keys a subscription by instance, event and caller, so a second view of the same component with different paths would be one subscription whose contents depended on who opened first. That is refused, naming both projections, rather than silently serving the other one's paths. Re-subscribing with different paths — the same peer changing its mind — replaces the projection rather than merging, so a narrowing is always possible; a union would keep sending what nobody watches any more.
+
+A projection is a narrowing, so it needs none of the gating a generic setter does: asking for less than you are already entitled to exposes nothing new, and `authorize()` sees the paths like any other parameter. And it survives a reconnect — the replay carries the paths, since re-subscribing without them would quietly restore the whole snapshot on the one link that cannot carry it.
+
 ## Publishing bounds
 
 Expose options bound what the network hears — local state always changes immediately:

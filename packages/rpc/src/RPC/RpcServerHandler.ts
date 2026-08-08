@@ -40,9 +40,12 @@ import {
     DEFAULT_AUTHORITY_TTL,
     installComponentPublisher,
     installComponentValidator,
+    projectSnapshot,
     releaseComponentAuthority,
     RpcComponent,
-    type RpcComponentExposeOptions
+    type RpcComponentData,
+    type RpcComponentExposeOptions,
+    type RpcComponentSnapshot
 } from './Component.js'
 import { RpcSchema, validateParams, validateValue, type ComponentSchema } from './Schema.js'
 import { describeProblems, namespaceProblems } from './Compatibility.js'
@@ -53,10 +56,13 @@ export class EventProxy {
      * function that removeListener() could never match.
      */
     private readonly listener = (...args: unknown[]) => {
+        // Narrowed per subscriber, so one observer asking for twenty of three hundred tags does not
+        // make everyone else's frames smaller - or larger. The projection is this subscription's.
+        const carried = this.projection ? [projectSnapshot(args[0] as RpcComponentSnapshot<RpcComponentData, RpcComponentData>, this.projection)] : args
         // Caught here, because an emit is not a call: nothing above this is awaiting the delivery,
         // so a transport that cannot publish - a broker that has gone away, most obviously - would
         // otherwise reject a promise nobody holds, and Node ends the process on one of those.
-        void this.rpcServer.sendEvent(this.target, this.event, args, this.instanceName).catch((e) =>
+        void this.rpcServer.sendEvent(this.target, this.event, carried, this.instanceName).catch((e) =>
             this.rpcServer.emit('deliveryError', { target: this.target, event: this.event, path: this.instanceName, error: e })
         )
     }
@@ -65,7 +71,9 @@ export class EventProxy {
         public instance: EventEmitter,
         public event: string,
         public target: string,
-        public instanceName: string
+        public instanceName: string,
+        /** This subscriber's narrowing of the component snapshot, when it asked for one. */
+        public projection?: readonly (readonly string[])[]
     ) {}
     attach() {
         this.instance.on(this.event, this.listener)
@@ -80,6 +88,35 @@ export class EventProxy {
  * lookups compared by reference and never matched - every repeated on() stacked another listener.
  */
 const eventProxyKey = (instanceName: string, event: string, source: string) => `${instanceName}\u0000${event}\u0000${source}`
+
+/**
+ * The projection a subscribe carried, or an Error naming what is wrong with it.
+ *
+ * Refused rather than ignored. A caller on a slow link asking for twenty of three hundred tags and
+ * silently getting all three hundred is the one failure this feature exists to prevent, and it
+ * would look like the feature working until somebody measured the wire.
+ */
+const readProjection = (carried: unknown): readonly (readonly string[])[] | undefined | Error => {
+    if (carried === undefined || carried === null) return undefined
+    if (!Array.isArray(carried)) return new Error('a component projection is an array of paths, each an array of segments')
+    for (const path of carried)
+        if (!Array.isArray(path) || path.some((segment) => typeof segment !== 'string'))
+            return new Error('a component projection is an array of paths, each an array of string segments')
+    // Empty asks for nothing, which is almost certainly a caller that built its path list wrongly -
+    // and answering with an empty snapshot forever would look exactly like a component gone quiet.
+    if (!carried.length) return new Error('a component projection naming no paths would subscribe to nothing; omit it to receive the whole snapshot')
+    return carried as readonly (readonly string[])[]
+}
+
+/** Whether two projections ask for the same thing, so a re-subscribe can tell a change from a replay. */
+const sameProjection = (a: readonly (readonly string[])[] | undefined, b: readonly (readonly string[])[] | undefined) => {
+    if (!a || !b) return a === b
+    if (a.length !== b.length) return false
+    // Order-sensitive, deliberately: two lists differing only in order describe the same
+    // subscription, but treating them as different costs one re-subscribe where treating them as
+    // the same when they are not costs correctness. A client sends a stable order anyway.
+    return a.every((path, index) => path.length === b[index].length && path.every((segment, at) => segment === b[index][at]))
+}
 
 export type BindObject = {
     [index: string]: (...args: unknown[]) => unknown
@@ -483,24 +520,46 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                     // Idempotent: a client replaying its subscriptions after a reconnect must not
                     // stack a second listener for a subscription the server already holds.
                     const eventKey = eventProxyKey(instanceName, event, source)
+                    // A projection rides along on the subscribe, which is the only moment a
+                    // subscriber gets to say anything about what it wants. Refused rather than
+                    // ignored if it is malformed: silently sending the whole snapshot to something
+                    // that asked for a twentieth of it is the one outcome a slow link cannot afford.
+                    const projection = event === componentSnapshotEvent ? readProjection(payload.params[1]) : undefined
+                    if (projection instanceof Error) {
+                        await this.sendError(payload.id, source, 'InvalidParams', projection.message)
+                        return
+                    }
                     let eventProxy = this.eventProxies.get(eventKey)
                     let result = 'ok - already exists'
+                    // One subscription per peer per component, so a re-subscribe that names
+                    // different paths is that peer changing its mind rather than a second observer.
+                    // Replaced rather than merged: a union would keep sending what nobody is
+                    // watching any more, and neither end could ever narrow again.
+                    if (eventProxy && event === componentSnapshotEvent && !sameProjection(eventProxy.projection, projection)) {
+                        eventProxy.detach()
+                        this.eventProxies.delete(eventKey)
+                        eventProxy = undefined
+                        result = 'ok - reprojected'
+                    }
                     if (!eventProxy) {
                         // Tracking first, so the counter's listener lands before the proxy's and
                         // a delivery is stamped with a sequence that already counted it. For an
                         // event the schema declares this is a no-op - expose tracked it - and for
                         // an ad-hoc one the count honestly starts here.
                         this.trackEvent(instanceName, event)
-                        eventProxy = new EventProxy(this, inst, event, source, instanceName)
+                        eventProxy = new EventProxy(this, inst, event, source, instanceName, projection)
                         this.eventProxies.set(eventKey, eventProxy)
                         eventProxy.attach()
-                        result = 'ok'
+                        if (result !== 'ok - reprojected') result = 'ok'
                     }
                     // A component subscription is answered with the current snapshot first - after
                     // the listener is attached, so an update cannot fall between them, and on every
                     // resubscription, so a reconnect repairs whatever was missed with one frame
                     // rather than a replay. Targeted at this subscriber only: the others are current.
-                    if (event === componentSnapshotEvent) await this.sendEvent(source, componentSnapshotEvent, [componentSnapshot(inst)], instanceName)
+                    if (event === componentSnapshotEvent) {
+                        const whole = componentSnapshot(inst)
+                        await this.sendEvent(source, componentSnapshotEvent, [projection ? projectSnapshot(whole, projection) : whole], instanceName)
+                    }
                     await this.respond(payload.id, source, { type: RpcMessageType.success, result, id: payload.id } as RpcSuccessPayload, MessageType.ResponseMessage)
                 } else if ((payload.method === 'off' || payload.method === 'removeListener') && inst instanceof EventEmitter) {
                     // Deliberately not authorized. The key includes the caller, so a peer can only

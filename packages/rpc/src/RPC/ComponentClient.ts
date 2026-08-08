@@ -39,6 +39,24 @@ export type ComponentState<T> = T extends RpcComponent<infer _P, infer S> ? S : 
  */
 export type RpcComponentLike = { readonly props: RpcComponentData; readonly state: RpcComponentData }
 
+/** What a caller may ask for beyond the component itself. */
+export interface RpcComponentOptions {
+    /**
+     * Receive only these paths, each spelled from `props` or `state` - `['state', 'zones', 'top',
+     * 'setpoint']`, which `rpcPath` produces. Omitted means the whole snapshot, as it always was.
+     *
+     * What arrives is still a whole snapshot, of the projection: duplicate delivery stays harmless,
+     * a reconnect is still repaired by one frame, and the epoch and revision rules are untouched.
+     * Only how much of the state is in it changes, which is why this needs no base tracking and no
+     * keyframe schedule - and why it is worth reaching for before any delta encoding.
+     *
+     * One peer holds one subscription per component, so opening a second view of the same component
+     * with different paths is refused rather than silently served the first one's.
+     */
+    paths?: readonly (readonly string[])[]
+}
+
+
 export type RpcComponentProxy<T extends RpcComponentLike> = T & {
     $with(options: RpcCallOptions): RpcComponentProxy<T>
     /**
@@ -55,7 +73,7 @@ export type RpcComponentProxy<T extends RpcComponentLike> = T & {
 
 /** The proxy surface a channel drives: the snapshot event, through the ordinary event machinery. */
 type Subscribable = {
-    on(event: string, handler: (snapshot: unknown) => void): Promise<unknown>
+    on(event: string, handler: (snapshot: unknown) => void, projection?: readonly (readonly string[])[]): Promise<unknown>
     off(event: string, handler: (snapshot: unknown) => void): Promise<unknown>
 }
 
@@ -83,7 +101,9 @@ class ComponentChannel {
         client: RpcClientHandler,
         readonly namespace: string,
         readonly target: string | undefined,
-        private readonly release: () => void
+        private readonly release: () => void,
+        /** What this channel asked for, when it asked for less than everything. */
+        readonly projection?: readonly (readonly string[])[]
     ) {
         this.inner = client.proxy<object>(namespace, target)
         this.first = new Promise((resolve) => (this.settleFirst = resolve))
@@ -97,9 +117,15 @@ class ComponentChannel {
         }
     }
 
-    /** Install the local handler, then ask the server - which answers with a targeted snapshot. */
+    /**
+     * Install the local handler, then ask the server - which answers with a targeted snapshot.
+     *
+     * The projection rides on the subscribe, because that is the only moment a subscriber gets to
+     * say what it wants; everything after is the server pushing. What comes back is still a whole
+     * snapshot, of the projection, so nothing about the acceptance rules below changes.
+     */
     async open() {
-        await (this.inner as Subscribable).on(componentSnapshotEvent, this.handler)
+        await (this.inner as Subscribable).on(componentSnapshotEvent, this.handler, this.projection)
         await this.first
     }
 
@@ -153,6 +179,16 @@ class ComponentChannel {
     }
 }
 
+/** Whether two projections ask for the same thing. Mirrors the server's comparison exactly. */
+const sameProjection = (a: readonly (readonly string[])[] | undefined, b: readonly (readonly string[])[] | undefined) => {
+    if (!a || !b) return a === b
+    if (a.length !== b.length) return false
+    return a.every((path, index) => path.length === b[index].length && path.every((segment, at) => segment === b[index][at]))
+}
+
+const describeProjection = (projection: readonly (readonly string[])[] | undefined) =>
+    projection ? projection.map((path) => path.join('.')).join(', ') : 'the whole snapshot'
+
 /**
  * One channel per (target, namespace), shared by every component() call for it and reference
  * counted, so two panes watching one pump cost one subscription - and one leaving does not take
@@ -177,12 +213,22 @@ export class ComponentChannels {
             })
     }
 
-    async open(namespace: string, target: string | undefined): Promise<ComponentChannel> {
+    async open(namespace: string, target: string | undefined, projection?: readonly (readonly string[])[]): Promise<ComponentChannel> {
         // NUL as the separator: it cannot occur in a peer or namespace id. Escaped, never the byte.
         const key = `${target ?? ''}\u0000${namespace}`
         let channel = this.channels.get(key)
+        // One subscription per peer per component, which the server enforces by keying on the pair -
+        // so two observers here asking for different projections would be one subscription whose
+        // paths depended on who opened first, and the second would silently receive the first's.
+        // Refused instead, naming both, because a projection nobody asked for is worse on a slow
+        // link than no projection at all: it looks like the feature working.
+        if (channel && !sameProjection(channel.projection, projection))
+            throw new Error(
+                `component: ${namespace}${target ? ` on ${target}` : ''} is already observed here with a different projection ` +
+                    `(${describeProjection(channel.projection)} against ${describeProjection(projection)}) - one peer holds one subscription per component`
+            )
         if (!channel) {
-            channel = new ComponentChannel(this.handler, namespace, target, () => void this.channels.delete(key))
+            channel = new ComponentChannel(this.handler, namespace, target, () => void this.channels.delete(key), projection)
             this.channels.set(key, channel)
             try {
                 await channel.open()

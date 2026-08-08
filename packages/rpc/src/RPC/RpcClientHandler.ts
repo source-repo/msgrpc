@@ -110,7 +110,7 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
     /** Contract versions this client was built against, by namespace, declared on each call. */
     schemaVersions?: { [namespace: string]: string | undefined }
     /** Remote subscriptions held by this client, replayed by resubscribe() after a reconnect. */
-    subscriptions = new Map<string, { remote?: string; instanceName: string; event: string }>()
+    subscriptions = new Map<string, { remote?: string; instanceName: string; event: string; projection?: unknown }>()
     eventEmitter: { [index: string]: unknown } = new EventEmitter() as unknown as { [index: string]: unknown }
     constructor(
         name: string,
@@ -202,7 +202,13 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
      */
     async resubscribe() {
         const held = [...this.subscriptions.values()]
-        const results = await Promise.allSettled(held.map((subscription) => this.call(subscription.remote, subscription.instanceName, 'on', subscription.event)))
+        const results = await Promise.allSettled(
+            held.map((subscription) =>
+                subscription.projection === undefined
+                    ? this.call(subscription.remote, subscription.instanceName, 'on', subscription.event)
+                    : this.call(subscription.remote, subscription.instanceName, 'on', subscription.event, subscription.projection)
+            )
+        )
         const failed: FailedResubscription[] = results.flatMap((result, index) =>
             result.status === 'rejected'
                 ? [{ peer: held[index].remote, namespace: held[index].instanceName, event: held[index].event, error: result.reason }]
@@ -366,7 +372,11 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                                 ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(key, ...args.slice(1))
                                 // 'on' is the only form the server holds state for, so it is the
                                 // only one worth replaying after a reconnect.
-                                if (prop === 'on') this.subscriptions.set(key, { remote, instanceName: name, event })
+                                // The projection rides with it, so a reconnect re-subscribes to the
+                                // same narrowing. Replaying without it would quietly restore the
+                                // whole snapshot on the one link that cannot carry it, and nothing
+                                // would report the widening - the values would simply all be there.
+                                if (prop === 'on') this.subscriptions.set(key, { remote, instanceName: name, event, projection: args[2] })
                                 else if (prop === 'off' || prop === 'removeListener') {
                                     // The remote subscription is one per key; the local emitter may
                                     // hold several handlers under it. The emitter's own listener
@@ -382,7 +392,9 @@ export class RpcClientHandler extends MessageModule<Message<RpcMessage>, RpcMess
                                 // removeAllListeners, setMaxListeners and friends take no event.
                                 ;(this.eventEmitter[prop] as (...args: unknown[]) => void)(...args)
                             }
-                            return this.call(remote, name, prop, args[0])
+                            // args[2] is the component projection, when the caller named one. The
+                            // handler at args[1] is local and never travels.
+                            return prop === 'on' && args[2] !== undefined ? this.call(remote, name, prop, args[0], args[2]) : this.call(remote, name, prop, args[0])
                         }
                     } else {
                         target[prop] = (...args: unknown[]) => this.callWith(options, remote, name, prop as string, ...args)

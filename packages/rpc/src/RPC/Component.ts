@@ -46,6 +46,16 @@ export interface RpcComponentSnapshot<P extends RpcComponentData, S extends RpcC
     readonly state: Readonly<S>
     /** Optional on the wire: a snapshot from a server older than the lease simply has no holder. */
     readonly authority?: RpcComponentAuthority
+    /**
+     * The paths this snapshot carries, when it carries only some of them. Absent means the whole
+     * thing, which is what every snapshot was before projections existed and still is by default.
+     *
+     * It has to be stated rather than inferred, and this is the field the whole feature turns on: a
+     * projected snapshot and a snapshot whose other fields have gone are the same bytes. A receiver
+     * that could not tell them apart would read a narrowed subscription as a component that had
+     * dropped half its state, and a cache merging them would be inventing.
+     */
+    readonly projection?: readonly (readonly string[])[]
 }
 
 /**
@@ -155,6 +165,69 @@ export const componentHost = <P extends RpcComponentData, S extends RpcComponent
 export const componentSnapshot = (component: object): RpcComponentSnapshot<RpcComponentData, RpcComponentData> => {
     const held = internalsOf(component)
     return { epoch: held.epoch, revision: held.revision, props: held.props, state: held.state, authority: held.authority }
+}
+
+/**
+ * One subscriber's narrowing of a snapshot: the named paths and nothing else.
+ *
+ * A component whose state carries three hundred tags sends all three hundred every time one moves,
+ * which is free on a fast link and is the link itself on a slow one - a 12 kB snapshot is eighty
+ * seconds at 1200 baud, so a screen showing twenty values cannot be drawn at all. Naming the paths
+ * is the same answer the write side reached: say which, ask for that.
+ *
+ * **What comes back is still a whole snapshot** - of the projection. Every property that makes this
+ * channel simple survives: duplicate delivery is still harmless, a reconnect is still repaired by
+ * one frame rather than a replay, and the epoch and revision rules are untouched. What changes is
+ * only how much of the state is in it, which is why this comes before delta encoding rather than
+ * after - it needs no base tracking, no keyframe schedule and no new counter.
+ *
+ * A path that reaches nothing is simply absent from the result rather than an error. The state is
+ * data and a caller may legitimately name a tag that has not appeared yet; refusing the whole
+ * subscription because one of twenty paths is not currently populated would make a projection less
+ * robust than the whole snapshot it replaces, which would be a poor trade.
+ */
+export const projectSnapshot = (
+    snapshot: RpcComponentSnapshot<RpcComponentData, RpcComponentData>,
+    paths: readonly (readonly string[])[]
+): RpcComponentSnapshot<RpcComponentData, RpcComponentData> => {
+    const props: RpcComponentData = {}
+    const state: RpcComponentData = {}
+    for (const path of paths) {
+        if (!path.length) continue
+        // `props` and `state` are the two roots a path may start at, so the first segment chooses
+        // which - the same spelling a reader uses, and the same one `sets` uses on the write side.
+        const [root, ...rest] = path
+        const from = root === 'props' ? snapshot.props : root === 'state' ? snapshot.state : undefined
+        const into = root === 'props' ? props : root === 'state' ? state : undefined
+        if (!from || !into) continue
+        copyPath(from, into, rest)
+    }
+    return { ...snapshot, props, state, projection: paths }
+}
+
+/**
+ * Copy one path's value across, creating only the branches that path passes through.
+ *
+ * Resolved before anything is built, so a path that reaches nothing leaves nothing behind it: an
+ * empty `tags: {}` where a caller asked for `tags['tag.999']` says the record exists and is empty,
+ * which is a different and false statement about the plant. Building only after the leaf is found
+ * also lets sibling paths share a branch - `zones.top.setpoint` and `zones.top.temperature` meet at
+ * the same object rather than the second replacing the first.
+ */
+const copyPath = (from: RpcComponentData, into: RpcComponentData, path: readonly string[]) => {
+    // An empty tail names the whole root, which is how `['state']` asks for all of it.
+    if (!path.length) {
+        for (const [key, value] of Object.entries(from)) into[key] = value
+        return
+    }
+    let at: unknown = from
+    for (const segment of path) {
+        if (at === null || typeof at !== 'object' || !(segment in (at as RpcComponentData))) return
+        at = (at as RpcComponentData)[segment]
+    }
+    let branch = into
+    for (const segment of path.slice(0, -1)) branch = (branch[segment] ??= {}) as RpcComponentData
+    branch[path[path.length - 1]] = at
 }
 
 /** The current arbitration state, for the dispatch layer's authority checks. */

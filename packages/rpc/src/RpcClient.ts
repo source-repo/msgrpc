@@ -4,7 +4,7 @@ import { MessageSigner, type TrustedCertificateAuthority } from './RPC/Auth.js'
 import { RpcSchema } from './RPC/Schema.js'
 import { defaultWebSocketPort, IManageRpc } from './RPC/Rpc.js'
 import { defaultCallTimeout, RpcClientHandler, type WithOptions } from './RPC/RpcClientHandler.js'
-import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
+import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentOptions, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import { contextNamespace, type ContextWireSnapshot } from './RPC/Context.js'
 import type { RemoteSurface } from './RPC/Invocation.js'
 import type { IClientOptions } from 'mqtt'
@@ -256,13 +256,13 @@ export class RpcClient extends EventEmitter {
      * from the first line that can execute. Repeated calls for one (target, namespace) share a
      * channel and one remote subscription; each call owes one `store.close()`.
      */
-    async component<T extends RpcComponentLike>(name: string, target?: string): Promise<RpcComponentProxy<T>> {
+    async component<T extends RpcComponentLike>(name: string, target?: string, options?: RpcComponentOptions): Promise<RpcComponentProxy<T>> {
         await this.ready()
         if (!this.rpcClient) throw new Error(`RpcClient '${this.options.name}': ready, but no handler - this is a bug in the library`)
         // Wired to this client's own forwarded lifecycle, which is what turns "the link is up but
         // that peer is gone" into a stale channel instead of a frozen number.
         this.componentChannels ??= new ComponentChannels(this.rpcClient, this)
-        const channel = await this.componentChannels.open(name, target ? target : this.options.defaultTarget)
+        const channel = await this.componentChannels.open(name, target ? target : this.options.defaultTarget, options?.paths)
         return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
     }
 

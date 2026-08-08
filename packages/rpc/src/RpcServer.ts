@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events'
 import { GenericModule, PeerRegistry, Transport, TransportEvent } from './RPC/Core.js'
-import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentProxy } from './RPC/ComponentClient.js'
+import { ComponentChannels, componentFacade, type RpcComponentLike, type RpcComponentOptions, type RpcComponentProxy } from './RPC/ComponentClient.js'
 import { HostTopology, type HostTopologyOptions, type RpcRef } from './RPC/Topology.js'
 import { contextEvent, contextNamespace, HostContext, type RpcCapturedContext, type RpcContextProviderHandle, type RpcContextToken } from './RPC/Context.js'
 import { ContextResolver, type RpcContextStore } from './RPC/ContextResolver.js'
@@ -439,10 +439,10 @@ export class RpcServerBase implements IManageRpc {
      * RpcClient.component, for the same reason proxy() exists: a peer that both serves and calls
      * needs one object, and a browser page hosting a service is exactly such a peer.
      */
-    async component<T extends RpcComponentLike>(name: string, target?: string): Promise<RpcComponentProxy<T>> {
+    async component<T extends RpcComponentLike>(name: string, target?: string, options?: RpcComponentOptions): Promise<RpcComponentProxy<T>> {
         await this.ready()
         this.componentChannels ??= new ComponentChannels(this.caller, this.componentLifecycle)
-        const channel = await this.componentChannels.open(name, target)
+        const channel = await this.componentChannels.open(name, target, options?.paths)
         return componentFacade(channel, channel.inner) as RpcComponentProxy<T>
     }
 
