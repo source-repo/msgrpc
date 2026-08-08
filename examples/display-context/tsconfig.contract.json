@@ -1,0 +1,13 @@
+{
+    // Just the plant's classes. `extract` reads the decorators and the interfaces they touch, and
+    // writes the contract that both the peer serves and the console reads.
+    "compilerOptions": {
+        "target": "ESNext",
+        "module": "NodeNext",
+        "moduleResolution": "NodeNext",
+        "strict": true,
+        "noEmit": true,
+        "skipLibCheck": true
+    },
+    "include": ["plant.ts"]
+}

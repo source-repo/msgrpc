@@ -1,0 +1,594 @@
+{
+  "schema": 1,
+  "types": {
+    "LineProps": {
+      "kind": "object",
+      "fields": {
+        "label": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "ratePerHour": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "unit": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
+    "LineState": {
+      "kind": "object",
+      "fields": {
+        "running": {
+          "type": {
+            "kind": "boolean"
+          }
+        },
+        "produced": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "shift": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "day"
+              },
+              {
+                "kind": "literal",
+                "value": "night"
+              }
+            ]
+          }
+        },
+        "lastBatch": {
+          "type": {
+            "kind": "ref",
+            "name": "Batch"
+          }
+        }
+      }
+    },
+    "Batch": {
+      "kind": "object",
+      "fields": {
+        "id": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "startedAt": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "loaves": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "OvenProps": {
+      "kind": "object",
+      "fields": {
+        "label": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "maximum": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "unit": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
+    "OvenState": {
+      "kind": "object",
+      "fields": {
+        "temperature": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "setpoint": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "mode": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "idle"
+              },
+              {
+                "kind": "literal",
+                "value": "heating"
+              },
+              {
+                "kind": "literal",
+                "value": "cooling"
+              }
+            ]
+          }
+        },
+        "door": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "open"
+              },
+              {
+                "kind": "literal",
+                "value": "closed"
+              }
+            ]
+          }
+        },
+        "zones": {
+          "type": {
+            "kind": "object",
+            "fields": {
+              "top": {
+                "type": {
+                  "kind": "ref",
+                  "name": "Zone"
+                }
+              },
+              "bottom": {
+                "type": {
+                  "kind": "ref",
+                  "name": "Zone"
+                }
+              }
+            }
+          }
+        },
+        "readings": {
+          "type": {
+            "kind": "record",
+            "values": {
+              "kind": "ref",
+              "name": "Reading"
+            }
+          }
+        }
+      }
+    },
+    "Zone": {
+      "kind": "object",
+      "fields": {
+        "temperature": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "setpoint": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "Reading": {
+      "kind": "object",
+      "fields": {
+        "value": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "unit": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "quality": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "good"
+              },
+              {
+                "kind": "literal",
+                "value": "uncertain"
+              },
+              {
+                "kind": "literal",
+                "value": "bad"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "MixerProps": {
+      "kind": "object",
+      "fields": {
+        "label": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "maximumRpm": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "unit": {
+          "type": {
+            "kind": "string"
+          }
+        }
+      }
+    },
+    "MixerState": {
+      "kind": "object",
+      "fields": {
+        "speed": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "bowl": {
+          "type": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "empty"
+              },
+              {
+                "kind": "literal",
+                "value": "mixing"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "FieldProps": {
+      "kind": "object",
+      "fields": {
+        "label": {
+          "type": {
+            "kind": "string"
+          }
+        },
+        "tags": {
+          "type": {
+            "kind": "number"
+          }
+        }
+      }
+    },
+    "FieldState": {
+      "kind": "object",
+      "fields": {
+        "fast": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "sweep": {
+          "type": {
+            "kind": "number"
+          }
+        },
+        "tags": {
+          "type": {
+            "kind": "record",
+            "values": {
+              "kind": "ref",
+              "name": "Reading"
+            }
+          }
+        }
+      }
+    }
+  },
+  "namespaces": {
+    "line": {
+      "version": "1",
+      "methods": {
+        "setRunning": {
+          "params": [
+            {
+              "kind": "boolean"
+            }
+          ],
+          "paramNames": [
+            "running"
+          ],
+          "returns": {
+            "kind": "boolean"
+          },
+          "semantics": "idempotent-command",
+          "sets": "running"
+        },
+        "setShift": {
+          "params": [
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "literal",
+                  "value": "day"
+                },
+                {
+                  "kind": "literal",
+                  "value": "night"
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "shift"
+          ],
+          "returns": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "day"
+              },
+              {
+                "kind": "literal",
+                "value": "night"
+              }
+            ]
+          },
+          "semantics": "idempotent-command",
+          "sets": "shift"
+        }
+      },
+      "component": {
+        "snapshot": 1,
+        "props": {
+          "kind": "ref",
+          "name": "LineProps"
+        },
+        "state": {
+          "kind": "ref",
+          "name": "LineState"
+        }
+      }
+    },
+    "oven": {
+      "version": "1",
+      "methods": {
+        "setSetpoint": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ],
+          "paramNames": [
+            "celsius"
+          ],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "idempotent-command",
+          "sets": "setpoint"
+        },
+        "setMode": {
+          "params": [
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "literal",
+                  "value": "idle"
+                },
+                {
+                  "kind": "literal",
+                  "value": "heating"
+                },
+                {
+                  "kind": "literal",
+                  "value": "cooling"
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "mode"
+          ],
+          "returns": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "idle"
+              },
+              {
+                "kind": "literal",
+                "value": "heating"
+              },
+              {
+                "kind": "literal",
+                "value": "cooling"
+              }
+            ]
+          },
+          "semantics": "idempotent-command",
+          "sets": "mode"
+        },
+        "setDoor": {
+          "params": [
+            {
+              "kind": "union",
+              "options": [
+                {
+                  "kind": "literal",
+                  "value": "open"
+                },
+                {
+                  "kind": "literal",
+                  "value": "closed"
+                }
+              ]
+            }
+          ],
+          "paramNames": [
+            "door"
+          ],
+          "returns": {
+            "kind": "union",
+            "options": [
+              {
+                "kind": "literal",
+                "value": "open"
+              },
+              {
+                "kind": "literal",
+                "value": "closed"
+              }
+            ]
+          },
+          "semantics": "idempotent-command",
+          "sets": "door"
+        },
+        "setTopSetpoint": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ],
+          "paramNames": [
+            "celsius"
+          ],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "idempotent-command",
+          "sets": "zones.top.setpoint"
+        },
+        "setBottomSetpoint": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ],
+          "paramNames": [
+            "celsius"
+          ],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "idempotent-command",
+          "sets": "zones.bottom.setpoint"
+        }
+      },
+      "component": {
+        "snapshot": 1,
+        "props": {
+          "kind": "ref",
+          "name": "OvenProps"
+        },
+        "state": {
+          "kind": "ref",
+          "name": "OvenState"
+        }
+      }
+    },
+    "mixer": {
+      "version": "1",
+      "methods": {
+        "setSpeed": {
+          "params": [
+            {
+              "kind": "number"
+            }
+          ],
+          "paramNames": [
+            "rpm"
+          ],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "idempotent-command",
+          "sets": "speed"
+        }
+      },
+      "component": {
+        "snapshot": 1,
+        "props": {
+          "kind": "ref",
+          "name": "MixerProps"
+        },
+        "state": {
+          "kind": "ref",
+          "name": "MixerState"
+        }
+      }
+    },
+    "field": {
+      "version": "1",
+      "methods": {
+        "count": {
+          "params": [],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "query"
+        },
+        "set": {
+          "params": [
+            {
+              "kind": "array",
+              "items": {
+                "kind": "string"
+              }
+            },
+            {
+              "kind": "any"
+            }
+          ],
+          "paramNames": [
+            "path",
+            "value"
+          ],
+          "returns": {
+            "kind": "number"
+          },
+          "semantics": "idempotent-command",
+          "sets": "*"
+        }
+      },
+      "component": {
+        "snapshot": 1,
+        "props": {
+          "kind": "ref",
+          "name": "FieldProps"
+        },
+        "state": {
+          "kind": "ref",
+          "name": "FieldState"
+        }
+      }
+    }
+  }
+}
