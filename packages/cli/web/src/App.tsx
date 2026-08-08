@@ -8,6 +8,7 @@ import { ChatMessage, ChatService } from './ChatService'
 // `say(from: string, text: string)` instead of `say(…)`.
 import chatContract from './chat.types.json'
 import { ComponentPanel } from './ComponentPanel'
+import { ContextPanel } from './ContextPanel'
 import { StructurePanel } from './StructurePanel'
 import { MethodPanel } from './MethodPanel'
 import { Traffic, TRAFFIC_KEPT } from './Traffic'
@@ -452,12 +453,18 @@ export const App = () => {
                                         peer={selected!}
                                         namespace={namespace.name}
                                         component={namespace.component}
+                                        methods={namespace.methods}
+                                        types={description.types}
                                         server={peer}
                                         onSubscribed={() => {
                                             if (service && selected) void service.describe(selected).then(setDescribed).catch(() => undefined)
                                         }}
                                     />
                                 )}
+                                {/* A namespace with a place in the topology is a node, and a node
+                                    is the thing context is resolved for. One without is just a
+                                    service, and has no chain to walk. */}
+                                {namespace.topology && <ContextPanel peer={selected!} node={namespace.name} server={peer} />}
                                 {namespace.methods.map((method) => (
                                     <MethodPanel
                                         key={method.name}

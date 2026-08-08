@@ -11,3 +11,4 @@ docs/.vitepress/.temp
 
 # Scratch space visiting agents tend to create in-repo; their droppings must not reach a commit
 tmp/
+examples/display-context/dist/

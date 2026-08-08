@@ -7,7 +7,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import EventEmitter from 'node:events'
-import { rpc, rpcNamespace, RpcServer, type RpcSchema } from '@source-repo/rpc'
+import { defineRpcContext, HOST_ROOT, rpc, rpcNamespace, RpcComponent, RpcServer, type RpcSchema } from '@source-repo/rpc'
 import { failureText } from './mcp.js'
 
 /**
@@ -30,6 +30,94 @@ class Siren extends EventEmitter {
     }
     wail(level: number) {
         this.emit('wail', level)
+    }
+}
+
+/** An observable component for read_state, and a node for read_context to resolve at. */
+type KilnProps = { unit: string; maximum: number }
+type KilnState = { celsius: number; mode: string; zones: { top: { setpoint: number } }; tags: { [tag: string]: number } }
+
+@rpcNamespace('kiln')
+class Kiln extends RpcComponent<KilnProps, KilnState> {
+    constructor() {
+        super({ unit: '°C', maximum: 300 }, { celsius: 20, mode: 'idle', zones: { top: { setpoint: 20 } }, tags: { a: 1 } })
+    }
+
+    @rpc({ semantics: 'idempotent-command', sets: 'mode' })
+    async setMode(mode: string) {
+        this.setState({ mode })
+        return mode
+    }
+
+    @rpc({ semantics: 'idempotent-command', sets: 'zones.top.setpoint' })
+    async setTopSetpoint(celsius: number) {
+        this.setState((previous) => ({ zones: { top: { ...previous.zones.top, setpoint: celsius } } }))
+        return celsius
+    }
+
+    /** `celsius` is measured: no per-field method commands it, and the generic one refuses it. */
+    @rpc({ semantics: 'query' })
+    async readCelsius() {
+        return this.state.celsius
+    }
+
+    /** The generic form, for the tags. Which paths it takes is decided here, as always. */
+    @rpc({ semantics: 'idempotent-command', sets: '*' })
+    async set(path: string[], value: unknown) {
+        const [root, tag] = path
+        if (root !== 'tags' || path.length !== 2 || typeof value !== 'number') throw new Error(`${path.join('.')} is not writable`)
+        this.setState((previous) => ({ tags: { ...previous.tags, [tag]: value } }))
+        return value
+    }
+}
+
+/**
+ * The other shape: per-field claims and no generic setter, which is what a plant looks like. Only
+ * here can "nothing claims that path" be an answer - a component declaring `sets: '*'` claims every
+ * path by construction, and its refusals come from its own body instead.
+ */
+@rpcNamespace('vent')
+class Vent extends RpcComponent<{ label: string }, { open: boolean; pressure: number }> {
+    constructor() {
+        super({ label: 'v' }, { open: false, pressure: 1 })
+    }
+
+    @rpc({ semantics: 'idempotent-command', sets: 'open' })
+    async setOpen(open: boolean) {
+        this.setState({ open })
+        return open
+    }
+}
+
+const SiteToken = defineRpcContext<{ site: string; timezone: string }>({ id: 'acme.site', schemaVersion: '1', axis: 'physical' })
+
+/**
+ * Hand-written rather than extracted, because what set_state needs from a contract is only the
+ * component's state shape - that is where the type at a path comes from, and therefore where a
+ * wrong value is refused before it travels. Validation is off so the methods need not be described.
+ */
+const kilnSchema: RpcSchema = {
+    schema: 1,
+    namespaces: {
+        kiln: {
+            version: '1',
+            methods: {},
+            component: {
+                snapshot: 1,
+                props: { kind: 'object', fields: { unit: { type: { kind: 'string' } }, maximum: { type: { kind: 'number' } } } },
+                state: {
+                    kind: 'object',
+                    fields: {
+                        celsius: { type: { kind: 'number' } },
+                        mode: { type: { kind: 'string' } },
+                        zones: {
+                            type: { kind: 'object', fields: { top: { type: { kind: 'object', fields: { setpoint: { type: { kind: 'number' } } } } } } }
+                        },
+                        tags: { type: { kind: 'record', values: { kind: 'number' } } }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -127,7 +215,22 @@ test('an MCP client can list, describe and call the peers on a Source RPC networ
     const tools = (listed.result as { tools: { name: string; inputSchema: unknown }[] }).tools
     t.deepEqual(
         tools.map((tool) => tool.name).sort(),
-        ['call_method', 'check_peer', 'describe_peer', 'diff_peers', 'find_capability', 'list_fakes', 'list_peers', 'start_fake', 'stop_fake', 'watch_events', 'watch_traffic']
+        [
+            'call_method',
+            'check_peer',
+            'describe_peer',
+            'diff_peers',
+            'find_capability',
+            'list_fakes',
+            'list_peers',
+            'read_context',
+            'read_state',
+            'set_state',
+            'start_fake',
+            'stop_fake',
+            'watch_events',
+            'watch_traffic'
+        ]
     )
     // The contract tools are absent without a directory to write to: a server that cannot write
     // files must not advertise tools claiming it can.
@@ -483,6 +586,167 @@ test('watch_events says whether anything was missed between windows, and when it
 
     await client.close()
     await running.server.close()
+    await hub.close()
+})
+
+test('a model can read what a component publishes, and what its node inherits', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-state'), transports: [{ port: 3974, host: '127.0.0.1' }] })
+    await hub.ready()
+
+    const plantName = peer('statePlant')
+    const plant = new RpcServer({
+        name: plantName,
+        transports: [{ connect: 'http://localhost:3974' }],
+        // Providers at HOST_ROOT hang off the host's own place, so the chain has somewhere to end.
+        topology: { place: ['site-7', 'bakery'] },
+        exposeIntrospection: true,
+        schema: kilnSchema,
+        validation: 'off',
+        allowStatePathWrites: true
+    })
+    plant.exposeClassInstance(new Kiln(), 'kiln')
+    await plant.ready()
+    await plant.topology.declare('kiln', { parent: { peer: plantName, instance: HOST_ROOT }, label: 'Deck oven' })
+    plant.provideContext(HOST_ROOT, SiteToken, { site: 'site-7', timezone: 'Europe/Stockholm' })
+
+    const client = mcpClient(3974)
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    client.notify('notifications/initialized')
+
+    // Presence has to have settled, or the first read finds an empty network - the same race the
+    // recorder and the verbs both had.
+    const deadline = Date.now() + 10000
+    let peers: string[] = []
+    while (!peers.includes(plantName) && Date.now() < deadline) {
+        const response = await client.send('tools/call', { name: 'list_peers', arguments: {} })
+        peers = (JSON.parse(toolText(response).text) as { peers: string[] }).peers
+    }
+    t.true(peers.includes(plantName), `expected the plant among ${JSON.stringify(peers)}`)
+
+    const read = await client.send('tools/call', { name: 'read_state', arguments: { peer: plantName, namespace: 'kiln' } })
+    t.false(toolText(read).isError, toolText(read).text)
+    const view = JSON.parse(toolText(read).text) as { status: string; revision: number; props: { maximum: number }; state: KilnState }
+    t.is(view.status, 'live')
+    t.is(view.props.maximum, 300, "props are the host's inputs and come back beside state, not instead of it")
+    t.deepEqual(view.state, { celsius: 20, mode: 'idle', zones: { top: { setpoint: 20 } }, tags: { a: 1 } })
+
+    // A command through the ordinary verb, then the value it moved read back through this one -
+    // which is the loop the tool exists for.
+    await client.send('tools/call', { name: 'call_method', arguments: { peer: plantName, namespace: 'kiln', method: 'setMode', args: ['heating'] } })
+    const after = await client.send('tools/call', { name: 'read_state', arguments: { peer: plantName, namespace: 'kiln' } })
+    const moved = JSON.parse(toolText(after).text) as { revision: number; state: { mode: string } }
+    t.is(moved.state.mode, 'heating')
+    t.true(moved.revision > view.revision, 'a committed snapshot moves the revision forward')
+
+    // Nothing left observing it: a look must not leave this server subscribed for the rest of its life.
+    const described = await client.send('tools/call', { name: 'describe_peer', arguments: { peer: plantName } })
+    const description = JSON.parse(toolText(described).text) as { namespaces: { name: string; component?: { subscribers: number } }[] }
+    t.is(description.namespaces.find((namespace) => namespace.name === 'kiln')?.component?.subscribers, 0, 'read_state must drop the subscription again')
+
+    // A namespace that is not a component is an answer about the peer, not a broken tool.
+    const notAComponent = await client.send('tools/call', { name: 'read_state', arguments: { peer: plantName, namespace: 'msgrpc' } })
+    t.true(toolText(notAComponent).isError)
+
+    const context = await client.send('tools/call', { name: 'read_context', arguments: { peer: plantName, node: 'kiln', token: 'acme.site', axis: 'physical' } })
+    const resolved = JSON.parse(toolText(context).text) as { status: string; entries: { provider: string; value: { site: string } }[] }
+    t.is(resolved.status, 'live')
+    t.is(resolved.entries.length, 1, 'the whole chain comes back, and here the chain is one provider long')
+    t.is(resolved.entries[0].value.site, 'site-7')
+    t.is(resolved.entries[0].provider, `${plantName}/${HOST_ROOT}`, 'an entry names where it was provided, not where it was asked for')
+
+    // The wrong axis does not fall back to the other one, and nobody providing it is `missing`
+    // rather than an error - which is the same shape a value the provider keeps local has.
+    const wrongAxis = await client.send('tools/call', { name: 'read_context', arguments: { peer: plantName, node: 'kiln', token: 'acme.site', axis: 'logical' } })
+    t.is((JSON.parse(toolText(wrongAxis).text) as { status: string }).status, 'missing')
+    t.false(toolText(wrongAxis).isError, 'nothing providing a token is a fact about the plant, not a failed call')
+
+    t.deepEqual(client.stray, [], 'stdout must carry protocol and nothing else')
+
+    client.close()
+    await plant.close()
+    await hub.close()
+})
+
+test('set_state finds the method that claims a path, and refuses one nothing claims', async (t) => {
+    const hub = new RpcServer({ name: peer('hub-set'), transports: [{ port: 3987, host: '127.0.0.1' }] })
+    await hub.ready()
+
+    const plantName = peer('setPlant')
+    const plant = new RpcServer({
+        name: plantName,
+        transports: [{ connect: 'http://localhost:3987' }],
+        exposeIntrospection: true,
+        schema: kilnSchema,
+        validation: 'off',
+        allowStatePathWrites: true
+    })
+    plant.exposeClassInstance(new Kiln(), 'kiln')
+    plant.exposeClassInstance(new Vent(), 'vent')
+    await plant.ready()
+
+    const client = mcpClient(3987)
+    await client.ready
+    await client.send('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '1' } })
+    client.notify('notifications/initialized')
+
+    const deadline = Date.now() + 10000
+    let peers: string[] = []
+    while (!peers.includes(plantName) && Date.now() < deadline) {
+        const response = await client.send('tools/call', { name: 'list_peers', arguments: {} })
+        peers = (JSON.parse(toolText(response).text) as { peers: string[] }).peers
+    }
+    t.true(peers.includes(plantName), `expected the plant among ${JSON.stringify(peers)}`)
+
+    const set = (path: string, value: unknown) => client.send('tools/call', { name: 'set_state', arguments: { peer: plantName, namespace: 'kiln', path, value } })
+
+    // A per-field claim: the model names the path, not the method.
+    const mode = await set('mode', 'heating')
+    t.false(toolText(mode).isError, toolText(mode).text)
+    t.is((JSON.parse(toolText(mode).text) as { called: string }).called, 'kiln.setMode')
+
+    // The nested path, resolved through the state shape rather than guessed.
+    const nested = await set('zones.top.setpoint', 180)
+    t.is((JSON.parse(toolText(nested).text) as { called: string }).called, 'kiln.setTopSetpoint')
+
+    // A record key falls to the generic setter, which is exactly the case it exists for.
+    const tag = await set('tags.a', 7)
+    t.is((JSON.parse(toolText(tag).text) as { called: string }).called, 'kiln.set')
+
+    const after = await client.send('tools/call', { name: 'read_state', arguments: { peer: plantName, namespace: 'kiln' } })
+    const state = (JSON.parse(toolText(after).text) as { state: { mode: string; zones: { top: { setpoint: number } }; tags: { a: number } } }).state
+    t.is(state.mode, 'heating')
+    t.is(state.zones.top.setpoint, 180)
+    t.is(state.tags.a, 7, 'the generic setter wrote where it was told')
+
+    // A component declaring `sets: '*'` claims every path by construction, so `celsius` reaches the
+    // generic setter - and is refused by its body, which is where the decision belongs. The refusal
+    // is the component's own words, not a guess made here.
+    const measured = await set('celsius', 99)
+    t.true(toolText(measured).isError)
+    t.regex(toolText(measured).text, /celsius is not writable/)
+
+    // Where there is no generic setter, an unclaimed path is refused before anything travels, and
+    // the refusal says what the component does set - "no" being more useful with the alternatives
+    // beside it, and a measured value having no setter being a decision rather than a gap.
+    const unclaimed = await client.send('tools/call', { name: 'set_state', arguments: { peer: plantName, namespace: 'vent', path: 'pressure', value: 3 } })
+    t.true(toolText(unclaimed).isError)
+    t.regex(toolText(unclaimed).text, /declares that it sets 'pressure'/)
+    t.regex(toolText(unclaimed).text, /open \(setOpen\)/, 'the refusal should say what it does set')
+
+    // Refused locally, against the published state type, before anything travels.
+    const wrongType = await set('zones.top.setpoint', 'hot')
+    t.true(toolText(wrongType).isError)
+    t.regex(toolText(wrongType).text, /before sending/)
+
+    // The generic setter's own body still decides: a path it will not take is its refusal to make.
+    const refused = await set('tags.a', 'warm')
+    t.true(toolText(refused).isError, 'a string is not a tag value')
+
+    t.deepEqual(client.stray, [], 'stdout must carry protocol and nothing else')
+
+    client.close()
+    await plant.close()
     await hub.close()
 })
 

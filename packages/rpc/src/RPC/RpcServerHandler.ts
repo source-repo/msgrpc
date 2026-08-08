@@ -17,7 +17,18 @@ import { RpcAuthorizer, RpcCallContext, RpcIdentity } from './Auth.js'
 import { isFailedOutcome, type RpcIdempotencyStore, type RpcInvocation, type StoredRpcOutcome } from './Idempotency.js'
 import EventEmitter from 'events'
 import { ILogger, LogLevel } from '../Logging/ILogger.js'
-import { declaredAuthority, declaredConflation, declaredEffect, declaredInjection, declaredNamespace, declaredSemantics, markedMethods, type RpcEffect, type RpcExecution } from './Expose.js'
+import {
+    declaredAuthority,
+    declaredConflation,
+    declaredEffect,
+    declaredInjection,
+    declaredNamespace,
+    declaredSemantics,
+    declaredSets,
+    markedMethods,
+    type RpcEffect,
+    type RpcExecution
+} from './Expose.js'
 import { decideAiAccess, type RpcAiGrants } from './Grants.js'
 import { rpcInvocationBrand, type RpcInvocationHandle } from './Invocation.js'
 import { contextNamespace, type HostContext } from './Context.js'
@@ -264,6 +275,8 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
     hostContext?: HostContext
     /** Set by RpcServer: whether msgrpc.updateTopology accepts remote callers at all. Default no. */
     allowTopologyMutation = false
+    /** Set by RpcServer: whether methods declaring `sets: '*'` are honoured at all. Default no. */
+    allowStatePathWrites = false
     /** Check what handlers return as well as what callers send. Off by default: it is a self-check. */
     validateResults = false
     /**
@@ -578,6 +591,15 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
                 return
             }
 
+            // Only at the door, unlike the authority check below: the opt-in is read once at
+            // construction and cannot change while a call waits in a queue, so re-checking at
+            // execution would be asking the same constant twice.
+            const noPathWrites = this.pathWriteRefusal(payload)
+            if (noPathWrites) {
+                await this.sendError(payload.id, source, 'Forbidden', noPathWrites)
+                return
+            }
+
             // Refused at the door as well as re-checked at execution (see invoke): the door gives a
             // caller a fast answer instead of a place in a queue it will be refused out of.
             const notInControl = this.authorityRefusal(payload, source)
@@ -803,6 +825,25 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
      * whose description has drifted from its code should act on the code.
      */
     /** Why this call may not run under the current arbitration state, or undefined when it may. */
+    /**
+     * Why a generic setter will not run here, or undefined when it may.
+     *
+     * A method declaring `sets: '*'` writes wherever its caller names, which is a different kind of
+     * surface from one that commands a field somebody thought about - so it is refused wholesale
+     * unless the server opted in, and a deployment that never enables it has no such surface at all
+     * however its classes are written. This is `topology.allowRemoteMutation` in the other
+     * direction, and deliberately the same shape.
+     *
+     * Enabling it opens nothing by itself. The call has already been through authorize() with the
+     * path in params by the time this runs, so a policy rules on *which* path; and the method's own
+     * body still decides what it accepts, because a writer supplied by the library would be a
+     * public field with extra steps.
+     */
+    private pathWriteRefusal(payload: { path: string; method: string }): string | undefined {
+        if (this.allowStatePathWrites || this.setsOf(payload) !== '*') return undefined
+        return `${payload.path}.${payload.method} sets any path, which this host does not accept - it is enabled with allowStatePathWrites, and gated by authorize() like any call`
+    }
+
     private authorityRefusal(payload: { path: string; method: string }, source: string): string | undefined {
         if (!this.manageRpc.exposedAuthority[payload.path]?.has(payload.method)) return undefined
         const instance = this.manageRpc.exposedNameSpaceInstances[payload.path]
@@ -845,6 +886,33 @@ export class RpcServerHandler extends MessageModule<Message<RpcMessage>, RpcMess
         const declared = this.manageRpc.exposedEffect[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.effect
         if (declared) return declared
         return this.semanticsOf(payload) === 'query' ? 'observe' : 'operate'
+    }
+
+    /**
+     * The state path a method declares it sets, or undefined where it claims nothing.
+     *
+     * Undefined rather than defaulted, which is the opposite of effectOf and deliberately so. An
+     * unclassified method is not a harmless one, so effect guesses conservatively; an unclassified
+     * method is emphatically not a setter, and guessing one from a name is the whole thing this
+     * declaration exists to replace.
+     */
+    setsOf(payload: { path: string; method: string }): string | undefined {
+        return this.manageRpc.exposedSets[payload.path]?.get(payload.method) ?? this.schema?.namespaces[payload.path]?.methods[payload.method]?.sets
+    }
+
+    /**
+     * What this server will actually honour, which is what describe() reports - the same principle
+     * effectOf follows, where the answer is the effect the server enforces rather than the raw
+     * declaration.
+     *
+     * The difference is only ever `'*'` on a host that did not opt in. Publishing a claim the next
+     * call will refuse would put editors on a console and a write tool in front of a model, both of
+     * which would then fail at the door; saying nothing is the truthful answer, and the refusal
+     * still explains itself to anyone who calls the method regardless.
+     */
+    publishedSetsOf(payload: { path: string; method: string }): string | undefined {
+        const declared = this.setsOf(payload)
+        return declared === '*' && !this.allowStatePathWrites ? undefined : declared
     }
 
     /** The queue a call belongs in, or undefined when it may overlap with its siblings. */
@@ -967,6 +1035,8 @@ export class ManageRpc implements IManageRpc {
     exposedSemantics: { [nameSpace: string]: Map<string, RpcMethodSemantics> } = {}
     /** What each exposed namespace's methods declare about the kind of power they exercise. */
     exposedEffect: { [nameSpace: string]: Map<string, RpcEffect> } = {}
+    /** Which state path each of a component's methods declares it sets, for the methods that say. */
+    exposedSets: { [nameSpace: string]: Map<string, string> } = {}
     /** How each exposed namespace lets its calls overlap. Absent means graded by method semantics. */
     exposedExecution: { [nameSpace: string]: RpcExecution } = {}
     /** Which of each namespace's methods conflate: a queued call replaced by a newer one. */
@@ -1039,6 +1109,21 @@ export class ManageRpc implements IManageRpc {
         if (semantics.size) this.exposedSemantics[namespace] = semantics
         const effects = declaredEffect(instance)
         if (effects.size) this.exposedEffect[namespace] = effects
+        const sets = declaredSets(instance)
+        if (sets.size) {
+            // A path names something in `state`, so a class with no state has nothing for one to
+            // reach. Refused here for the same reason requiresAuthority is: a declaration that
+            // silently describes nothing is the worst way for this to fail, because the console
+            // draws an editor from it and the operator's write goes to a field that never existed.
+            if (!(instance instanceof RpcComponent))
+                throw new Error(`exposeClassInstance: ${namespace}.${[...sets.keys()][0]} declares sets, but ${instance.constructor.name} is not an RpcComponent - there is no state for a path to name`)
+            // A query that sets something is a contradiction in the same breath, and one of the two
+            // declarations is wrong. Which one is the author's to decide, so neither is guessed.
+            for (const [method, path] of sets)
+                if (semantics.get(method) === 'query')
+                    throw new Error(`exposeClassInstance: ${namespace}.${method} declares sets '${path}' with 'query' semantics - a method that changes state is not a query`)
+            this.exposedSets[namespace] = sets
+        }
         const conflation = declaredConflation(instance)
         if (conflation.size) {
             // Conflation drops a queued call in favour of a newer one, which is only safe when the

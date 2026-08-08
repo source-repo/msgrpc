@@ -46,6 +46,8 @@ An authorizer that throws **denies**. Failing open would turn a bug in the autho
 
 A relay rule is the same idea one layer down: `relay` decides whether a bus will forward between two peers at all, and is asked once per pair, covering the reply — asking per frame would strand the answer coming back.
 
+Two surfaces are refused *wholesale* before authorization is even consulted, because they are the kind that should not exist unless somebody decided they should. Remote topology mutation needs `topology.allowRemoteMutation`; a method declaring [`sets: '*'`](./guide/components.md#the-generic-setter-and-its-gate) — one that writes wherever its caller names — needs `allowStatePathWrites`. A deployment that enables neither has neither surface, however its classes are written. Enabling one does not open it: the call still passes `authorize()` with the path or the patch in params, so a policy rules on *which* path rather than only on the method, and in the state case the method's own body still decides what it will accept.
+
 ## What the bus does and does not do
 
 A broker with no `--auth` **relays for anyone that can reach the port**, and says so on startup. Every peer name on it is an unchecked claim. That is a reasonable thing to run on a trusted network and a bad thing to expose.

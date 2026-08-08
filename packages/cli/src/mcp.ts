@@ -1,7 +1,22 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { createServer as createHttpServer } from 'node:http'
 import { join, resolve, sep } from 'node:path'
-import { readableNameFor, validateValue, type RemoteSurface, type RpcSchema, type ServerDescription } from '@source-repo/rpc'
+import {
+    defineRpcContext,
+    readableNameFor,
+    rpcComponent,
+    validateValue,
+    type DescribedMethod,
+    type RemoteSurface,
+    type RpcComponentData,
+    type RpcComponentLike,
+    type RpcComponentStore,
+    type RpcContextSnapshot,
+    type RpcContextStore,
+    type RpcSchema,
+    type ServerDescription,
+    type TypeNode
+} from '@source-repo/rpc'
 import { connectNetwork, type NetworkOptions } from './network.js'
 import { looksLikeSchema, startFake, type FakeScript } from './fake.js'
 import { environmentFor } from './scripts.js'
@@ -107,6 +122,86 @@ type Subscribable = {
     on: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown>
     off: (event: string, handler: (...args: unknown[]) => void) => Promise<unknown>
 }
+
+/**
+ * A context store's first settled answer - anything but `initializing`, or the deadline.
+ *
+ * A chain that begins on another peer resolves over the network, so the store hands back
+ * `initializing` and settles by notifying. Waiting for it is therefore a subscription rather than a
+ * poll, and the deadline is what keeps a host that never answers from holding a tool call open: what
+ * comes back then is still `initializing`, which is reported as such rather than dressed up as
+ * `missing`. "Nobody provides this" and "nobody answered" are different facts about a plant.
+ */
+const settledContext = (store: RpcContextStore, ms: number): Promise<RpcContextSnapshot> =>
+    new Promise((resolve) => {
+        const settled = () => store.getSnapshot().status !== 'initializing'
+        if (settled()) return resolve(store.getSnapshot())
+        // Both of these are read from callbacks that cannot run before the declarations complete:
+        // subscribe() only registers a listener, and the timer is asynchronous by construction.
+        const stop = store.subscribe(() => {
+            if (!settled()) return
+            clearTimeout(timer)
+            stop()
+            resolve(store.getSnapshot())
+        })
+        const timer = setTimeout(() => {
+            stop()
+            resolve(store.getSnapshot())
+        }, ms)
+    })
+
+/**
+ * The declared type at a path inside a state shape, or undefined where the contract cannot say.
+ *
+ * Walking it is what lets a wrong value be refused at the boundary instead of discovered by writing
+ * it: the type information is published beside the state, so `setpoint = "hot"` fails here rather
+ * than at a plant. Undefined is not a failure - a peer serving no schema describes no types, and the
+ * honest response to that is to send the call and let the peer answer.
+ */
+const typeAtPath = (node: TypeNode | undefined, path: string[], types: { [name: string]: TypeNode } | undefined): TypeNode | undefined => {
+    let at = node
+    for (const segment of path) {
+        while (at?.kind === 'ref') at = types?.[at.name]
+        if (at?.kind === 'object') at = at.fields[segment]?.type
+        // A record's keys are data rather than type, so any key is describable and they all share
+        // one value type - which is exactly the case a three-hundred-tag component is.
+        else if (at?.kind === 'record') at = at.values
+        // An index is a segment like any other, and every element has the same type. Refusing the
+        // index itself is not this function's job: a path off the end is a fact only the component
+        // holds, and it is the one that answers for it.
+        else if (at?.kind === 'array') at = at.items
+        else return undefined
+        if (!at) return undefined
+    }
+    while (at?.kind === 'ref') at = types?.[at.name]
+    return at
+}
+
+/**
+ * The method that claims a path, and how it wants to be called.
+ *
+ * A per-field claim wins over a generic one, and should: the specific method is the one whose body
+ * was written for that value. `sets: '*'` appears in a description only on a host that opted in,
+ * so choosing one here is choosing something the host will actually accept.
+ */
+const setterFor = (methods: DescribedMethod[], path: string[]) => {
+    const wanted = path.join('.')
+    const named = methods.find((method) => method.sets === wanted && takesArguments(method, 1))
+    if (named) return { method: named, generic: false }
+    const generic = methods.find((method) => method.sets === '*' && takesArguments(method, 2))
+    return generic ? { method: generic, generic: true } : undefined
+}
+
+/**
+ * Whether a method takes the arguments this call would send, when the contract says how many.
+ *
+ * A described signature that wants a third argument sets something this cannot describe, and
+ * inventing it is how a tool writes something nobody asked for. An *undescribed* one is a different
+ * case and must not be refused: a peer serving no schema publishes what its methods declare and no
+ * signatures at all, so demanding a count there would silently reject every honest declaration on
+ * every peer without a contract. The claim is the declaration; the count refines it where it exists.
+ */
+const takesArguments = (method: DescribedMethod, count: number) => method.params === undefined || method.params.length === count
 
 /** Contracts are named, not pathed. A name that could climb out of the directory is refused. */
 const SAFE_CONTRACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
@@ -290,6 +385,79 @@ const toolsFor = (contracts: string | undefined, allowExec = false, scripts?: st
                 seconds: { type: 'number', description: `How long to listen. 1 to ${MAX_WATCH_SECONDS}, default 5.` }
             },
             required: ['peer', 'namespace', 'event'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'read_state',
+        description:
+            "Read the values an observable component is publishing: `props`, the host's inputs, and `state`, the instance's own public snapshot. " +
+            'This is what a device currently *is*, where describe_peer is only the shape of it and call_method is how it is changed. ' +
+            'describe_peer marks which namespaces are components; a namespace that is not one cannot be read this way. ' +
+            'Subscribes, takes the first snapshot and drops the subscription again, so looking leaves no listener behind on the device. ' +
+            'A picture that has gone stale comes back with its values and a staleSince rather than withheld - "20 °C, last known 14:03" is ' +
+            'an answer and a blank is not.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                peer: { type: 'string', description: 'The peer holding the component.' },
+                namespace: { type: 'string', description: 'The component namespace, e.g. "oven".' },
+                seconds: { type: 'number', description: `How long to wait for the first snapshot. 1 to ${MAX_WATCH_SECONDS}, default 10.` }
+            },
+            required: ['peer', 'namespace'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'set_state',
+        description:
+            "Change one value in a component's state, by naming the path rather than working out which method to call. " +
+            'The peer\'s contract says which method sets which path - a method declaring `sets` - and this finds it, checks the value against the ' +
+            "published type of that path *before* anything travels, and calls it. What actually happens is that method's call, with whatever " +
+            'clamping, interlock or refusal its author wrote; nothing here writes to a device directly. ' +
+            'A path nothing claims is refused with what the peer does offer, which is the answer to "can I change this" - and often the answer is no, ' +
+            'because a measured value has no setter by design. ' +
+            'The value on the peer moves when its next snapshot says so: read_state afterwards to see what the plant agreed to, rather than assuming.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                peer: { type: 'string', description: 'The peer holding the component.' },
+                namespace: { type: 'string', description: 'The component namespace, e.g. "oven".' },
+                path: {
+                    type: 'string',
+                    description: 'The path in `state` to change - a field like "setpoint", or a dot path like "zones.top.setpoint". As read_state reports it.'
+                },
+                value: { description: 'The new value, of whatever type the published state declares at that path.' }
+            },
+            required: ['peer', 'namespace', 'path', 'value'],
+            additionalProperties: false
+        }
+    },
+    {
+        name: 'read_context',
+        description:
+            'Resolve one context token at a node on another peer: the ambient data that node inherits along its physical or logical chain, ' +
+            "answered by the node's own host rather than worked out here. The usual question is why a machine is behaving as though it sat " +
+            'somewhere else. The whole chain comes back, nearest provider first, each entry naming where it was provided. ' +
+            'missing, stale and invalid are answers about the plant, not failures of this tool. ' +
+            '**There is no way to list the tokens a plant carries, and that is deliberate** - enumerating what ambient data a plant holds is ' +
+            'reconnaissance, so a caller must already know the id it is asking for. A provider that keeps its value local is filtered from ' +
+            'remote answers silently, so it is indistinguishable from nothing providing it: both read as missing, and neither confirms the other.',
+        inputSchema: {
+            type: 'object',
+            properties: {
+                peer: { type: 'string', description: 'The peer whose topology holds the node.' },
+                node: { type: 'string', description: 'The node to resolve at - the instance name the peer registered in its topology.' },
+                token: { type: 'string', description: "The token id, e.g. 'acme.site'. Namespaced by design; a bare word is not a token id." },
+                axis: {
+                    type: 'string',
+                    enum: ['physical', 'logical'],
+                    description:
+                        'Which chain to walk. It belongs to the token\'s definition, so it has to be given: there is no logical-first-then-physical search, and the wrong axis answers "missing" rather than borrowing from the other one.'
+                },
+                seconds: { type: 'number', description: `How long to wait for the chain to resolve. 1 to ${MAX_WATCH_SECONDS}, default 10.` }
+            },
+            required: ['peer', 'node', 'token', 'axis'],
             additionalProperties: false
         }
     },
@@ -974,6 +1142,175 @@ export const startMcp = async (options: McpOptions) => {
                 }
             } catch (e) {
                 return { text: `cannot watch ${peer}.${namespace}.${event}: ${failureText(e)}`, isError: true }
+            }
+        }
+        if (name === 'read_state') {
+            const peer = String(args.peer ?? '')
+            const namespace = String(args.namespace ?? '')
+            if (!peer || !namespace) return { text: 'read_state needs peer and namespace.', isError: true }
+            const seconds = Math.min(Math.max(Number(args.seconds ?? 10), 1), MAX_WATCH_SECONDS)
+            // component() settles on the first snapshot and carries no deadline of its own. The
+            // subscribe underneath is bounded by the call timeout, but a host that accepts the
+            // subscription and then publishes nothing would hold this open forever - and that host
+            // is precisely the one somebody is using this to diagnose.
+            const opening = network.component<RpcComponentLike>(namespace, peer)
+            let timer: ReturnType<typeof setTimeout> | undefined
+            try {
+                const late = await Promise.race([opening, new Promise<'late'>((resolve) => (timer = setTimeout(() => resolve('late'), seconds * 1000)))])
+                if (late === 'late') {
+                    // It may still open after this answer, so close it when it does: a snapshot
+                    // that was merely slow must not leave a subscription behind on the device.
+                    void opening.then((arrived) => arrived[rpcComponent].close()).catch(() => undefined)
+                    return {
+                        text: `${peer}.${namespace} accepted the subscription but published no snapshot within ${seconds}s. It is a component; its host has not said what it holds.`,
+                        isError: true
+                    }
+                }
+                const store = late[rpcComponent] as RpcComponentStore<RpcComponentData, RpcComponentData>
+                const view = store.getSnapshot()
+                // Dropped again, for the same reason watch_events drops its subscription: a look
+                // should not leave this server observing a device for the rest of its life.
+                await store.close()
+                return {
+                    text: JSON.stringify(
+                        {
+                            component: `${peer}.${namespace}`,
+                            status: view.status,
+                            epoch: view.epoch,
+                            revision: view.revision,
+                            receivedAt: new Date(view.receivedAt).toISOString(),
+                            ...(view.staleSince ? { staleSince: new Date(view.staleSince).toISOString() } : {}),
+                            props: view.props,
+                            state: view.state
+                        },
+                        null,
+                        2
+                    )
+                }
+            } catch (e) {
+                // Not a component is the common one, and it is an answer about the peer: the
+                // namespace exists and does not serve a snapshot channel. describe_peer says which do.
+                return { text: `cannot read ${peer}.${namespace}: ${failureText(e)}`, isError: true }
+            } finally {
+                clearTimeout(timer)
+            }
+        }
+        if (name === 'set_state') {
+            const peer = String(args.peer ?? '')
+            const namespace = String(args.namespace ?? '')
+            const spelled = String(args.path ?? '')
+            if (!peer || !namespace || !spelled) return { text: 'set_state needs peer, namespace and path.', isError: true }
+            if (!('value' in args)) return { text: 'set_state needs a value. There is no way to spell "unset" here, because a component decides its own shape.', isError: true }
+            const path = spelled.split('.')
+            if (path.some((segment) => segment.length === 0)) return { text: `'${spelled}' is not a usable path - use a field, or a dot path like 'zones.top.setpoint'.`, isError: true }
+
+            let description: ServerDescription
+            try {
+                description = await describedOf(peer)
+            } catch (e) {
+                // Undescribable means nothing can be resolved: which method sets this is a fact
+                // that only the contract carries, so there is no call to fall back to making.
+                return { text: `${peer} could not be described, so nothing here knows which method sets ${spelled}: ${failureText(e)}`, isError: true }
+            }
+            const described = description.namespaces.find((held) => held.name === namespace)
+            if (!described) return { text: `${peer} exposes no namespace '${namespace}'.`, isError: true }
+            const setter = setterFor(described.methods, path)
+            if (!setter) {
+                // What it *does* offer, because "no" is more useful with the alternatives beside
+                // it - and a measured value having no setter is a design decision worth reading as
+                // one rather than as a gap.
+                const claimed = described.methods.filter((method) => method.sets !== undefined).map((method) => `${method.sets} (${method.name})`)
+                return {
+                    text: claimed.length
+                        ? `Nothing on ${peer}.${namespace} declares that it sets '${spelled}'. It does set: ${claimed.join(', ')}.`
+                        : `${peer}.${namespace} declares no setters at all, so none of its state can be changed this way. Its values may be measured, or its methods may simply not say what they set.`,
+                    isError: true
+                }
+            }
+
+            // Checked against the published type of that path before anything travels, which is the
+            // whole reason the state interface is in the contract: a wrong type is refused at the
+            // boundary rather than discovered by writing it into a plant.
+            const declared = typeAtPath(described.component?.state, path, description.types)
+            if (declared) {
+                const problem = validateValue(args.value, declared, description.types, spelled)
+                if (problem) return { text: `InvalidParams, before sending: ${problem}`, isError: true }
+            }
+
+            try {
+                const proxy = await network.proxy<{ [method: string]: (...a: unknown[]) => Promise<unknown> }>(namespace, peer)
+                const result = await (setter.generic ? proxy[setter.method.name](path, args.value) : proxy[setter.method.name](args.value))
+                return {
+                    text: JSON.stringify(
+                        {
+                            called: `${namespace}.${setter.method.name}`,
+                            path: spelled,
+                            ...(result === undefined ? {} : { returned: result }),
+                            // Said plainly, because it is the difference between a command and an
+                            // assignment: the method ran, and what the component now holds is
+                            // whatever its next snapshot says - which may not be what was asked for.
+                            note: 'The method ran. Nothing was written locally - use read_state to see what the component published next.'
+                        },
+                        null,
+                        2
+                    )
+                }
+            } catch (e) {
+                // A refusal is the component doing its job, and is an answer about the plant.
+                return { text: `${peer}.${namespace}.${setter.method.name} refused: ${failureText(e)}`, isError: true }
+            }
+        }
+        if (name === 'read_context') {
+            const peer = String(args.peer ?? '')
+            const node = String(args.node ?? '')
+            const tokenId = String(args.token ?? '')
+            const axis = String(args.axis ?? '')
+            if (!peer || !node || !tokenId) return { text: 'read_context needs peer, node and token.', isError: true }
+            if (axis !== 'physical' && axis !== 'logical')
+                return {
+                    text: "read_context needs axis: 'physical' or 'logical'. The token's own definition declares which, so there is no default here - the wrong axis answers missing rather than searching the other one.",
+                    isError: true
+                }
+            const seconds = Math.min(Math.max(Number(args.seconds ?? 10), 1), MAX_WATCH_SECONDS)
+            let token
+            try {
+                // Asked for with `collect` whatever the provider declared, because the whole chain
+                // is strictly more use than the winner alone - and the winner is the first of it.
+                token = defineRpcContext({ id: tokenId, schemaVersion: '1', axis, resolution: 'collect' })
+            } catch (e) {
+                return { text: failureText(e), isError: true }
+            }
+            // contextAt, not a resolver of our own: the same chain walking, the same nearest/collect,
+            // the same cycle and depth checks the node's own host applies. A server that quietly
+            // disagreed with the library about what a node sees would be worse than one that could
+            // not show it at all.
+            const store = network.contextAt({ peer, instance: node }, token)
+            try {
+                const view = await settledContext(store, seconds * 1000)
+                const entries = view.entries ?? (view.entry ? [view.entry] : [])
+                return {
+                    text: JSON.stringify(
+                        {
+                            node: `${peer}/${node}`,
+                            token: view.tokenId,
+                            axis: view.axis,
+                            status: view.status,
+                            ...(view.status === 'initializing' ? { note: `the chain had not resolved within ${seconds}s - a host along it has not answered` } : {}),
+                            ...(view.status === 'missing' ? { note: `nothing on this node's ${axis} chain provides ${tokenId}` } : {}),
+                            ...(view.staleSince ? { staleSince: new Date(view.staleSince).toISOString() } : {}),
+                            ...(view.invalidReason
+                                ? { invalidReason: view.invalidReason, ...(view.invalidPath ? { invalidPath: view.invalidPath.map((ref) => `${ref.peer}/${ref.instance}`) } : {}) }
+                                : {}),
+                            entries: entries.map((entry) => ({ provider: `${entry.provider.peer}/${entry.provider.instance}`, value: entry.value }))
+                        },
+                        null,
+                        2
+                    )
+                }
+            } catch (e) {
+                return { text: `cannot resolve ${tokenId} at ${peer}/${node}: ${failureText(e)}`, isError: true }
+            } finally {
+                store.close()
             }
         }
 

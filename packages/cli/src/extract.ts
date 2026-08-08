@@ -182,6 +182,34 @@ const declaredEffect = (method: MethodDeclaration, context: Context): RpcEffect 
 }
 
 /**
+ * What `@rpc({ sets: '…' })` declares, if anything: which path in the component's state calling
+ * this method changes.
+ *
+ * In the contract because it is what makes a value editable by *declaration*. A consumer can guess
+ * which method sets a field by looking for a one-argument `set<Field>`, and the guess is right
+ * almost always - the residue being methods like `setMode`, which may begin a transition rather
+ * than assign `state.mode`, and where being wrong means a console offers to command a plant in a
+ * way nobody wrote down. Read from the source the way `effect` is, so the claim is the author's.
+ */
+const declaredSets = (method: MethodDeclaration, context: Context): string | undefined => {
+    const decorator = method.getDecorators().find((candidate) => candidate.getName() === 'rpc')
+    const declared = literalOption(decorator?.getArguments()[0], 'sets')
+    if (declared === undefined) return undefined
+    // Segments must be non-empty, but need not be identifiers: a record's keys are data, so
+    // `tags.147` is a real path into state and a stricter rule would refuse it for looking wrong.
+    if (declared !== '*' && (declared === '' || declared.split('.').some((segment) => segment.length === 0))) {
+        context.diagnostics.push({
+            where: context.where,
+            reason: `declares sets '${declared}', which is not a usable path - use '*', a field, or a dot path like 'zones.top.setpoint'`,
+            file: method.getSourceFile().getFilePath(),
+            line: method.getStartLineNumber()
+        })
+        return undefined
+    }
+    return declared
+}
+
+/**
  * What `@rpc({ semantics: '…' })` declares, if anything.
  *
  * Part of the contract rather than of the implementation: it is a promise about whether a caller
@@ -282,13 +310,15 @@ const methodToSchema = (method: MethodDeclaration, context: Context): MethodSche
 
     const semantics = declaredSemantics(method, context)
     const effect = declaredEffect(method, context)
+    const sets = declaredSets(method, context)
     return {
         params,
         ...(paramNames.length ? { paramNames } : {}),
         ...(rest ? { rest } : {}),
         ...(returns ? { returns } : {}),
         ...(semantics ? { semantics } : {}),
-        ...(effect ? { effect } : {})
+        ...(effect ? { effect } : {}),
+        ...(sets ? { sets } : {})
     }
 }
 

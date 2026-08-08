@@ -1212,7 +1212,10 @@ const main = () => {
         process.exit(1)
     }
     if (command === 'strip') {
-        const files = positionals(argv)
+        // Past the command word, as every other verb here does. Without the slice the first file
+        // to be stripped is one called `strip`, which fails as a missing file rather than saying
+        // no file was named - and it means the command has never worked from the command line.
+        const files = positionals(argv).slice(1)
         const out = argument(argv, '--out', '')
         if (!files.length || !out) {
             process.stderr.write('source-rpc strip: give it one or more .ts files and --out <dir>, e.g. strip scripts/hello.ts --out scripts/stripped\n')

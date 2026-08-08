@@ -1317,3 +1317,162 @@ textarea.control {
     text-overflow: ellipsis;
     max-width: 180px;
 }
+
+/* --------------------------------------------------------------- the typed value tree */
+
+/* Nested fields step in rather than being flattened into dotted names: the shape of the state is
+   part of what the panel is showing, and `zones.top.setpoint` in one column loses it. */
+.value-branch {
+    margin-left: 12px;
+    padding-left: 10px;
+    border-left: 1px solid rgba(38, 46, 58, 0.9);
+}
+
+.value-node {
+    padding: 2px 0;
+}
+
+.value-name.branch {
+    display: inline-block;
+    padding: 2px 0;
+    color: var(--fg);
+    font-size: 12px;
+}
+
+.value-row .toggle.edit {
+    margin-left: auto;
+    opacity: 0;
+    transition: opacity 0.1s;
+}
+
+/* Shown on hover or focus, so a wall of values is not also a wall of buttons - but reachable by
+   keyboard, since :focus-within catches the tab that gets there. */
+.value-row:hover .toggle.edit,
+.value-row:focus-within .toggle.edit {
+    opacity: 1;
+}
+
+.value-edit-form {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.value-edit {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 2px 6px;
+    min-width: 90px;
+}
+
+/* --------------------------------------------------------------- context */
+
+.context {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+}
+
+.context-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.context-add {
+    display: flex;
+    gap: 6px;
+    margin-left: auto;
+}
+
+.context-add input,
+.context-add select {
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    color: var(--fg);
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 2px 6px;
+}
+
+.context-token {
+    margin-top: 8px;
+    padding-top: 6px;
+    border-top: 1px solid rgba(38, 46, 58, 0.6);
+}
+
+.context-token-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.context-token-head .toggle {
+    margin-left: auto;
+}
+
+.context-entry {
+    margin: 4px 0 4px 12px;
+    padding-left: 10px;
+    border-left: 2px solid rgba(38, 46, 58, 0.9);
+}
+
+/* Provenance above the value, not after it: which node answered is most of the question. */
+.context-entry .provider {
+    display: block;
+    font-size: 11px;
+    margin-bottom: 2px;
+}
+
+.axis-badge {
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-family: var(--mono);
+    border: 1px solid var(--line);
+    color: var(--muted);
+}
+
+/* The two axes are told apart by colour as well as by word, because which chain answered is the
+   thing most often misread when both are on screen. */
+.axis-badge.physical {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.axis-badge.logical {
+    border-color: var(--warn);
+    color: var(--warn);
+}
+
+.status-badge.missing,
+.status-badge.initializing {
+    border-color: var(--muted);
+    color: var(--muted);
+}
+
+.status-badge.invalid,
+.status-badge.error {
+    border-color: var(--bad);
+    color: var(--bad);
+}
+
+/* A failed write is reported under its row, not beside it: sharing the line squeezes the value
+   into two characters per line, and the value is what the row is for. */
+.value-row {
+    flex-wrap: wrap;
+}
+
+.value-row .component-error {
+    flex-basis: 100%;
+    margin: 2px 0 0;
+    font-size: 12px;
+}

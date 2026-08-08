@@ -70,35 +70,56 @@ const authority = new WeakMap<object, Set<string>>()
 const injected = new WeakMap<object, Set<string>>()
 /** Declared effect per constructor and method name, for the methods that declare one. */
 const effects = new WeakMap<object, Map<string, RpcEffect>>()
+/** Declared state path per constructor and method name, for the methods that say what they set. */
+const setters = new WeakMap<object, Map<string, string>>()
 
-const markOn = (constructor: object, method: string, declared?: RpcMethodSemantics, conflate?: boolean, requiresAuthority?: boolean, injectInvocation?: boolean, effect?: RpcEffect) => {
+/**
+ * What a `sets` declaration may say: `*`, or a dot path into the component's state.
+ *
+ * Segments are only required to be non-empty and free of dots and control characters, rather than
+ * to be identifiers - a record's keys are data, so `tags.147` is a legitimate path into state and a
+ * stricter rule would refuse it for looking unlike a variable name.
+ */
+const usableSetsPath = (path: string) =>
+    // eslint-disable-next-line no-control-regex -- a path is a name, and names carry no control characters
+    path === '*' || (path.length > 0 && !/[\u0000-\u001f\u007f]/.test(path) && path.split('.').every((segment) => segment.length > 0))
+
+const markOn = (constructor: object, method: string, options: RpcMethodOptions) => {
     let names = marked.get(constructor)
     if (!names) marked.set(constructor, (names = new Set()))
     names.add(method)
-    if (conflate) {
+    if (options.conflate) {
         let conflatable = conflated.get(constructor)
         if (!conflatable) conflated.set(constructor, (conflatable = new Set()))
         conflatable.add(method)
     }
-    if (requiresAuthority) {
+    if (options.requiresAuthority) {
         let guarded = authority.get(constructor)
         if (!guarded) authority.set(constructor, (guarded = new Set()))
         guarded.add(method)
     }
-    if (injectInvocation) {
+    if (options.injectInvocation) {
         let handles = injected.get(constructor)
         if (!handles) injected.set(constructor, (handles = new Set()))
         handles.add(method)
     }
-    if (effect) {
+    if (options.effect) {
         let declaredEffects = effects.get(constructor)
         if (!declaredEffects) effects.set(constructor, (declaredEffects = new Map()))
-        declaredEffects.set(method, effect)
+        declaredEffects.set(method, options.effect)
     }
-    if (!declared) return
+    if (options.sets !== undefined) {
+        // Refused here rather than published: a path with an empty segment reaches nothing, and a
+        // console drawing an editor from it would offer to write somewhere that does not exist.
+        if (!usableSetsPath(options.sets)) throw new Error(`@rpc: '${options.sets}' is not a usable sets path - use '*', a field, or a dot path like 'zones.top.setpoint'`)
+        let declaredSetters = setters.get(constructor)
+        if (!declaredSetters) setters.set(constructor, (declaredSetters = new Map()))
+        declaredSetters.set(method, options.sets)
+    }
+    if (!options.semantics) return
     let declarations = semantics.get(constructor)
     if (!declarations) semantics.set(constructor, (declarations = new Map()))
-    declarations.set(method, declared)
+    declarations.set(method, options.semantics)
 }
 
 export interface RpcMethodOptions {
@@ -147,6 +168,30 @@ export interface RpcMethodOptions {
      * different grants for an AI one.
      */
     effect?: RpcEffect
+    /**
+     * Which path in this component's `state` calling this method sets - `'setpoint'`, or
+     * `'zones.top.setpoint'` for a nested one, or `'*'` for a method that takes a path and sets
+     * whatever it names.
+     *
+     * Declared for the same reason `semantics` and `effect` are, and against the same temptation.
+     * A console can guess which method sets a field by looking for a one-argument `set<Field>`, and
+     * that guess is right almost always - which is the problem. `setMode` might not assign
+     * `state.mode` at all; it might begin a mode transition with a purge cycle and an interlock
+     * behind it. `setPressure` might command a setpoint while `state.pressure` is the measurement
+     * beside it, so an editor drawn on the measured value writes somewhere the operator did not
+     * mean. When a name-based guess is wrong it is wrong silently, in the direction of commanding a
+     * plant, and nothing on the row shows it. So the author who writes the method says what it
+     * sets, once, next to the semantics they were already declaring.
+     *
+     * It does not make the field writable and nothing here writes anything: the method body stays
+     * the author's, which is what keeps the clamping, the interlock and the refusal-while-the-
+     * door-is-open that a per-field setter exists to apply. `'*'` says a method *can* set paths,
+     * never that every path is open - which paths it accepts is decided inside it.
+     *
+     * Only meaningful on an `RpcComponent`, since `state` is what a path names, and refused
+     * elsewhere at expose time rather than published as a claim about a state that does not exist.
+     */
+    sets?: string
 }
 
 type RpcMethodDecorator<This, Args extends unknown[], Return> = (
@@ -161,7 +206,7 @@ const mark = <This, Args extends unknown[], Return>(
     if (context.static) throw new Error('@rpc: static methods cannot be exposed')
     if (context.private) throw new Error('@rpc: private methods cannot be exposed')
     context.addInitializer(function (this: This) {
-        markOn((this as object).constructor, String(context.name), options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation, options.effect)
+        markOn((this as object).constructor, String(context.name), options)
     })
 }
 
@@ -227,7 +272,7 @@ export function exposeMethods<T>(constructor: new (...args: never[]) => T, metho
     for (const [method, options] of entries) {
         if (typeof (constructor.prototype as Record<string, unknown>)[method] !== 'function')
             throw new Error(`exposeMethods: ${constructor.name}.${method} is not a method`)
-        markOn(constructor, method, options.semantics, options.conflate, options.requiresAuthority, options.injectInvocation, options.effect)
+        markOn(constructor, method, options)
     }
     return constructor
 }
@@ -323,6 +368,19 @@ export const declaredEffect = (instance: object): Map<string, RpcEffect> => {
     const declarations = new Map<string, RpcEffect>()
     for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
         for (const [method, effect] of effects.get(ctor) ?? []) if (!declarations.has(method)) declarations.set(method, effect)
+    }
+    return declarations
+}
+
+/**
+ * What each of an instance's methods declares it sets, walking the chain so a subclass inherits
+ * them, with the nearest constructor winning - an override that moves which field a method commands
+ * has to be able to say so.
+ */
+export const declaredSets = (instance: object): Map<string, string> => {
+    const declarations = new Map<string, string>()
+    for (let ctor: object | null = instance.constructor; ctor; ctor = Object.getPrototypeOf(ctor)) {
+        for (const [method, path] of setters.get(ctor) ?? []) if (!declarations.has(method)) declarations.set(method, path)
     }
     return declarations
 }

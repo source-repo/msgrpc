@@ -34,6 +34,8 @@ Effect is optional and defaults conservatively: a declared `query` observes, and
 
 Nothing enforces effect against AI principals yet; that is [the AI boundary](../ai-in-the-plant) work. The classification lands first because contracts are long-lived, and a field that grants will be written against is cheapest to add while the only contracts in the world are your own.
 
+A third declaration of the same kind, for a component: [`sets`](./components.md#saying-what-a-method-sets) says which path in `state` calling this changes, so a console can offer to change a value without inferring from the method's name which value that is.
+
 ## Without decorators
 
 Without decorators — and code run under Node's type stripping has no choice, since V8 does not ship decorators — the runtime forms say everything the decorators say, through the same records:

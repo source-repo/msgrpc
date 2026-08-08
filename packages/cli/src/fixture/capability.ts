@@ -45,4 +45,10 @@ export class Spinner implements HomeGrown {
     async misspelled(value: string) {
         return value
     }
+
+    /** A path with an empty segment reaches nothing. Named rather than published, like the rest. */
+    @rpc({ semantics: 'idempotent-command', sets: 'zones..setpoint' })
+    async unreachable(value: string) {
+        return value
+    }
 }

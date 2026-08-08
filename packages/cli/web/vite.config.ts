@@ -24,6 +24,13 @@ export default defineConfig({
         rollupOptions: { output: { entryFileNames: 'app.js', assetFileNames: 'app.[ext]' } }
     },
     // `npm run dev:web` serves the app with hot reload and forwards the RPC link to a console
-    // started separately on its default port.
-    server: { proxy: { '/socket.io': { target: 'http://localhost:7844', ws: true } } }
+    // started separately on its default port. `console.json` is forwarded too: it is how the page
+    // learns the name to address the console by, and it is fetched before the socket is opened, so
+    // without it the dev server renders a page that can never connect.
+    server: {
+        proxy: {
+            '/socket.io': { target: 'http://localhost:7844', ws: true },
+            '/console.json': { target: 'http://localhost:7844' }
+        }
+    }
 })

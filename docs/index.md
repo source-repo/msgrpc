@@ -16,10 +16,10 @@ hero:
 features:
     - title: Classes as contracts
       details: The server exposes a live instance; the client gets a typed proxy of the same class. No code generation, no schema files required — and a schema when you want arguments checked.
+    - title: State, not polling
+      details: A peer is as much what it holds as what it can be told to do. Components publish props and state as ordered snapshots; observers read them synchronously from a local cache, with a status that says whether the picture is still current — and a store shape that plugs straight into useSyncExternalStore.
     - title: Command semantics for machinery
       details: A method declares whether repeating it is free, harmless or dangerous. Callers can tell "did not run" from "may have run", and a durable idempotency hook makes a redelivered command run once.
-    - title: Observable components
-      details: Cached props and state snapshots with epoch and revision ordering, a per-channel status that tells the truth, and a store shape that plugs straight into useSyncExternalStore.
     - title: Topology and context
       details: Every host answers for where its components sit — physically and logically — with durable epochs, an owner fence on calls, and inherited context resolved across hosts.
     - title: Two transports, one model

@@ -12,6 +12,9 @@ Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdi
 | `list_peers` | who is on the network right now |
 | `describe_peer` | one peer's namespaces, methods, argument names and types, and events |
 | `call_method` | call a method, with positional arguments, and return what it returns |
+| `read_state` | what a component is publishing — its props and state, as values |
+| `set_state` | change one value, by naming the path rather than working out the method |
+| `read_context` | what a node inherits along its physical or logical chain |
 | `start_fake` | stand a peer up from a contract and put it on this network |
 | `stop_fake` / `list_fakes` | take one off again; what is being served here |
 | `check_peer` | compare a live peer with a contract and report what would break |
@@ -19,6 +22,70 @@ Serves the network to an [MCP](https://modelcontextprotocol.io) client over stdi
 | `watch_traffic` | what other peers are saying to each other, for a few seconds |
 | `watch_events` | what one peer emitted, for a few seconds — and whether anything was missed since the last watch |
 | `save_contract` / `list_contracts` | only with `--contracts <dir>` |
+
+### Reading what a device holds
+
+`describe_peer` gives the *shape* of a peer and `call_method` is how it is changed. `read_state` is the third question, and on a plant usually the first one anybody asks: what is it right now.
+
+```
+read_state { peer: "bakery", namespace: "oven" }
+→ { "component": "bakery.oven", "status": "live", "epoch": "…", "revision": 41,
+    "receivedAt": "2026-08-07T18:22:10.114Z",
+    "props": { "unit": "°C", "maximum": 300 },
+    "state": { "celsius": 184, "setpoint": 180, "mode": "heating", "door": "closed" } }
+```
+
+Both halves come back, because they answer different questions: `props` are the host's inputs — what this oven *is*, its unit and its ceiling — and `state` is what it is doing. `describe_peer` marks which namespaces are components; one that is not cannot be read this way, and says so.
+
+**Looking leaves nothing behind.** It subscribes, takes the first snapshot and drops the subscription again, the same rule `watch_events` follows — so a model that reads a device twenty times does not end up as twenty observers on it. A snapshot that never arrives is bounded too: the subscribe is covered by the call timeout, but a host that accepts it and then publishes nothing would otherwise hold the tool call open forever, and that host is precisely the one somebody is using this to diagnose.
+
+**A stale picture comes back with its values**, marked `stale` with a `staleSince`, rather than withheld. "20 °C, last known 14:03" is an answer and a blank is not — the same judgement the store makes for every other observer.
+
+### Changing one value
+
+`set_state` names the path, not the method:
+
+```
+set_state { peer: "bakery", namespace: "oven", path: "zones.top.setpoint", value: 180 }
+→ { "called": "oven.setTopSetpoint", "path": "zones.top.setpoint", "returned": 180,
+    "note": "The method ran. Nothing was written locally - use read_state to see what the
+             component published next." }
+```
+
+Working out *which* method is the whole job, and it is done from [`sets`](../guide/components.md#saying-what-a-method-sets) rather than from what the methods are called. A per-field claim wins over a generic `sets: '*'` where both exist, because the specific method is the one whose body was written for that value — with whatever clamp and interlock belong to it.
+
+**A path nothing claims is refused with what the component does set beside it**, since "no" is more useful with the alternatives next to it, and a measured value having no setter is a design decision rather than a gap:
+
+```
+set_state { …, path: "temperature", value: 300 }
+→ Nothing on bakery.oven declares that it sets 'temperature'. It does set:
+  setpoint (setSetpoint), mode (setMode), door (setDoor), zones.top.setpoint (setTopSetpoint).
+```
+
+**A wrong type is refused before it travels.** The component's state interface is published in the contract, so the type at a path is known here — `setpoint = "hot"` fails locally as `InvalidParams` rather than being discovered by a plant.
+
+**What happens is the method's call, not a write.** The component may clamp it, refuse it while the door is open, or fail an interlock, and that refusal comes back as the component's own words. Nothing is written locally either, so the answer says so: the value moves when the peer publishes its next snapshot, and `read_state` is how to see what the plant actually agreed to. A model that assumes its write took effect is a model that has stopped reading the plant.
+
+A component declaring `sets: '*'` claims every path by construction, so on one of those the refusal for an unwritable path comes from the method's body rather than from here — which is where that decision belongs.
+
+### What a node inherits
+
+`read_context` asks what one node sees of the ambient data on its chain — the site it stands in, the work order it is running, the maintenance window that applies to it — resolved by **that node's own host** rather than worked out by the MCP server:
+
+```
+read_context { peer: "bakery", node: "oven", token: "acme.site", axis: "physical" }
+→ { "node": "bakery/oven", "token": "acme.site", "axis": "physical", "status": "live",
+    "entries": [ { "provider": "bakery/$host",
+                   "value": { "site": "site-7", "plant": "bakery", "timezone": "Europe/Stockholm" } } ] }
+```
+
+The whole chain comes back, nearest provider first, each entry naming where it was provided — which is the part that answers the question this is usually opened for, namely why a machine is behaving as though it sat somewhere else. Underneath it is [`contextAt()`](../guide/context.md#asking-about-another-peers-node), the library's own resolver begun one hop out: the same chain walking, the same cycle and depth checks, the same lifecycle vocabulary. A tool that quietly disagreed with the library about what a node sees would be worse than no tool at all.
+
+The `axis` is asked for rather than guessed, because it belongs to the token's definition and the caller has not seen that definition. There is no logical-first-then-physical search anywhere in this library, so the wrong axis answers `missing` rather than borrowing from the other one.
+
+`missing`, `stale` and `invalid` are answers about the plant, not failures of the tool — `invalid` carries the reason and the path, so a cycle names the nodes it closes on.
+
+**There is no tool that lists the tokens a plant carries, and there will not be.** Context has no enumeration surface by design: listing what ambient data a plant holds is reconnaissance of a sharper kind than listing methods, and a provider that declares `exposure: 'local'` is filtered from remote answers *silently* rather than refused, because a refusal would confirm it exists. So a token nobody provides and a token deliberately kept local look identical from outside — both `missing` — and a caller has to already know the id it is asking for. The tool description says so, or a model spends a turn hunting for a list and concludes the tool is broken.
 
 ### Standing something up
 
@@ -150,5 +217,9 @@ To wire it into a client, give it the command and its flags:
 **stdout carries the protocol and nothing else**, so this is not for interactive use — startup goes to stderr, and a stray `console.log` anywhere in the process would corrupt the stream. There is no MCP SDK behind it: MCP is JSON-RPC 2.0 over newline-delimited stdio, which is little enough to speak directly, and this package is about not needing a second RPC framework.
 
 **Anything a model can reach, it can call.** The peers this lists are real, and `call_method` will happily invoke one that opens a valve. Point it at a network where that is acceptable, or give it credentials that restrict it: `--sign` makes it a peer with an identity, and `authorize` on the servers decides what that identity may do.
+
+**Reading is reading, and it is still governed.** `read_state` and `read_context` change nothing — but they do carry plant values back to a model, which `describe_peer` alone never did. They are ordinary subscriptions and ordinary `$context` calls underneath, so `authorize()` sees them with the namespace, the node and the token ids in view, and a server that refuses this peer refuses these too. There is no read that bypasses it, and no way to enumerate what a peer holds without already knowing what to ask for.
+
+**`set_state` is `call_method` with the method worked out**, and no more permitted than it. It calls a method the peer declared, through the same dispatch, with the same `authorize()` and the same effect classification — so a grant that refuses `oven.setSetpoint` refuses this too, and one that permits it permitted this already. It adds convenience, not authority. What it does add is a reason to be deliberate about which network this server points at: naming a path is a much easier thing for a model to do than working out a method, which is the point, and also the risk.
 
 **And it can put peers on that network.** `start_fake` adds one — it calls nothing and changes no device, and it refuses a name already in use, but it is a peer other things can find and call. The same `authorize` and `--sign` machinery governs what it may do once it is there. Writing files is the one capability that stays off unless asked for: no `--contracts`, no tools that write.
